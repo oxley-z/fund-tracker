@@ -17,13 +17,19 @@ for env_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_p
     os.environ.pop(env_var, None)
 
 DEFAULT_FUNDS = [
-    # QDII组
+    # 美股主动组 (原QDII)
     "002891", "014002", "006555", "012922", "012920", "021662", "457001", "539002",
     "018147", "021842", "006373", "018036", "501226", "008254", "008253", "017731",
     "017730", "016665", "016664", "018230", "018229", "021277", "270023", "005698",
     "024239", "501312", "017204", "017654", "017653", "022184", "100055", "017437",
     "017436", "017145", "017144", "016702", "016701", "016823", "164212", "019156",
     "019155", "016668", "501225", "015202", "001668", "000043", "007280", "019449",
+    # 纳指被动组
+    "017091", "016057", "160213", "019172", "019441", "018043", "019547", "016532",
+    "040046", "161130", "016452", "270042", "019736", "000834", "019524", "015299",
+    "539001", "018966",
+    # 标普被动组
+    "161125", "007721", "017028", "050025", "018064", "096001", "017641", "018738",
     # CPO 组
     "022365", "540010", "002112", "011892", "021528",
     "009645", "011370", "011452", "016371", "001956",
@@ -49,13 +55,23 @@ DEFAULT_FUNDS = [
     "004233", "008182", "017968", "024648"
 ]
 
-QDII_CODES = {
+US_ACTIVE_CODES = {
     "002891", "014002", "006555", "012922", "012920", "021662", "457001", "539002",
     "018147", "021842", "006373", "018036", "501226", "008254", "008253", "017731",
     "017730", "016665", "016664", "018230", "018229", "021277", "270023", "005698",
     "024239", "501312", "017204", "017654", "017653", "022184", "100055", "017437",
     "017436", "017145", "017144", "016702", "016701", "016823", "164212", "019156",
     "019155", "016668", "501225", "015202", "001668", "000043", "007280", "019449"
+}
+
+NDX_PASSIVE_CODES = {
+    "017091", "016057", "160213", "019172", "019441", "018043", "019547", "016532",
+    "040046", "161130", "016452", "270042", "019736", "000834", "019524", "015299",
+    "539001", "018966"
+}
+
+SPX_PASSIVE_CODES = {
+    "161125", "007721", "017028", "050025", "018064", "096001", "017641", "018738"
 }
 
 # 指数组
@@ -644,7 +660,7 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
     INDEX_SET_LOCAL = {"NDX", "SPX", "SOXX", "SOXL"}
     PRECIOUS_METALS_LOCAL = {"XAU", "AUM", "XAG"}
     CRYPTO_LOCAL = {"BTC", "ETH", "SOL", "BNB"}
-    col_count = 20
+    col_count = 21
 
     def date_to_label(date_str):
         if 'Q' in date_str:
@@ -758,10 +774,13 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             group = "crypto"
         elif r['code'] in INDEX_SET_LOCAL:
             group = "index"
+        elif r['code'] in NDX_PASSIVE_CODES:
+            group = "ndx_passive"
+        elif r['code'] in SPX_PASSIVE_CODES:
+            group = "spx_passive"
         else:
-            group = "qdii"
-            
-        # [需求优化] 如果是贵金属、加密货币或指数，最新净值高亮
+            group = "us_active"
+
         nav_display_html = f'<span class="highlight-special-nav">{r["latest_nav"]:.4f}</span>' if group in ["metals", "crypto", "index"] else f'{r["latest_nav"]:.4f}'
 
         holdings_history = r.get('holdings', [])
@@ -823,6 +842,7 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             <td data-val="{r['half_year_gain'] if r['half_year_gain'] is not None else -9999}" class="{gain_class(r['half_year_gain'])}">{format_gain(r['half_year_gain'])}</td>
             <td data-val="{r['year_gain'] if r['year_gain'] is not None else -9999}" class="{gain_class(r['year_gain'])}">{format_gain(r['year_gain'])}</td>
             <td data-val="{r['ytd_gain'] if r['ytd_gain'] is not None else -9999}" class="{gain_class(r['ytd_gain'])}">{format_gain(r['ytd_gain'])}</td>
+            <td class="dca-col" data-val="-9999">--</td>
         </tr>
         """
 
@@ -935,7 +955,9 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
 
     groups = [
         ("汇总", "all"),
-        ("QDII", "qdii"),
+        ("美股主动", "us_active"),
+        ("纳指被动", "ndx_passive"),
+        ("标普被动", "spx_passive"),
         ("半导体材料设备", "semiconductor"),
         ("CPO", "cpo"),
         ("人工智能", "ai"),
@@ -982,7 +1004,7 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>场外基金量化与费率规模看板（含多周期涨幅及走势图）</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -1033,8 +1055,8 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             background-color: var(--bg);
             color: var(--text);
             margin: 0; 
-            padding: 14px 20px; 
-            height: 100vh;
+            padding: 24px 32px; 
+            height: 100dvh;
             overflow: hidden;
             display: flex;
             flex-direction: column;
@@ -1043,184 +1065,249 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             transition: background-color 0.3s, color 0.3s;
         }}
         .top-wrapper {{
-            display:grid;
-            grid-template-columns:minmax(0, 1fr) minmax(0, 1fr);
-            gap:14px;
-            height:220px;
-            flex:0 0 220px;
-            margin-bottom:10px;
-            min-height:0;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 14px;
+            flex: 0 0 auto;
+            margin-bottom: 12px;
+            min-height: 0;
         }}
         .top-left, .top-right {{
-            min-width:0;
-            min-height:0;
-            border:1px solid var(--border);
-            border-radius:12px;
-            background:var(--table-bg);
-            box-shadow:0 4px 15px rgba(0,0,0,0.07);
-            box-sizing:border-box;
+            min-width: 0;
+            min-height: 0;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--table-bg);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.07);
+            box-sizing: border-box;
         }}
         .top-left {{
-            padding:12px 14px;
-            display:flex;
-            flex-direction:column;
-            overflow:hidden;
+            padding: 14px 18px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
         }}
         .top-right {{
-            padding:12px;
-            display:flex;
-            flex-direction:column;
-            gap:8px;
-            overflow:hidden;
+            padding: 14px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow: hidden;
         }}
         .theme-toggle {{
-            align-self:flex-end;
-            background:var(--header-bg);
-            color:var(--text);
-            border:1px solid var(--border);
-            border-radius:18px;
-            padding:3px 10px;
-            font-size:11px;
-            cursor:pointer;
-            flex:0 0 auto;
+            align-self: flex-end;
+            background: var(--header-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 4px 12px;
+            font-size: 11px;
+            cursor: pointer;
+            flex: 0 0 auto;
         }}
-        .theme-toggle:hover {{ opacity:0.82; }}
-        .header {{ text-align:left; margin:0 0 6px 0; }}
+        .theme-toggle:hover {{ opacity: 0.82; }}
+        .header {{ text-align: left; margin: 0 0 6px 0; }}
         .header-top {{
-            display:flex;
-            align-items:center;
-            margin-bottom:2px;
+            display: flex;
+            align-items: center;
+            margin-bottom: 2px;
         }}
         .header-top h2 {{
-            color:#1a73e8;
-            margin:0;
-            font-size:18px;
-            line-height:1.2;
+            color: #1a73e8;
+            margin: 0;
+            font-size: 18px;
+            line-height: 1.2;
         }}
-        .header p {{ color:var(--footer-text); font-size:11px; margin:2px 0; line-height:1.3; }}
+        .header p {{ color: var(--footer-text); font-size: 11px; margin: 2px 0; line-height: 1.3; }}
         .header-info {{
-            border:1px solid #e3e7eb;
-            border-radius:6px;
-            background:var(--hover-bg);
-            padding:5px 8px;
-            margin-bottom:6px;
-            overflow:hidden;
-            font-size:11px;
+            border: 1px solid #e3e7eb;
+            border-radius: 6px;
+            background: var(--hover-bg);
+            padding: 6px 10px;
+            margin-bottom: 8px;
+            overflow: hidden;
+            font-size: 11px;
         }}
-        .header-info p {{ margin:1px 0; }}
+        .header-info p {{ margin: 1px 0; }}
         .group-tabs {{
-            display:grid;
-            grid-template-columns:minmax(0,1fr) 230px;
-            gap:8px;
-            align-items:center;
-            margin-top:auto;
-            min-height:36px;
+            display: grid;
+            grid-template-columns: minmax(0,1fr) 230px;
+            gap: 8px;
+            align-items: center;
+            margin-top: auto;
+            min-height: 36px;
         }}
         .group-buttons {{
-            display:flex;
-            flex-wrap:wrap;
-            gap:5px;
-            align-content:center;
-            min-width:0;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-content: center;
+            min-width: 0;
         }}
         .group-btn {{
-            background:var(--btn-bg);
-            color:var(--btn-text);
-            border:1px solid var(--border);
-            border-radius:16px;
-            padding:3px 10px;
-            font-size:11px;
-            cursor:pointer;
-            transition:all .2s;
-            font-weight:500;
-            white-space:nowrap;
+            background: var(--btn-bg);
+            color: var(--btn-text);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 4px 12px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all .2s;
+            font-weight: 500;
+            white-space: nowrap;
         }}
         .group-btn:hover {{
-            background:var(--btn-active-bg);
-            color:var(--btn-active-text);
+            background: var(--btn-active-bg);
+            color: var(--btn-active-text);
         }}
         .group-btn.active {{
-            background:var(--btn-active-bg);
-            color:var(--btn-active-text);
-            border-color:var(--btn-active-bg);
+            background: var(--btn-active-bg);
+            color: var(--btn-active-text);
+            border-color: var(--btn-active-bg);
         }}
-        .search-container {{ width:100%; }}
+        .search-container {{ width: 100%; }}
         .search-container input {{
-            width:100%;
-            max-width:none;
-            height:30px;
-            padding:4px 12px;
-            border-radius:16px;
-            border:1px solid #35a853;
-            background:var(--input-bg);
-            color:var(--text);
-            font-size:12px;
-            outline:none;
-            box-sizing:border-box;
-            box-shadow:0 0 0 2px rgba(52,168,83,.08);
+            width: 100%;
+            max-width: none;
+            height: 30px;
+            padding: 4px 12px;
+            border-radius: 16px;
+            border: 1px solid #35a853;
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 12px;
+            outline: none;
+            box-sizing: border-box;
+            box-shadow: 0 0 0 2px rgba(52,168,83,.08);
         }}
-        .search-container input:focus {{ border-color:#188038; box-shadow:0 0 0 3px rgba(52,168,83,.14); }}
-        .search-container input::placeholder {{ color:var(--footer-text); }}
+        .search-container input:focus {{ border-color: #188038; box-shadow: 0 0 0 3px rgba(52,168,83,.14); }}
+        .search-container input::placeholder {{ color: var(--footer-text); }}
         .friend-cards-wrapper {{
-            display:grid;
-            grid-template-columns:repeat(3,minmax(0,1fr));
-            gap:8px;
-            width:100%;
-            min-height:0;
-            flex:1;
+            display: grid;
+            grid-template-columns: repeat(3,minmax(0,1fr));
+            gap: 10px;
+            width: 100%;
+            min-height: 0;
+            flex: 1;
         }}
         .friend-card {{
-            min-width:0;
-            min-height:64px;
-            background:var(--card-bg);
-            border-radius:6px;
-            padding:8px 10px;
-            box-shadow:var(--card-shadow);
-            border:1px solid var(--border);
-            box-sizing:border-box;
-            overflow:hidden;
-            transition:transform .12s, box-shadow .12s;
+            min-width: 0;
+            min-height: 64px;
+            background: var(--card-bg);
+            border-radius: 6px;
+            padding: 8px 10px;
+            box-shadow: var(--card-shadow);
+            border: 1px solid var(--border);
+            box-sizing: border-box;
+            overflow: hidden;
+            transition: transform .12s, box-shadow .12s;
         }}
         .friend-card:hover {{
-            transform:translateY(-1px);
-            box-shadow:0 4px 12px rgba(0,0,0,.12);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,.12);
         }}
         .friend-card a {{
-            color:var(--link-color);
-            text-decoration:none;
-            font-weight:650;
-            font-size:13px;
-            display:block;
-            white-space:nowrap;
-            overflow:hidden;
-            text-overflow:ellipsis;
+            color: var(--link-color);
+            text-decoration: none;
+            font-weight: 650;
+            font-size: 13px;
+            display: block;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }}
-        .friend-card a:hover {{ text-decoration:underline; }}
+        .friend-card a:hover {{ text-decoration: underline; }}
         .friend-card .friend-desc {{
-            font-size:10px;
-            color:var(--footer-text);
-            display:block;
-            margin-top:3px;
-            line-height:1.3;
-            display:-webkit-box;
-            -webkit-line-clamp:2;
-            -webkit-box-orient:vertical;
-            overflow:hidden;
+            font-size: 10px;
+            color: var(--footer-text);
+            display: block;
+            margin-top: 3px;
+            line-height: 1.3;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }}
-        .table-container {{ 
-            width:100%; 
-            height: calc(100vh - 315px); 
-            overflow-y: auto; 
-            overflow-x: scroll; 
-            box-sizing:border-box; 
+        
+        .global-dca-filter-card {{
             background: var(--table-bg);
-            border-radius:12px; 
-            box-shadow:0 4px 15px rgba(0,0,0,0.08); 
-            padding:10px; 
-            border:1px solid var(--border);
-            flex: 1 1 auto;
-            min-height: 0;
-            margin-bottom: 8px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 14px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            font-size: 12px;
+            align-self: flex-end;
+            transition: all 0.3s ease;
+        }}
+        .global-dca-filter-header {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+        }}
+        .global-dca-filter-title {{
+            font-weight: 600;
+            color: var(--link-color);
+        }}
+        #gDcaToggleIcon {{
+            font-size: 10px;
+            color: var(--footer-text);
+            transition: transform 0.2s;
+        }}
+        .global-dca-filter-body {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }}
+        .global-dca-filter-card.collapsed .global-dca-filter-body {{
+            display: none;
+        }}
+        .global-dca-filter-card.collapsed #gDcaToggleIcon {{
+            transform: rotate(-90deg);
+        }}
+        .global-dca-filter-card select {{
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 11px;
+            outline: none;
+        }}
+        .global-dca-filter-card button {{
+            background: var(--btn-active-bg);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }}
+        .global-dca-filter-card button:hover {{ opacity: 0.9; }}
+
+        .table-container {{ 
+            width: 100%; 
+            flex: 1 1 0; 
+            min-height: 0; 
+            overflow-y: auto; 
+            overflow-x: auto; 
+            -webkit-overflow-scrolling: touch;
+            box-sizing: border-box; 
+            background: var(--table-bg);
+            border-radius: 12px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08); 
+            padding: 10px; 
+            border: 1px solid var(--border);
+            margin-bottom: 12px;
             transition: background 0.3s, border-color 0.3s;
         }}
         .table-container::-webkit-scrollbar {{
@@ -1239,20 +1326,20 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             background: #666;
         }}
         table {{ 
-            width:100%; 
-            min-width:2350px; 
-            border-collapse:collapse; 
-            font-size:12px; 
-            text-align:right; 
-            table-layout:fixed; 
+            width: 100%; 
+            min-width: 2450px; 
+            border-collapse: collapse; 
+            font-size: 12px; 
+            text-align: right; 
+            table-layout: fixed; 
         }}
         th, td {{ 
-            padding:6px 8px; 
-            border-bottom:1px solid var(--border);
-            line-height:1.4; 
-            overflow:hidden; 
-            text-overflow:ellipsis; 
-            box-sizing:border-box; 
+            padding: 6px 8px; 
+            border-bottom: 1px solid var(--border);
+            line-height: 1.4; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            box-sizing: border-box; 
             transition: border-color 0.3s;
         }}
         #fundTable thead th {{
@@ -1285,7 +1372,8 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
         th:nth-child(17), td:nth-child(17),
         th:nth-child(18), td:nth-child(18),
         th:nth-child(19), td:nth-child(19),
-        th:nth-child(20), td:nth-child(20) {{ width: 80px; white-space: nowrap; }}
+        th:nth-child(20), td:nth-child(20),
+        th:nth-child(21), td:nth-child(21) {{ width: 80px; white-space: nowrap; }}
         th {{ 
             background-color: var(--header-bg);
             color: var(--header-text);
@@ -1322,18 +1410,17 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
         .sort-icon {{ font-size: 10px; margin-left: 2px; color: var(--footer-text); }}
         .code {{ font-family: "SFMono-Regular", Consolas, monospace; font-weight: bold; color: #1a73e8; }}
         .name a {{ 
-            font-weight:500; 
-            color:#1a73e8; 
-            text-decoration:none; 
-            display:inline-block; 
-            max-width:100%; 
-            overflow:hidden; 
-            text-overflow:ellipsis; 
-            vertical-align:middle; 
+            font-weight: 500; 
+            color: #1a73e8; 
+            text-decoration: none; 
+            display: inline-block; 
+            max-width: 100%; 
+            overflow: hidden; 
+            text-overflow: ellipsis; 
+            vertical-align: middle; 
         }}
         .name a:hover {{ text-decoration: underline; color: #1557b0; }}
         
-        /* 智能定投按钮样式 */
         .dca-btn {{
             background: #e8f0fe;
             color: #1a73e8;
@@ -1364,58 +1451,45 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             color: #202124;
         }}
 
-        .redemption-sub {{ 
-            font-size: 10px; 
-            color: var(--footer-text);
-            font-weight: normal; 
-            margin-top: 2px; 
-        }}
-        .highlight-rate {{
-            color: #d93025;
-            font-weight: bold;
-        }}
+        .redemption-sub {{ font-size: 10px; color: var(--footer-text); font-weight: normal; margin-top: 2px; }}
+        .highlight-rate {{ color: #d93025; font-weight: bold; }}
         .highlight-val {{ font-weight: 600; color: #e67e22; }}
         .fee-sub {{ font-size: 10px; color: var(--footer-text); }}
         .progress-container {{
             background-color: var(--progress-track);
-            border-radius:6px;
-            overflow:hidden;
-            height:20px;
-            width:100%;
-            position:relative;
+            border-radius: 6px;
+            overflow: hidden;
+            height: 20px;
+            width: 100%;
+            position: relative;
             transition: background 0.3s;
         }}
         .progress-bar {{
-            height:100%;
-            border-radius:6px;
-            min-width:42px;
-            display:flex;
-            align-items:center;
-            justify-content:flex-end;
-            padding-right:6px;
-            box-sizing:border-box;
-            transition:width .2s ease;
+            height: 100%;
+            border-radius: 6px;
+            min-width: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 6px;
+            box-sizing: border-box;
+            transition: width .2s ease;
         }}
         .progress-bar span {{
-            color:#fff;
-            font-size:11px;
-            font-weight:600;
-            text-shadow:0 1px 1px rgba(0,0,0,.25);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            text-shadow: 0 1px 1px rgba(0,0,0,.25);
         }}
-        .bar-red {{ background-color:#d93025; }}
-        .bar-blue {{ background-color:#1a73e8; }}
-        .bar-green {{ background-color:#188038; }}
+        .bar-red {{ background-color: #d93025; }}
+        .bar-blue {{ background-color: #1a73e8; }}
+        .bar-green {{ background-color: #188038; }}
         .metric-red {{ color: #d93025; font-weight: 600; }}
         .metric-green {{ color: #188038; font-weight: 600; }}
         .gain-positive {{ color: #d93025; font-weight: bold; }}
         .gain-negative {{ color: #188038; font-weight: bold; }}
-        .gain-date {{
-            font-size: 10px;
-            color: var(--footer-text);
-            font-weight: normal;
-        }}
+        .gain-date {{ font-size: 10px; color: var(--footer-text); font-weight: normal; }}
 
-        /* --- 新增：特定资产最新净值高亮样式 --- */
         .highlight-special-nav {{
             font-weight: bold;
             color: #d93025;
@@ -1506,15 +1580,8 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             white-space: nowrap;
             text-align: left;
         }}
-        .stock-ratio {{
-            text-align: right;
-            font-weight: 500;
-        }}
-        .stock-change {{
-            text-align: right;
-            font-size: 10px;
-            white-space: nowrap;
-        }}
+        .stock-ratio {{ text-align: right; font-weight: 500; }}
+        .stock-change {{ text-align: right; font-size: 10px; white-space: nowrap; }}
         .change-add {{ color: #d93025; }}
         .change-sub {{ color: #188038; }}
         .change-up {{ color: #d93025; }}
@@ -1526,13 +1593,8 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             border-top: 1px dashed var(--border);
             font-weight: 600;
         }}
-        .stock-total .stock-name {{
-            color: var(--header-text);
-        }}
-        .stock-total .stock-ratio {{
-            color: #e67e22;
-            font-weight: 700;
-        }}
+        .stock-total .stock-name {{ color: var(--header-text); }}
+        .stock-total .stock-ratio {{ color: #e67e22; font-weight: 700; }}
         .chart-container {{
             flex: 0 0 calc(50% - 20px);
             background: var(--card-bg);
@@ -1569,29 +1631,49 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             max-height: 200px;
             flex: 1;
         }}
-        @media (max-width: 1000px) {{
-            .holdings-wrapper {{ gap: 10px; }}
-            .holdings-container {{ gap: 6px; }}
-            .quarter-card {{ padding: 8px 6px; }}
-            .stock-item {{
-                grid-template-columns: minmax(0, 1fr) 48px 56px;
-                font-size: 10px;
-            }}
+
+        /* --- 移动端及中小屏幕核心适配 --- */
+        @media (max-width: 1024px) {{
+            /* 废弃限制高度，释放 body 的纵向滚动能力，防止表格外无法滑动 */
+            body {{ padding: 16px 12px; height: auto; min-height: 100dvh; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; }}
+            .top-wrapper {{ display: flex; flex-direction: column; height: auto; flex: none; gap: 10px; margin-bottom: 12px; }}
+            .top-left, .top-right {{ min-height: auto; padding: 12px; width: 100%; }}
+            .header-top h2 {{ font-size: 16px; white-space: normal; line-height: 1.3; }}
+            .header p, .header-info {{ font-size: 11px; }}
+            .group-tabs {{ display: flex; flex-direction: column; gap: 8px; align-items: stretch; }}
+            .group-buttons {{ justify-content: flex-start; }}
+            .search-container input {{ height: 36px; font-size: 13px; max-width: 100%; }}
+            .friend-cards-wrapper {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+            
+            .global-dca-filter-card {{ flex-direction: column; align-items: stretch; align-self: stretch; padding: 12px; margin-bottom: 12px; }}
+            .global-dca-filter-body {{ flex-direction: column; align-items: stretch; width: 100%; }}
+            .global-dca-filter-card select, .global-dca-filter-card button {{ width: 100%; height: 36px; font-size: 13px; }}
+            
+            /* 表格容器自适应内部高度，允许横向滚动 */
+            .table-container {{ height: auto; flex: none; overflow-y: visible; overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 16px; padding: 0; }}
+            #fundTable {{ min-width: 2450px; }}
+            
+            .footer-note {{ flex-direction: column; align-items: stretch; text-align: left; gap: 8px; padding: 12px; margin-bottom: 16px; }}
+            .footer-right {{ justify-content: flex-start; flex-wrap: wrap; }}
+            
+            /* 展开面板容器纵向排布 */
+            .holdings-wrapper {{ flex-direction: column; gap: 12px; }}
+            .holdings-container {{ width: 100%; flex: none; flex-direction: column; gap: 8px; padding: 0 10px; box-sizing: border-box; }}
+            .quarter-card {{ width: 100%; flex: none; padding: 8px 6px; }}
+            .chart-container {{ width: 100%; flex: none; margin: 0; padding: 10px; box-sizing: border-box; }}
+            .chart-container canvas {{ width: 100% !important; }}
+            
+            .stock-item {{ grid-template-columns: minmax(0, 1fr) 48px 56px; font-size: 10px; }}
             .stock-change {{ font-size: 9px; }}
-            .top-wrapper {{
-                grid-template-columns:1fr;
-                height:auto;
-                flex-basis:auto;
-            }}
-            .top-left, .top-right {{ min-height:210px; }}
-            .top-right {{ width:100%; }}
-            .friend-cards-wrapper {{ width: 100%; }}
-            .friend-card {{ min-height:64px; }}
-            .group-tabs {{
-                flex-direction: column;
-                align-items: stretch;
-            }}
-            .search-container input {{ max-width: 100%; }}
+            
+            /* 弹窗及控制台纵向适配 */
+            .modal-card {{ width: 95%; margin: 10px; max-height: 85vh; }}
+            .modal-body {{ padding: 14px 16px; }}
+            .dca-controls {{ grid-template-columns: 1fr; }}
+            .dca-field select, .dca-field input {{ height: 36px; font-size: 13px; }}
+            .dca-results-grid {{ grid-template-columns: 1fr 1fr; gap: 8px; }}
+            .dca-result-card:last-child {{ grid-column: span 2; }}
+            .dca-chart-box {{ height: 210px; }}
         }}
         
         .footer-note {{ 
@@ -1600,7 +1682,7 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             color: var(--footer-text);
             line-height: 1.35; 
             background: var(--footer-bg);
-            padding: 6px 12px; 
+            padding: 8px 14px; 
             border-radius: 6px; 
             border: 1px solid var(--border);
             flex-shrink: 0;
@@ -1628,7 +1710,6 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             white-space: nowrap;
         }}
 
-        /* 定投弹窗样式 */
         .modal-overlay {{
             position: fixed;
             top: 0;
@@ -1799,30 +1880,55 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             </div>
         </section>
     </div>
+    
+    <div class="global-dca-filter-card" id="gDcaCard">
+        <div class="global-dca-filter-header" id="gDcaToggleBtn">
+            <span class="global-dca-filter-title">📊 动态定投参数配置</span>
+            <span id="gDcaToggleIcon">▼</span>
+        </div>
+        <div class="global-dca-filter-body" id="gDcaBody">
+            <select id="gDcaFreq">
+                <option value="daily">每日定投</option>
+                <option value="weekly">每周定投</option>
+                <option value="biweekly">双周定投</option>
+                <option value="monthly" selected>每月定投</option>
+            </select>
+            <select id="gDcaDaySelect"></select>
+            <select id="gDcaRange">
+                <option value="half">近半年内</option>
+                <option value="year" selected>近一年内</option>
+                <option value="ytd">今年以来</option>
+                <option value="all">统计区间全序列</option>
+            </select>
+            <button id="gDcaApplyBtn">计算并刷新排序</button>
+        </div>
+    </div>
+
     <div class="table-container">
         <table id="fundTable">
             <thead>
                 <tr>
-                    <th data-col="0">代码 <span class="sort-icon">⇅</span></th>
-                    <th data-col="1">基金名称 / 赎回费率阶梯 <span class="sort-icon">⇅</span></th>
-                    <th data-col="2">最新规模 <span class="sort-icon">⇅</span></th>
-                    <th data-col="3">运作费(管/托/销) <span class="sort-icon">⇅</span></th>
-                    <th data-col="4">申购费率 <span class="sort-icon">⇅</span></th>
-                    <th data-col="5">申购状态/限额 <span class="sort-icon">⇅</span></th>
-                    <th data-col="6">最高净值 <span class="sort-icon">⇅</span></th>
-                    <th data-col="7">最低净值 <span class="sort-icon">⇅</span></th>
-                    <th data-col="8">最新净值 <span class="sort-icon">⇅</span></th>
-                    <th data-col="9">最大回撤 <span class="sort-icon">⇅</span></th>
-                    <th data-col="10">自低点反弹 <span class="sort-icon">⇅</span></th>
-                    <th data-col="11">修复程度 <span class="sort-icon">⇅</span></th>
-                    <th data-col="12">修复时间 <span class="sort-icon">⇅</span></th>
-                    <th data-col="13">{col_today_title} <span class="sort-icon">⇅</span></th>
-                    <th data-col="14">近一周 <span class="sort-icon">⇅</span></th>
-                    <th data-col="15">近一月 <span class="sort-icon">⇅</span></th>
-                    <th data-col="16">近三月 <span class="sort-icon">⇅</span></th>
-                    <th data-col="17">近半年 <span class="sort-icon">⇅</span></th>
-                    <th data-col="18">近一年 <span class="sort-icon">⇅</span></th>
-                    <th data-col="19">今年内 <span class="sort-icon">⇅</span></th>
+                    <th data-col="0" onclick="sortTable(0)">代码 <span class="sort-icon">⇅</span></th>
+                    <th data-col="1" onclick="sortTable(1)">基金名称 / 赎回费率阶梯 <span class="sort-icon">⇅</span></th>
+                    <th data-col="2" onclick="sortTable(2)">最新规模 <span class="sort-icon">⇅</span></th>
+                    <th data-col="3" onclick="sortTable(3)">运作费(管/托/销) <span class="sort-icon">⇅</span></th>
+                    <th data-col="4" onclick="sortTable(4)">申购费率 <span class="sort-icon">⇅</span></th>
+                    <th data-col="5" onclick="sortTable(5)">申购状态/限额 <span class="sort-icon">⇅</span></th>
+                    <th data-col="6" onclick="sortTable(6)">最高净值 <span class="sort-icon">⇅</span></th>
+                    <th data-col="7" onclick="sortTable(7)">最低净值 <span class="sort-icon">⇅</span></th>
+                    <th data-col="8" onclick="sortTable(8)">最新净值 <span class="sort-icon">⇅</span></th>
+                    <th data-col="9" onclick="sortTable(9)">最大回撤 <span class="sort-icon">⇅</span></th>
+                    <th data-col="10" onclick="sortTable(10)">自低点反弹 <span class="sort-icon">⇅</span></th>
+                    <th data-col="11" onclick="sortTable(11)">修复程度 <span class="sort-icon">⇅</span></th>
+                    <th data-col="12" onclick="sortTable(12)">修复时间 <span class="sort-icon">⇅</span></th>
+                    <th data-col="13" onclick="sortTable(13)">{col_today_title} <span class="sort-icon">⇅</span></th>
+                    <th data-col="14" onclick="sortTable(14)">近一周 <span class="sort-icon">⇅</span></th>
+                    <th data-col="15" onclick="sortTable(15)">近一月 <span class="sort-icon">⇅</span></th>
+                    <th data-col="16" onclick="sortTable(16)">近三月 <span class="sort-icon">⇅</span></th>
+                    <th data-col="17" onclick="sortTable(17)">近半年 <span class="sort-icon">⇅</span></th>
+                    <th data-col="18" onclick="sortTable(18)">近一年 <span class="sort-icon">⇅</span></th>
+                    <th data-col="19" onclick="sortTable(19)">今年内 <span class="sort-icon">⇅</span></th>
+                    <th data-col="20" onclick="sortTable(20)"><span id="dcaHeaderTitle">月定投</span>收益 <span class="sort-icon">⇅</span></th>
                 </tr>
             </thead>
             <tbody>
@@ -1834,14 +1940,13 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
     <div class="footer-note">
         <div class="footer-left">
             <p><strong>使用提示：</strong> 列宽可拖拽调整，点击表头排序。涨幅数据基于可获取的历史净值，若区间内无对应日期数据则显示“-”。</p>
-            <p><span style="color: #1a73e8;">👉 点击基金行可展开/收起持仓与净值走势图；点击行内「📊 定投」可立即测算并回溯模拟定投收益。</span></p>
+            <p><span style="color: #1a73e8;">👉 点击表格上方卡片可全局刷新右侧的动态定投数据列；点击行内「📊 定投」可呼出单个基金的历史回测图表弹窗。</span></p>
         </div>
         <div class="footer-right" title="静态页面生成与更新时间">
             <span>⏱️ 数据更新于: <strong>{update_time_str}</strong></span>
         </div>
     </div>
 
-    <!-- 智能定投测算弹窗 -->
     <div class="modal-overlay" id="dcaModal">
         <div class="modal-card">
             <div class="modal-header">
@@ -1870,13 +1975,13 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
                     <div class="dca-field">
                         <label>测算周期</label>
                         <select id="dcaRange">
-                            <option value="half">近半年</option>
-                            <option value="year" selected>近一年</option>
+                            <option value="half">近半年内</option>
+                            <option value="year" selected>近一年内</option>
                             <option value="ytd">今年以来</option>
-                            <option value="all">全部历史序列</option>
+                            <option value="all">统计区间全序列</option>
                         </select>
                     </div>
-                    <button class="dca-run-btn" id="dcaRunBtn">🚀 开始测算模拟收益</button>
+                    <button class="dca-run-btn" id="dcaRunBtn">🚀 刷新测算图表</button>
                 </div>
 
                 <div class="dca-results-grid">
@@ -1913,7 +2018,6 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
         var fundNavData = {json.dumps(nav_data_json, ensure_ascii=False)};
         var fundNames = {json.dumps(fund_names_json, ensure_ascii=False)};
 
-        // 主题切换
         (function() {{
             const toggle = document.getElementById('themeToggle');
             const currentTheme = localStorage.getItem('theme') || 'light';
@@ -1928,245 +2032,252 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             }});
         }})();
 
-        // 智能定投回测小工具交互与计算逻辑
-        (function() {{
-            let currentDcaCode = null;
-            let dcaChartInstance = null;
+        function computeDCA(code, freq, targetDay, perAmount, range) {{
+            const raw = fundNavData[code];
+            if (!raw || !raw.dates || raw.dates.length < 2) return null;
 
+            const allDates = raw.dates;
+            const allNavs = raw.navs;
+            const latestDate = new Date(allDates[allDates.length - 1]);
+            let startDate = new Date(latestDate);
+
+            if (range === 'half') {{
+                startDate.setMonth(latestDate.getMonth() - 6);
+            }} else if (range === 'year') {{
+                startDate.setFullYear(latestDate.getFullYear() - 1);
+            }} else if (range === 'ytd') {{
+                startDate = new Date(latestDate.getFullYear(), 0, 1);
+            }} else {{
+                startDate = new Date(allDates[0]);
+            }}
+
+            const filtered = [];
+            for (let i = 0; i < allDates.length; i++) {{
+                const d = new Date(allDates[i]);
+                if (d >= startDate) {{
+                    filtered.push({{ date: allDates[i], dt: d, nav: allNavs[i] }});
+                }}
+            }}
+
+            if (filtered.length < 2) return null;
+
+            let totalInvest = 0;
+            let totalShares = 0;
+            let investCount = 0;
+            let lastInvestKey = '';
+
+            const timelineDates = [];
+            const timelineCost = [];
+            const timelineValue = [];
+
+            filtered.forEach(item => {{
+                let shouldBuy = false;
+                const dayOfWeek = item.dt.getDay(); 
+                const dayOfMonth = item.dt.getDate();
+
+                if (freq === 'daily') {{
+                    shouldBuy = true;
+                }} else if (freq === 'weekly') {{
+                    const oneJan = new Date(item.dt.getFullYear(), 0, 1);
+                    const weekNum = Math.ceil((((item.dt - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
+                    const weekKey = `${{item.dt.getFullYear()}}-W${{weekNum}}`;
+                    if (dayOfWeek >= targetDay && lastInvestKey !== weekKey) {{
+                        shouldBuy = true;
+                        lastInvestKey = weekKey;
+                    }}
+                }} else if (freq === 'biweekly') {{
+                    const oneJan = new Date(item.dt.getFullYear(), 0, 1);
+                    const weekNum = Math.ceil((((item.dt - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
+                    const biweekBlock = Math.floor(weekNum / 2);
+                    const biweekKey = `${{item.dt.getFullYear()}}-BW${{biweekBlock}}`;
+                    if (dayOfWeek >= targetDay && lastInvestKey !== biweekKey) {{
+                        shouldBuy = true;
+                        lastInvestKey = biweekKey;
+                    }}
+                }} else {{
+                    const monthKey = `${{item.dt.getFullYear()}}-${{item.dt.getMonth() + 1}}`;
+                    if (dayOfMonth >= targetDay && lastInvestKey !== monthKey) {{
+                        shouldBuy = true;
+                        lastInvestKey = monthKey;
+                    }}
+                }}
+
+                if (shouldBuy) {{
+                    const buyShares = perAmount / item.nav;
+                    totalShares += buyShares;
+                    totalInvest += perAmount;
+                    investCount++;
+                }}
+
+                const currentVal = totalShares * item.nav;
+                timelineDates.push(item.date);
+                timelineCost.push(Number(totalInvest.toFixed(2)));
+                timelineValue.push(Number(currentVal.toFixed(2)));
+            }});
+
+            const latestItem = filtered[filtered.length - 1];
+            const finalAsset = totalShares * latestItem.nav;
+            const profit = finalAsset - totalInvest;
+            const returnRate = totalInvest > 0 ? (profit / totalInvest) * 100 : 0;
+            const avgPrice = totalShares > 0 ? totalInvest / totalShares : 0;
+
+            return {{
+                investCount, totalInvest, finalAsset, profit, returnRate, avgPrice,
+                latestNav: latestItem.nav, timelineDates, timelineCost, timelineValue
+            }};
+        }}
+
+        function buildDayOptions(freqSelectId, daySelectId, labelId) {{
+            const freq = document.getElementById(freqSelectId).value;
+            const daySelect = document.getElementById(daySelectId);
+            const label = document.getElementById(labelId);
+            
+            daySelect.innerHTML = '';
+            if (freq === 'daily') {{
+                if (label) label.parentElement.style.display = 'none';
+                else daySelect.style.display = 'none';
+            }} else if (freq === 'weekly' || freq === 'biweekly') {{
+                if (label) {{
+                    label.parentElement.style.display = 'flex';
+                    label.textContent = freq === 'weekly' ? '扣款日 (每周几)' : '扣款日 (每两周周几)';
+                }} else {{
+                    daySelect.style.display = 'inline-block';
+                }}
+                const weeks = ['周一', '周二', '周三', '周四', '周五'];
+                weeks.forEach((w, i) => {{
+                    const opt = document.createElement('option');
+                    opt.value = i + 1; opt.textContent = w;
+                    if (i === 0) opt.selected = true;
+                    daySelect.appendChild(opt);
+                }});
+            }} else {{
+                if (label) {{
+                    label.parentElement.style.display = 'flex';
+                    label.textContent = '扣款日 (每月几号)';
+                }} else {{
+                    daySelect.style.display = 'inline-block';
+                }}
+                for (let i = 1; i <= 28; i++) {{
+                    const opt = document.createElement('option');
+                    opt.value = i; opt.textContent = i + ' 号';
+                    if (i === 1) opt.selected = true;
+                    daySelect.appendChild(opt);
+                }}
+            }}
+        }}
+
+        function updateTableDca() {{
+            const freq = document.getElementById('gDcaFreq').value;
+            const targetDay = parseInt(document.getElementById('gDcaDaySelect').value) || 1;
+            const range = document.getElementById('gDcaRange').value;
+
+            const headerTitle = document.getElementById('dcaHeaderTitle');
+            if (headerTitle) {{
+                const map = {{'daily':'日','weekly':'周','biweekly':'双周','monthly':'月'}};
+                headerTitle.textContent = map[freq] + '定投';
+            }}
+
+            document.querySelectorAll('#fundTable tbody tr.fund-row').forEach(row => {{
+                const code = row.getAttribute('data-code');
+                const res = computeDCA(code, freq, targetDay, 1000, range);
+                const dcaCell = row.querySelector('.dca-col');
+                
+                if (dcaCell) {{
+                    if (res && res.returnRate !== undefined) {{
+                        const rate = res.returnRate;
+                        dcaCell.setAttribute('data-val', rate);
+                        const sign = rate > 0 ? '+' : '';
+                        const colorClass = rate > 0 ? 'gain-positive' : (rate < 0 ? 'gain-negative' : '');
+                        dcaCell.className = `dca-col ${{colorClass}}`;
+                        dcaCell.innerHTML = `${{sign}}${{rate.toFixed(2)}}%`;
+                    }} else {{
+                        dcaCell.setAttribute('data-val', -9999);
+                        dcaCell.className = 'dca-col';
+                        dcaCell.innerHTML = '--';
+                    }}
+                }}
+            }});
+
+            if (currentSortCol === 20) {{
+                isAscending = !isAscending; 
+                sortTable(20);
+            }}
+        }}
+
+        let currentDcaCode = null;
+        let dcaChartInstance = null;
+
+        (function() {{
             const modal = document.getElementById('dcaModal');
             const closeBtn = document.getElementById('closeDcaModal');
             const modalTitle = document.getElementById('dcaModalTitle');
             const freqSelect = document.getElementById('dcaFreq');
-            const daySelect = document.getElementById('dcaDaySelect');
-            const dayLabel = document.getElementById('dcaDayLabel');
-            const dayField = document.getElementById('dcaDayField');
-            const amountInput = document.getElementById('dcaAmount');
-            const rangeSelect = document.getElementById('dcaRange');
             const runBtn = document.getElementById('dcaRunBtn');
 
-            function populateDays(freq) {{
-                daySelect.innerHTML = '';
-                if (freq === 'daily') {{
-                    dayField.style.display = 'none';
-                }} else if (freq === 'weekly' || freq === 'biweekly') {{
-                    dayField.style.display = 'flex';
-                    dayLabel.textContent = freq === 'weekly' ? '扣款日 (每周几)' : '扣款日 (每两周周几)';
-                    const weeks = ['周一', '周二', '周三', '周四', '周五'];
-                    weeks.forEach((w, i) => {{
-                        const opt = document.createElement('option');
-                        opt.value = i + 1; // 1 to 5
-                        opt.textContent = w;
-                        if (i === 0) opt.selected = true;
-                        daySelect.appendChild(opt);
-                    }});
-                }} else {{
-                    dayField.style.display = 'flex';
-                    dayLabel.textContent = '扣款日 (每月几号)';
-                    for (let i = 1; i <= 28; i++) {{
-                        const opt = document.createElement('option');
-                        opt.value = i;
-                        opt.textContent = i + ' 号';
-                        if (i === 1) opt.selected = true;
-                        daySelect.appendChild(opt);
-                    }}
-                }}
-            }}
+            buildDayOptions('dcaFreq', 'dcaDaySelect', 'dcaDayLabel');
+            freqSelect.addEventListener('change', () => buildDayOptions('dcaFreq', 'dcaDaySelect', 'dcaDayLabel'));
 
-            populateDays('monthly');
+            buildDayOptions('gDcaFreq', 'gDcaDaySelect', null);
+            document.getElementById('gDcaFreq').addEventListener('change', () => buildDayOptions('gDcaFreq', 'gDcaDaySelect', null));
+            document.getElementById('gDcaApplyBtn').addEventListener('click', updateTableDca);
 
-            freqSelect.addEventListener('change', function() {{
-                populateDays(this.value);
+            document.getElementById('gDcaToggleBtn').addEventListener('click', function() {{
+                document.getElementById('gDcaCard').classList.toggle('collapsed');
             }});
 
-            // 打开弹窗
             window.openDcaModal = function(code) {{
                 currentDcaCode = code;
                 const name = fundNames[code] || code;
                 modalTitle.textContent = `📊 定投测算: [${{code}}] ${{name}}`;
                 modal.classList.add('show');
-                runBacktest();
+                runBacktestModal();
             }};
 
-            closeBtn.addEventListener('click', function() {{
-                modal.classList.remove('show');
-            }});
+            closeBtn.addEventListener('click', () => modal.classList.remove('show'));
+            modal.addEventListener('click', (e) => {{ if (e.target === modal) modal.classList.remove('show'); }});
+            runBtn.addEventListener('click', runBacktestModal);
 
-            modal.addEventListener('click', function(e) {{
-                if (e.target === modal) modal.classList.remove('show');
-            }});
-
-            runBtn.addEventListener('click', runBacktest);
-
-            function runBacktest() {{
-                if (!currentDcaCode || !fundNavData[currentDcaCode]) return;
-                const raw = fundNavData[currentDcaCode];
-                if (!raw.dates || raw.dates.length < 2) return;
-
+            function runBacktestModal() {{
+                if (!currentDcaCode) return;
                 const freq = freqSelect.value;
-                const targetDay = parseInt(daySelect.value) || 1;
-                const perAmount = parseFloat(amountInput.value) || 1000;
-                const range = rangeSelect.value;
+                const targetDay = parseInt(document.getElementById('dcaDaySelect').value) || 1;
+                const perAmount = parseFloat(document.getElementById('dcaAmount').value) || 1000;
+                const range = document.getElementById('dcaRange').value;
 
-                // 筛选回测时间区间
-                const allDates = raw.dates;
-                const allNavs = raw.navs;
-                const latestDate = new Date(allDates[allDates.length - 1]);
-                let startDate = new Date(latestDate);
+                const res = computeDCA(currentDcaCode, freq, targetDay, perAmount, range);
+                if (!res) return;
 
-                if (range === 'half') {{
-                    startDate.setMonth(latestDate.getMonth() - 6);
-                }} else if (range === 'year') {{
-                    startDate.setFullYear(latestDate.getFullYear() - 1);
-                }} else if (range === 'ytd') {{
-                    startDate = new Date(latestDate.getFullYear(), 0, 1);
-                }} else {{
-                    startDate = new Date(allDates[0]);
-                }}
-
-                const filtered = [];
-                for (let i = 0; i < allDates.length; i++) {{
-                    const d = new Date(allDates[i]);
-                    if (d >= startDate) {{
-                        filtered.push({{ date: allDates[i], dt: d, nav: allNavs[i] }});
-                    }}
-                }}
-
-                if (filtered.length < 2) return;
-
-                // 模拟扣款执行
-                let totalInvest = 0;
-                let totalShares = 0;
-                let investCount = 0;
-                let lastInvestKey = '';
-
-                const timelineDates = [];
-                const timelineCost = [];
-                const timelineValue = [];
-
-                filtered.forEach(item => {{
-                    let shouldBuy = false;
-                    const dayOfWeek = item.dt.getDay(); // 0 is Sun, 1-5 Mon-Fri
-                    const dayOfMonth = item.dt.getDate();
-
-                    if (freq === 'daily') {{
-                        shouldBuy = true;
-                    }} else if (freq === 'weekly') {{
-                        const oneJan = new Date(item.dt.getFullYear(), 0, 1);
-                        const weekNum = Math.ceil((((item.dt - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
-                        const weekKey = `${{item.dt.getFullYear()}}-W${{weekNum}}`;
-                        if (dayOfWeek >= targetDay && lastInvestKey !== weekKey) {{
-                            shouldBuy = true;
-                            lastInvestKey = weekKey;
-                        }}
-                    }} else if (freq === 'biweekly') {{
-                        const oneJan = new Date(item.dt.getFullYear(), 0, 1);
-                        const weekNum = Math.ceil((((item.dt - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
-                        const biweekBlock = Math.floor(weekNum / 2);
-                        const biweekKey = `${{item.dt.getFullYear()}}-BW${{biweekBlock}}`;
-                        if (dayOfWeek >= targetDay && lastInvestKey !== biweekKey) {{
-                            shouldBuy = true;
-                            lastInvestKey = biweekKey;
-                        }}
-                    }} else {{
-                        const monthKey = `${{item.dt.getFullYear()}}-${{item.dt.getMonth() + 1}}`;
-                        if (dayOfMonth >= targetDay && lastInvestKey !== monthKey) {{
-                            shouldBuy = true;
-                            lastInvestKey = monthKey;
-                        }}
-                    }}
-
-                    if (shouldBuy) {{
-                        const buyShares = perAmount / item.nav;
-                        totalShares += buyShares;
-                        totalInvest += perAmount;
-                        investCount++;
-                    }}
-
-                    const currentVal = totalShares * item.nav;
-                    timelineDates.push(item.date);
-                    timelineCost.push(Number(totalInvest.toFixed(2)));
-                    timelineValue.push(Number(currentVal.toFixed(2)));
-                }});
-
-                const latestItem = filtered[filtered.length - 1];
-                const finalAsset = totalShares * latestItem.nav;
-                const profit = finalAsset - totalInvest;
-                const returnRate = totalInvest > 0 ? (profit / totalInvest) * 100 : 0;
-                const avgPrice = totalShares > 0 ? totalInvest / totalShares : 0;
-
-                // 渲染结果面板
-                document.getElementById('resTotalInvest').innerHTML = `${{investCount}} 期 / <strong>${{totalInvest.toLocaleString()}}</strong> 元`;
-                document.getElementById('resTotalAsset').innerHTML = `<strong>${{finalAsset.toFixed(2)}}</strong> 元`;
+                document.getElementById('resTotalInvest').innerHTML = `${{res.investCount}} 期 / <strong>${{res.totalInvest.toLocaleString()}}</strong> 元`;
+                document.getElementById('resTotalAsset').innerHTML = `<strong>${{res.finalAsset.toFixed(2)}}</strong> 元`;
                 
                 const profitElem = document.getElementById('resProfit');
-                profitElem.textContent = `${{profit >= 0 ? '+' : ''}}${{profit.toFixed(2)}}`;
-                profitElem.style.color = profit >= 0 ? '#d93025' : '#188038';
+                profitElem.textContent = `${{res.profit >= 0 ? '+' : ''}}${{res.profit.toFixed(2)}}`;
+                profitElem.style.color = res.profit >= 0 ? '#d93025' : '#188038';
 
                 const rateElem = document.getElementById('resReturnRate');
-                rateElem.textContent = `${{returnRate >= 0 ? '+' : ''}}${{returnRate.toFixed(2)}}%`;
-                rateElem.style.color = returnRate >= 0 ? '#d93025' : '#188038';
+                rateElem.textContent = `${{res.returnRate >= 0 ? '+' : ''}}${{res.returnRate.toFixed(2)}}%`;
+                rateElem.style.color = res.returnRate >= 0 ? '#d93025' : '#188038';
 
-                document.getElementById('resAvgPrice').innerHTML = `${{avgPrice.toFixed(4)}} / ${{latestItem.nav.toFixed(4)}}`;
+                document.getElementById('resAvgPrice').innerHTML = `${{res.avgPrice.toFixed(4)}} / ${{res.latestNav.toFixed(4)}}`;
 
-                // 绘制/刷新曲线
                 const ctx = document.getElementById('dcaChart').getContext('2d');
-                if (dcaChartInstance) {{
-                    dcaChartInstance.destroy();
-                }}
+                if (dcaChartInstance) dcaChartInstance.destroy();
 
                 dcaChartInstance = new Chart(ctx, {{
                     type: 'line',
                     data: {{
-                        labels: timelineDates,
+                        labels: res.timelineDates,
                         datasets: [
-                            {{
-                                label: '总资产 (元)',
-                                data: timelineValue,
-                                borderColor: '#1a73e8',
-                                backgroundColor: 'rgba(26, 115, 232, 0.08)',
-                                fill: true,
-                                pointRadius: 0,
-                                borderWidth: 2,
-                                tension: 0.1
-                            }},
-                            {{
-                                label: '累计本金 (元)',
-                                data: timelineCost,
-                                borderColor: '#e67e22',
-                                borderDash: [4, 4],
-                                pointRadius: 0,
-                                borderWidth: 1.5,
-                                fill: false
-                            }}
+                            {{ label: '总资产 (元)', data: res.timelineValue, borderColor: '#1a73e8', backgroundColor: 'rgba(26, 115, 232, 0.08)', fill: true, pointRadius: 0, borderWidth: 2, tension: 0.1 }},
+                            {{ label: '累计本金 (元)', data: res.timelineCost, borderColor: '#e67e22', borderDash: [4, 4], pointRadius: 0, borderWidth: 1.5, fill: false }}
                         ]
                     }},
                     options: {{
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        interaction: {{ mode: 'index', intersect: false }},
-                        plugins: {{
-                            legend: {{
-                                display: true,
-                                position: 'top',
-                                labels: {{ font: {{ size: 10 }}, boxWidth: 12 }}
-                            }},
-                            tooltip: {{
-                                callbacks: {{
-                                    label: function(ctx) {{
-                                        return `${{ctx.dataset.label}}: ${{Number(ctx.parsed.y).toLocaleString()}} 元`;
-                                    }}
-                                }}
-                            }}
-                        }},
+                        responsive: true, maintainAspectRatio: false, interaction: {{ mode: 'index', intersect: false }},
+                        plugins: {{ legend: {{ display: true, position: 'top', labels: {{ font: {{ size: 10 }}, boxWidth: 12 }} }} }},
                         scales: {{
-                            x: {{
-                                ticks: {{ maxTicksLimit: 8, font: {{ size: 9 }} }},
-                                grid: {{ display: false }}
-                            }},
-                            y: {{
-                                ticks: {{ font: {{ size: 9 }} }},
-                                grid: {{ color: 'rgba(0,0,0,0.05)' }}
-                            }}
+                            x: {{ ticks: {{ maxTicksLimit: 8, font: {{ size: 9 }} }}, grid: {{ display: false }} }},
+                            y: {{ ticks: {{ font: {{ size: 9 }} }}, grid: {{ color: 'rgba(0,0,0,0.05)' }} }}
                         }}
                     }}
                 }});
@@ -2180,6 +2291,9 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             const allRows = document.querySelectorAll('#fundTable tbody tr:not(#empty-row)');
             let currentGroup = 'all';
             let searchKeyword = '';
+            
+            updateTableDca();
+
             function applyFilters() {{
                 let hasVisible = false;
                 const keyword = searchKeyword.trim().toLowerCase();
@@ -2462,49 +2576,6 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             }});
         }});
 
-        document.addEventListener("DOMContentLoaded", function () {{
-            const table = document.getElementById("fundTable");
-            const headers = table.querySelectorAll("th");
-            headers.forEach((th, idx) => {{
-                th.addEventListener("click", function(e) {{
-                    if (th.classList.contains("is-resizing") || window._isDragging) return;
-                    sortTable(idx);
-                }});
-                const resizer = document.createElement("div");
-                resizer.classList.add("resizer");
-                th.appendChild(resizer);
-                let x = 0, w = 0;
-                resizer.addEventListener("mousedown", function (e) {{
-                    e.preventDefault();
-                    e.stopPropagation();
-                    window._isDragging = true;
-                    x = e.clientX;
-                    w = th.getBoundingClientRect().width;
-                    th.style.width = w + "px";
-                    th.classList.add("resizing");
-                    th.classList.add("is-resizing");
-                    function mouseMoveHandler(e) {{
-                        const dx = e.clientX - x;
-                        const newWidth = Math.max(40, w + dx);
-                        th.style.width = newWidth + "px";
-                    }}
-                    function mouseUpHandler(e) {{
-                        th.classList.remove("resizing");
-                        document.removeEventListener("mousemove", mouseMoveHandler);
-                        document.removeEventListener("mouseup", mouseUpHandler);
-                        const finalWidth = th.getBoundingClientRect().width;
-                        th.style.width = finalWidth + "px";
-                        setTimeout(() => {{
-                            window._isDragging = false;
-                            th.classList.remove("is-resizing");
-                        }}, 50);
-                    }}
-                    document.addEventListener("mousemove", mouseMoveHandler);
-                    document.addEventListener("mouseup", mouseUpHandler);
-                }});
-            }});
-        }});
-
         let currentSortCol = -1;
         let isAscending = true;
 
@@ -2570,6 +2641,45 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
                 }}
             }});
         }}
+
+        document.addEventListener("DOMContentLoaded", function () {{
+            const table = document.getElementById("fundTable");
+            const headers = table.querySelectorAll("th");
+            headers.forEach((th, idx) => {{
+                const resizer = document.createElement("div");
+                resizer.classList.add("resizer");
+                th.appendChild(resizer);
+                let x = 0, w = 0;
+                resizer.addEventListener("mousedown", function (e) {{
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window._isDragging = true;
+                    x = e.clientX;
+                    w = th.getBoundingClientRect().width;
+                    th.style.width = w + "px";
+                    th.classList.add("resizing");
+                    th.classList.add("is-resizing");
+                    function mouseMoveHandler(e) {{
+                        const dx = e.clientX - x;
+                        const newWidth = Math.max(40, w + dx);
+                        th.style.width = newWidth + "px";
+                    }}
+                    function mouseUpHandler(e) {{
+                        th.classList.remove("resizing");
+                        document.removeEventListener("mousemove", mouseMoveHandler);
+                        document.removeEventListener("mouseup", mouseUpHandler);
+                        const finalWidth = th.getBoundingClientRect().width;
+                        th.style.width = finalWidth + "px";
+                        setTimeout(() => {{
+                            window._isDragging = false;
+                            th.classList.remove("is-resizing");
+                        }}, 50);
+                    }}
+                    document.addEventListener("mousemove", mouseMoveHandler);
+                    document.addEventListener("mouseup", mouseUpHandler);
+                }});
+            }});
+        }});
     </script>
 </body>
 </html>
@@ -2579,7 +2689,6 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
     return os.path.abspath(filename)
 
 def fetch_crypto_data(symbol, start_date, end_date):
-    """获取主要虚拟货币对USDT历史收盘行情"""
     cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
     if os.path.exists(cache_file):
         try:
@@ -2593,7 +2702,6 @@ def fetch_crypto_data(symbol, start_date, end_date):
     pair = f"{symbol}USDT"
     data = []
 
-    # 1. 币安公用K线接口
     try:
         start_ts = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp() * 1000)
         end_ts = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp() * 1000)
@@ -2609,7 +2717,6 @@ def fetch_crypto_data(symbol, start_date, end_date):
     except Exception:
         data = []
 
-    # 2. akshare/新浪外盘期货兜底
     if not data and symbol == "BTC":
         try:
             df = ak.futures_foreign_hist(symbol="BTC")
@@ -2636,7 +2743,6 @@ def fetch_crypto_data(symbol, start_date, end_date):
     return None
 
 def fetch_precious_metals_data(symbol, start_date, end_date):
-    """获取贵金属（伦敦金/银现货、国内黄金/白银连续主力期货）历史行情"""
     cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
     if os.path.exists(cache_file):
         try:
@@ -2650,11 +2756,9 @@ def fetch_precious_metals_data(symbol, start_date, end_date):
     df = None
     data = []
     try:
-        # 兼容处理：对外显示AUM，底层接口依然拉取 AU0 行情
         if symbol == "AUM":
             df = ak.futures_main_sina(symbol="AU0")
         elif symbol == "XAU":
-            # 伦敦金现货/COMEX黄金主力
             for sym in ["GC", "XAU"]:
                 try:
                     df = ak.futures_foreign_hist(symbol=sym)
@@ -2663,7 +2767,6 @@ def fetch_precious_metals_data(symbol, start_date, end_date):
                 except Exception:
                     continue
         elif symbol == "XAG":
-            # 伦敦银现货/COMEX白银主力
             for sym in ["SI", "XAG"]:
                 try:
                     df = ak.futures_foreign_hist(symbol=sym)
@@ -2830,7 +2933,9 @@ def main():
             print(f"[{idx}/{len(args.funds)}] {code} - {meta['name']} ... ❌ 历史净值抓取失败")
             continue
         raw_data_sorted = sorted(raw_data, key=lambda x: x['date'])
-        is_qdii = code in QDII_CODES
+        
+        is_qdii = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
+        
         res = analyze_fund_metrics(raw_data_sorted, args.end, cutoff_date, is_qdii=is_qdii)
         if res:
             res.update({
