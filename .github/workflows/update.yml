@@ -2,9 +2,9 @@ name: Daily Fund Dashboard Update
 
 on:
   schedule:
-    # 每天北京时间 22:30 执行
+    # 每天北京时间 21:00 执行
     # GitHub Actions 使用 UTC
-    - cron: '30 14 * * *'
+    - cron: '0 13 * * *'
 
   # 支持 GitHub 网页手动执行
   workflow_dispatch:
