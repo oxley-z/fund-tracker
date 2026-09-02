@@ -17,13 +17,14 @@ for env_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_p
     os.environ.pop(env_var, None)
 
 DEFAULT_FUNDS = [
-    # 美股主动组 (原QDII)
+    # 美股主动组
     "002891", "014002", "006555", "012922", "012920", "021662", "457001", "539002",
     "018147", "021842", "006373", "018036", "501226", "008254", "008253", "017731",
     "017730", "016665", "016664", "018230", "018229", "021277", "270023", "005698",
     "024239", "501312", "017204", "017654", "017653", "022184", "100055", "017437",
     "017436", "017145", "017144", "016702", "016701", "016823", "164212", "019156",
     "019155", "016668", "501225", "015202", "001668", "000043", "007280", "019449",
+    "019454", "019455",
     # 纳指被动组
     "017091", "016057", "160213", "019172", "019441", "018043", "019547", "016532",
     "040046", "161130", "016452", "270042", "019736", "000834", "019524", "015299",
@@ -62,6 +63,7 @@ US_ACTIVE_CODES = {
     "024239", "501312", "017204", "017654", "017653", "022184", "100055", "017437",
     "017436", "017145", "017144", "016702", "016701", "016823", "164212", "019156",
     "019155", "016668", "501225", "015202", "001668", "000043", "007280", "019449"
+    "019454", "019455"
 }
 
 NDX_PASSIVE_CODES = {
@@ -74,7 +76,6 @@ SPX_PASSIVE_CODES = {
     "161125", "007721", "017028", "050025", "018064", "096001", "017641", "018738"
 }
 
-# 指数组
 INDEX_SYMBOLS = ["NDX", "SPX", "SOXX", "SOXL"]
 INDEX_NAMES = {
     "NDX": "纳斯达克100指数",
@@ -83,7 +84,6 @@ INDEX_NAMES = {
     "SOXL": "三倍做多半导体ETF-Direxion"
 }
 
-# 贵金属组
 PRECIOUS_METALS_SYMBOLS = ["XAU", "AUM", "XAG"]
 PRECIOUS_METALS_NAMES = {
     "XAU": "伦敦金 (XAU)",
@@ -91,7 +91,6 @@ PRECIOUS_METALS_NAMES = {
     "XAG": "伦敦银 (XAG)"
 }
 
-# 加密货币组
 CRYPTO_SYMBOLS = ["BTC", "ETH", "SOL", "BNB"]
 CRYPTO_NAMES = {
     "BTC": "比特币 (BTC/USDT)",
@@ -201,6 +200,9 @@ def fetch_holdings(opener, code):
     return []
 
 def fetch_fund_detail_meta(opener, code):
+    """
+    通过网页爬虫组合多个接口获取完备的基金名称、费率、打折信息及规模
+    """
     meta = {
         "name": f"基金_{code}",
         "scale": "未知",
@@ -208,6 +210,7 @@ def fetch_fund_detail_meta(opener, code):
         "fee_manage": None,
         "fee_custody": None,
         "fee_sales": None,
+        "fee_source": "",
         "fee_purchase": "0.00%",
         "fee_redemption": "未知",
         "buy_status": "--",
@@ -219,11 +222,12 @@ def fetch_fund_detail_meta(opener, code):
     }
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": f"https://fund.eastmoney.com/{code}.html",
         "Accept-Language": "zh-CN,zh;q=0.9"
     }
 
+    # 1. 抓取 HTML 详情页 (主要信息及交易状态)
     main_url = f"https://fund.eastmoney.com/{code}.html"
     main_html = None
     try:
@@ -255,6 +259,7 @@ def fetch_fund_detail_meta(opener, code):
             rates = re.findall(r'([\d.]+%)', rate_section.group(1))
             if rates:
                 min_rate_str = min(rates, key=lambda x: float(x.strip('%')))
+                meta["fee_source"] = min_rate_str
                 meta["fee_purchase"] = min_rate_str
 
         trade = re.search(r"交易状态：</span>(.*?)</div>", main_html, re.S)
@@ -275,6 +280,7 @@ def fetch_fund_detail_meta(opener, code):
                 meta["buy_limit"] = "无限额"
                 meta["buy_limit_val"] = -1
 
+    # 2. 抓取 pingzhongdata 提取精准的名称、运作费和打折申购费率
     js_url = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
     js_content = None
     try:
@@ -289,6 +295,29 @@ def fetch_fund_detail_meta(opener, code):
             match_name = re.search(r'var\s+fS_name\s*=\s*["\']([^"\']+)["\']', js_content)
             if match_name:
                 meta["name"] = match_name.group(1)
+
+        rate_match = re.search(r'var\s+Data_rateInverstment\s*=\s*["\']([^"\']+)["\']', js_content)
+        if rate_match:
+            rate_text = rate_match.group(1)
+            if meta["fee_manage"] is None:
+                m = re.search(r'管理费[：:]\s*([\d.]+)%', rate_text)
+                if m:
+                    meta["fee_manage"] = m.group(1)
+            if meta["fee_custody"] is None:
+                c = re.search(r'托管费[：:]\s*([\d.]+)%', rate_text)
+                if c:
+                    meta["fee_custody"] = c.group(1)
+            if meta["fee_sales"] is None:
+                s = re.search(r'销售服务费[：:]\s*([\d.]+)%', rate_text)
+                if s:
+                    meta["fee_sales"] = s.group(1)
+
+        buy_source_m = re.search(r'var\s+fund_sourceRate\s*=\s*"([^"]+)";', js_content)
+        buy_rate_m = re.search(r'var\s+fund_Rate\s*=\s*"([^"]+)";', js_content)
+        if buy_source_m and buy_source_m.group(1):
+            meta["fee_source"] = buy_source_m.group(1)
+        if buy_rate_m and buy_rate_m.group(1):
+            meta["fee_purchase"] = buy_rate_m.group(1)
 
         try:
             df_xq = ak.fund_individual_basic_info_xq(symbol=code)
@@ -316,27 +345,7 @@ def fetch_fund_detail_meta(opener, code):
         except Exception:
             pass
 
-        rate_match = re.search(r'var\s+Data_rateInverstment\s*=\s*["\']([^"\']+)["\']', js_content)
-        if rate_match:
-            rate_text = rate_match.group(1)
-            if meta["fee_manage"] is None:
-                m = re.search(r'管理费[：:]\s*([\d.]+)%', rate_text)
-                if m:
-                    meta["fee_manage"] = m.group(1)
-            if meta["fee_custody"] is None:
-                c = re.search(r'托管费[：:]\s*([\d.]+)%', rate_text)
-                if c:
-                    meta["fee_custody"] = c.group(1)
-            if meta["fee_sales"] is None:
-                s = re.search(r'销售服务费[：:]\s*([\d.]+)%', rate_text)
-                if s:
-                    meta["fee_sales"] = s.group(1)
-
-        if meta["fee_purchase"] == "0.00%":
-            buy_m = re.search(r'var\s+fund_sourceRate\s*=\s*"([^"]+)";', js_content)
-            if buy_m:
-                meta["fee_purchase"] = buy_m.group(1)
-
+    # 3. 抓取 f10 获取赎回费阶梯与规模兜底
     f10_url = f"https://fundf10.eastmoney.com/jjfl_{code}.html"
     try:
         req = urllib.request.Request(f10_url, headers=headers)
@@ -796,6 +805,22 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             today_gain_class = ''
             today_data_val = -9999
 
+        # --- 新增/优化：打折费率的横线样式解析与逻辑整合 ---
+        fee_src = str(r.get('fee_source', ''))
+        fee_pur = str(r.get('fee_purchase', ''))
+        
+        if fee_src and "%" not in fee_src and fee_src != "0.00": fee_src += "%"
+        if fee_pur and "%" not in fee_pur and fee_pur != "0.00": fee_pur += "%"
+
+        if fee_src and fee_pur and fee_src != fee_pur:
+            fee_purchase_html = f'<s style="color:var(--footer-text); font-size:10px;">{fee_src}</s><br><span style="color:#d93025; font-weight:600;">{fee_pur}</span>'
+            clean_pur = fee_pur.strip('%')
+            fee_pur_val = float(clean_pur) if clean_pur.replace('.', '', 1).isdigit() else 999.0
+        else:
+            fee_purchase_html = fee_pur if fee_pur else '--'
+            clean_pur = fee_pur.strip('%') if fee_pur else ''
+            fee_pur_val = float(clean_pur) if clean_pur.replace('.', '', 1).isdigit() else 999.0
+
         rows_html += f"""
         <tr data-group="{group}" class="fund-row" data-code="{r['code']}">
             <td class="code" data-val="{r['code']}">{r['code']}</td>
@@ -808,7 +833,7 @@ def generate_html_report(results, start_date, end_date, today_str, filename="fun
             </td>
             <td data-val="{r['scale_val']}" class="highlight-val">{r['scale']}</td>
             <td data-val="{r['fee_val']}">{r['fee_total']} <span class="fee-sub">(管:{r['fee_manage']}/托:{r['fee_custody']}/销:{r['fee_sales']})</span></td>
-            <td data-val="{r['fee_purchase']}">{r['fee_purchase']}</td>
+            <td data-val="{fee_pur_val}">{fee_purchase_html}</td>
             <td data-val="{limit_val}">{r.get('buy_status', '--')}<div class="fee-sub">{limit_display}</div></td>
             <td data-val="{r['max_nav']}">{max_nav_display}</td>
             <td data-val="{r['min_nav']}">{min_nav_display}</td>
@@ -2946,6 +2971,7 @@ def main():
                 "fee_manage": meta["fee_manage"],
                 "fee_custody": meta["fee_custody"],
                 "fee_sales": meta["fee_sales"],
+                "fee_source": meta["fee_source"],
                 "fee_total": meta["fee_total"],
                 "fee_val": meta["fee_val"],
                 "fee_purchase": meta["fee_purchase"],
@@ -2979,6 +3005,7 @@ def main():
                     "fee_manage": "--",
                     "fee_custody": "--",
                     "fee_sales": "--",
+                    "fee_source": "--",
                     "fee_purchase": "--",
                     "fee_redemption": "--",
                     "buy_status": "--",
@@ -3013,6 +3040,7 @@ def main():
                     "fee_manage": "--",
                     "fee_custody": "--",
                     "fee_sales": "--",
+                    "fee_source": "--",
                     "fee_purchase": "--",
                     "fee_redemption": "--",
                     "buy_status": "--",
@@ -3044,6 +3072,7 @@ def main():
                 "fee_manage": "--",
                 "fee_custody": "--",
                 "fee_sales": "--",
+                "fee_source": "--",
                 "fee_purchase": "--",
                 "fee_redemption": "--",
                 "buy_status": "--",
@@ -3063,6 +3092,7 @@ def main():
                     "fee_manage": meta["fee_manage"],
                     "fee_custody": meta["fee_custody"],
                     "fee_sales": meta["fee_sales"],
+                    "fee_source": meta["fee_source"],
                     "fee_total": meta["fee_total"],
                     "fee_val": meta["fee_val"],
                     "fee_purchase": meta["fee_purchase"],
