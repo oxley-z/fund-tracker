@@ -11,6 +11,7 @@ import akshare as ak
 import pandas as pd
 from datetime import datetime, timedelta
 from calendar import monthrange
+from http.cookiejar import CookieJar
 
 # 强制清空代理环境变量
 for env_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
@@ -148,8 +149,144 @@ os.makedirs(HOLDER_CACHE_DIR, exist_ok=True)
 os.makedirs(COUNTRY_CACHE_DIR, exist_ok=True)
 
 def get_direct_opener():
+    cj = CookieJar()
     proxy_handler = urllib.request.ProxyHandler({})
-    return urllib.request.build_opener(proxy_handler)
+    return urllib.request.build_opener(proxy_handler, urllib.request.HTTPCookieProcessor(cj))
+
+# ==============================================================================
+# 蛋卷指数估值获取模块 (融合 Guchacha 兜底引擎)
+# ==============================================================================
+TARGET_INDICES = ["纳指100", "标普500", "沪深300", "科创50", "恒生科技"]
+
+NAME_MAP = {
+    "纳指100": ["纳斯达克100", "纳斯达克", "纳指100"],
+    "标普500": ["标普500", "S&P500", "S&P 500"],
+    "沪深300": ["沪深300"],
+    "科创50": ["科创50"],
+    "恒生科技": ["恒生科技", "恒生科技指数"]
+}
+
+TICKER_MAP = {
+    "纳指100": "NDX",
+    "标普500": "SPX",
+    "沪深300": "000300",
+    "科创50": "000688",
+    "恒生科技": "HSTECH"
+}
+
+def fetch_index_valuations(opener):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://danjuanfunds.com/djapi/v3/filter/fund"
+    }
+
+    try:
+        init_req = urllib.request.Request("https://xueqiu.com", headers=headers)
+        opener.open(init_req, timeout=5)
+    except Exception:
+        pass
+
+    # 1. 尝试获取蛋卷 API 数据
+    api_url = "https://danjuanfunds.com/djapi/index_eva/dj"
+    req = urllib.request.Request(api_url, headers=headers)
+    items = []
+    try:
+        with opener.open(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("result_code") == 0:
+                items = data.get("data", {}).get("items", [])
+    except Exception:
+        pass
+
+    eva_dict = {}
+    for item in items:
+        eva_dict[item.get("name", "").strip()] = item
+
+    # 2. 尝试获取股查查兜底数据
+    guchacha_html = ""
+    try:
+        req_g = urllib.request.Request("https://guchacha.com/index-valuation", headers={"User-Agent": headers["User-Agent"]})
+        with opener.open(req_g, timeout=5) as resp:
+            guchacha_html = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        pass
+
+    results = []
+    for target in TARGET_INDICES:
+        matched = None
+        aliases = NAME_MAP.get(target, [target])
+        
+        # 优先检索蛋卷返回的数据池
+        for alias in aliases:
+            for k, v in eva_dict.items():
+                if alias in k:
+                    matched = v
+                    break
+            if matched:
+                break
+
+        # 如果蛋卷无数据，启用股查查引擎进行强健的纯数字提取
+        if not matched and guchacha_html:
+            for alias in aliases:
+                for row in re.findall(r'<tr[^>]*>.*?</tr>', guchacha_html, re.S):
+                    if alias in row:
+                        tds = re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)
+                        clean_tds = [re.sub(r'<[^>]+>', '', td).strip() for td in tds]
+                        
+                        pe_val = None
+                        pct_val = None
+                        
+                        # 解析逻辑：提取第一个浮点数为PE，提取第一个带%的为百分位
+                        for t in clean_tds:
+                            if '%' in t:
+                                if pct_val is None:
+                                    try:
+                                        pct_val = float(t.replace('%', '')) / 100.0
+                                    except ValueError:
+                                        pass
+                            else:
+                                if pe_val is None:
+                                    try:
+                                        pe_val = float(t)
+                                    except ValueError:
+                                        pass
+                                        
+                        if pe_val is not None and pct_val is not None:
+                            matched = {
+                                'pe': pe_val,
+                                'pe_percentile': pct_val
+                            }
+                            break
+                if matched: break
+
+        ticker = TICKER_MAP.get(target, "")
+
+        if matched:
+            pe = matched.get('pe')
+            pct = matched.get("pe_percentile")
+            pe_val = f"{pe:.2f}" if pe else "--"
+            pct_val = f"{pct * 100:.2f}%" if pct is not None else "--"
+            pct_raw = pct * 100 if pct is not None else 0
+            
+            if pct is None:
+                status, color = "⚪ 暂无数据", "#70757a"
+            else:
+                p = pct * 100
+                if p <= 20: status, color = "🟢 极度低估", "#188038"
+                elif p <= 40: status, color = "🌱 低估", "#34a853"
+                elif p <= 60: status, color = "🟡 适中", "#fbbc04"
+                elif p <= 80: status, color = "🟠 偏高", "#e67e22"
+                else: status, color = "🔴 高估", "#d93025"
+                
+            results.append({
+                "name": target, "ticker": ticker, "pe": pe_val, "pct": pct_val, "pct_raw": pct_raw, "status": status, "color": color
+            })
+        else:
+            results.append({
+                "name": target, "ticker": ticker, "pe": "--", "pct": "--", "pct_raw": 0, "status": "⚪ 暂无数据", "color": "#70757a"
+            })
+            
+    return results
 
 # ==============================================================================
 # 多源宏观指标获取模块
@@ -322,10 +459,6 @@ def fetch_home_market_metrics(opener):
     }
 
 def fetch_fund_country_distribution(opener, code, is_qdii=False):
-    """
-    多源获取基金的国家/地区资产配置分布及披露日期：
-    返回格式统一为: {"date": "YYYY-MM-DD", "countries": [...]}
-    """
     cache_file = os.path.join(COUNTRY_CACHE_DIR, f"{code}_country.json")
     
     if os.path.exists(cache_file):
@@ -339,7 +472,6 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
 
     query_code = MAIN_CODE_MAP.get(code, code)
 
-    # 1. 公告正文穿透解析[cite: 1]
     if is_qdii:
         try:
             rep_url = f"https://api.fund.eastmoney.com/f10/JJGG?fundcode={query_code}&pageIndex=1&pageSize=60&type=3"
@@ -447,7 +579,6 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
         except Exception:
             pass
 
-    # 2. 国海富兰克林官网详情页
     url_fts = f"https://www.ftsfund.com/qxjj/jjxq/{query_code}"
     try:
         req = urllib.request.Request(url_fts, headers={
@@ -487,7 +618,6 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
     except Exception:
         pass
 
-    # 3. 天天基金 PC 端海外资产配置接口 (gwzb)[cite: 1]
     url_em = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=gwzb&code={query_code}&rt={int(time.time()*1000)}"
     try:
         req = urllib.request.Request(url_em, headers={
@@ -522,7 +652,6 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
     except Exception:
         pass
 
-    # 宽基与 A 股兜底[cite: 1]
     if not is_qdii:
         return {"date": "长期基准", "countries": [{"country": "中国大陆", "ratio": 100.0}]}
     else:
@@ -537,6 +666,7 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
 
     return {"date": "--", "countries": []}
 
+
 def fetch_fund_holder_structure(opener, code):
     cache_file = os.path.join(HOLDER_CACHE_DIR, f"{code}_holder.json")
     if os.path.exists(cache_file):
@@ -548,14 +678,37 @@ def fetch_fund_holder_structure(opener, code):
         except Exception: pass
 
     query_code = MAIN_CODE_MAP.get(code, code)
-    url = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=cyrjg&code={query_code}"
-    headers = {
+    
+    url = f"https://fundmobapi.eastmoney.com/FundMapi/FundHolderRatio.ashx?FCODE={query_code}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
+    headers = {"User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"}
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with opener.open(req, timeout=5) as resp:
+            res_json = json.loads(resp.read().decode("utf-8"))
+            datas = res_json.get("Datas", [])
+            if datas and isinstance(datas, list):
+                latest = datas[0]
+                date_str = latest.get("FSRQ", "--")[:10]
+                inst_text = str(latest.get("JGHBL", "0")).replace('%', '')
+                indiv_text = str(latest.get("GRHBL", "0")).replace('%', '')
+                inst_val = float(inst_text) if inst_text.replace('.', '', 1).isdigit() else 0.0
+                indiv_val = float(indiv_text) if indiv_text.replace('.', '', 1).isdigit() else 0.0
+                
+                if inst_val > 0 or indiv_val > 0:
+                    result = {"date": date_str, "inst": round(inst_val, 2), "indiv": round(indiv_val, 2)}
+                    with open(cache_file, 'w', encoding='utf-8') as f:
+                        json.dump(result, f, ensure_ascii=False, indent=2)
+                    return result
+    except Exception: pass
+
+    fallback_url = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=cyrjg&code={query_code}"
+    fallback_headers = {
         "User-Agent": DEFAULT_HEADERS["User-Agent"],
         "Referer": f"https://fundf10.eastmoney.com/cyrjg_{query_code}.html",
         "Accept": "*/*"
     }
     try:
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request(fallback_url, headers=fallback_headers)
         with opener.open(req, timeout=5) as resp:
             html = resp.read().decode("utf-8", errors="ignore")
 
@@ -576,6 +729,7 @@ def fetch_fund_holder_structure(opener, code):
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 return result
     except Exception: pass
+    
     return None
 
 def fetch_holdings(opener, code):
@@ -928,7 +1082,7 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         "ytd_gain": calc_gain(ytd=True)
     }
 
-def generate_html_report(results, start_date, end_date, today_str, metrics, is_debug_mode=False, filename="fund_drawdown_dashboard.html"):
+def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, is_debug_mode=False, filename="fund_drawdown_dashboard.html"):
     CPO_CODES = {"022365", "540010", "002112", "011892", "021528", "009645", "011370", "011452", "016371", "001956", "016234", "016173", "006616", "018291", "020661", "017462", "001438", "008984", "180031", "004320", "027063"}
     STORAGE_CODES = {"025500", "025209", "018816", "014320"}
     SEMICONDUCTOR_CODES = {"024418", "024975", "020640", "019633", "024424", "017811", "013841", "007491", "020629", "017747", "026633", "162214", "007343", "018777"}
@@ -985,8 +1139,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         fund_url = INDEX_URL_MAP.get(r['code'], f"https://fund.eastmoney.com/{r['code']}.html")
 
         max_dd_pct = min(max(r['max_drawdown'], 0), 100)
-        rec_pct = min(max(r['recovery_rate'], 0), 100)
-        reb_pct = min(max(r['rebound_gain'], 0), 100)
+        rec_pct = max(0, min(r['recovery_rate'], 100))
+        reb_pct = min(r['rebound_gain'], 100)
         limit_display = r.get('buy_limit', '无限额')
         limit_val = r.get('buy_limit_val', -1)
         max_nav_display = f"{r['max_nav']:.4f} ({r['max_nav_date']})"
@@ -1044,7 +1198,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             fee_pur_val = float(clean_pur) if clean_pur.replace('.', '', 1).isdigit() else 999.0
 
         rows_html += f"""
-        <tr data-group="{group}" data-macro="{macro_category}" class="fund-row" data-code="{r['code']}">
+        <tr data-group="{group}" data-macro="{macro_category}" data-buy-status="{r.get('buy_status', '')}" class="fund-row" data-code="{r['code']}">
             <td class="fav-col" data-val="0"><button class="star-btn" data-code="{r['code']}" title="点击添加/取消自选">☆</button></td>
             <td class="code" data-val="{r['code']}">{r['code']}</td>
             <td class="name" data-val="{r['name']}">
@@ -1052,7 +1206,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                     <a href="{fund_url}" target="_blank" title="点击查看行情/概况" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r['name']}</a>
                     <button class="dca-btn" data-code="{r['code']}" title="启动定投回测测算小工具">📊 定投</button>
                 </div>
-                <div class="redemption-sub" style="white-space: normal; line-height: 1.6;">赎回:<br>{redemption_lines}</div>
+                <div class="redemption-sub" style="white-space: normal; line-height: 1.6;">赎回:<br><span class="highlight-redemption">{redemption_lines}</span></div>
             </td>
             <td data-val="{r['scale_val']}" class="highlight-val">{r['scale']}</td>
             <td data-val="{r['fee_val']}">{r['fee_total']} <span class="fee-sub">(管:{r['fee_manage']}/托:{r['fee_custody']}/销:{r['fee_sales']})</span></td>
@@ -1062,21 +1216,21 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             <td data-val="{r['min_nav']}">{min_nav_display}</td>
             <td data-val="{r['latest_nav']}">{nav_display_html}</td>
             <td class="metric-red" data-val="{r['max_drawdown']}">
-                <div class="progress-container progress-text">
+                <div class="progress-container">
                     <div class="progress-bar bar-red" style="width: {max_dd_pct}%;">
                         <span>{r['max_drawdown']:.2f}%</span>
                     </div>
                 </div>
             </td>
             <td class="metric-green" data-val="{r['rebound_gain']}">
-                <div class="progress-container progress-text">
+                <div class="progress-container">
                     <div class="progress-bar bar-green" style="width: {reb_pct}%;">
                         <span>{r['rebound_gain']:.2f}%</span>
                     </div>
                 </div>
             </td>
             <td data-val="{r['recovery_rate']}">
-                <div class="progress-container progress-text">
+                <div class="progress-container">
                     <div class="progress-bar bar-blue" style="width: {rec_pct}%;">
                         <span>{r['recovery_rate']:.2f}%</span>
                     </div>
@@ -1094,7 +1248,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         </tr>
         """
 
-        # 左侧前十大持仓卡片构建
         if holdings_history:
             sorted_holdings = sorted(holdings_history, key=lambda x: x['date'], reverse=True)
             display_holdings = sorted_holdings[:3]
@@ -1152,7 +1305,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                 """
         else:
             holdings_html = """
-            <div class="quarter-card empty-holdings-placeholder">
+            <div class="quarter-card empty-holdings-placeholder" style="grid-column: span 3;">
                 <div class="quarter-label"><span class="quarter-title">前十大持仓</span></div>
                 <div style="flex:1; display:flex; align-items:center; justify-content:center; color:var(--footer-text); font-size:12px;">
                     暂无持仓披露数据
@@ -1160,24 +1313,30 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             </div>
             """
 
-        # 左侧持有人结构环状图卡片构建[cite: 3]
         holder_data = r.get("holder_struct")
         if holder_data and ("inst" in holder_data) and ("indiv" in holder_data):
             inst_r = holder_data["inst"]
             indiv_r = holder_data["indiv"]
             h_date = holder_data.get("date", "--")
+            
+            holders_arr = [
+                {"name": "机构持有", "ratio": inst_r},
+                {"name": "个人持有", "ratio": indiv_r}
+            ]
+            holders_json_str = json.dumps(holders_arr, ensure_ascii=False)
+            
             pie_card_html = f"""
-            <div class="quarter-card holder-card">
+            <div class="quarter-card holder-card" style="grid-column: span 1;">
                 <div class="quarter-label"><span class="quarter-title">持有人结构</span></div>
                 <div class="holder-pie-wrapper">
-                    <canvas id="holder-chart-{r['code']}" data-inst="{inst_r}" data-indiv="{indiv_r}"></canvas>
+                    <canvas id="holder-chart-{r['code']}" data-holders='{holders_json_str}'></canvas>
                 </div>
                 <div class="holder-date-sub">披露日期: {h_date}</div>
             </div>
             """
         else:
             pie_card_html = f"""
-            <div class="quarter-card holder-card">
+            <div class="quarter-card holder-card" style="grid-column: span 1;">
                 <div class="quarter-label"><span class="quarter-title">持有人结构</span></div>
                 <div style="flex:1; display:flex; align-items:center; justify-content:center; color:var(--footer-text); font-size:11px;">
                     暂无结构数据
@@ -1186,7 +1345,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             </div>
             """
 
-        # 右侧 1/4: 国家占比环状图卡片[cite: 3]
         c_info = r.get("countries_info", {})
         countries_data = c_info.get("countries", [])
         c_date = c_info.get("date", "--")
@@ -1212,7 +1370,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             </div>
             """
 
-        # 右侧 3/4: 走势折线图[cite: 3]
         chart_html = f"""
         <div class="chart-container" id="chart-container-{r['code']}">
             <div class="chart-controls">
@@ -1227,7 +1384,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         </div>
         """
 
-        # 展开行组装[cite: 3]
         rows_html += f"""
         <tr class="holding-row" data-code="{r['code']}">
             <td colspan="{col_count}" style="padding: 8px 20px; background-color: var(--hover-bg); font-size: 12px; color: var(--footer-text);">
@@ -1258,14 +1414,102 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         {"name": "WiseETF", "url": "https://www.wise-etf.com/", "desc": "美股ETF/QDII基金估值与溢价监控"},
         {"name": "纳指估值助手", "url": "https://nsdk.top/", "desc": "纳指基金估值与持仓参考"},
         {"name": "定投估值计算机", "url": "https://btcdca.me/", "desc": "多资产定投策略与估值评分"},
-        {"name": "FiNews 美股日报", "url": "https://finews.elsetech.app/", "desc": "每日美股盘后总结与新闻聚合"}
+        {"name": "FiNews 美股日报", "url": "https://finews.elsetech.app/", "desc": "每日美股盘后总结与新闻聚合"},
+        {"name": "股查查", "url": "https://guchacha.com/", "desc": "专业的企业/股票基本面查询工具"},
+        {"name": "蛋卷估值中心", "url": "https://danjuanfunds.com/djmodule/value-center?channel=1300100141", "desc": "全市场指数估值与定投参考"}
     ]
+    
     friend_cards_html = "".join([f"""
-        <div class="friend-card">
-            <a href="{link['url']}" target="_blank">{link['name']}</a>
-            <span class="friend-desc">{link['desc']}</span>
-        </div>
+        <a href="{link['url']}" target="_blank" class="metric-card friend-card" style="text-decoration: none; display: flex; flex-direction: column; justify-content: center; cursor: pointer;">
+            <div class="metric-header" style="color: var(--link-color); font-size: 14px; border-bottom: 1px dashed var(--border); padding-bottom: 6px; margin-bottom: 6px;">
+                <span>{link['name']}</span>
+                <span>↗</span>
+            </div>
+            <div class="metric-desc" style="border-top: none; padding-top: 0; margin-top: 0; font-size: 11px; color: var(--footer-text);">
+                {link['desc']}
+            </div>
+        </a>
     """ for link in friend_links])
+
+    index_cards_html = ""
+    for item in index_valuations:
+        ticker_html = f'<span style="font-size: 13px; color: var(--footer-text); font-weight: normal; margin-left: 4px;">({item["ticker"]})</span>' if item["ticker"] else ""
+        index_cards_html += f"""
+        <div class="metric-card">
+            <div class="metric-header">
+                <span style="font-size: 18px; font-weight: 800; color: var(--text); display: flex; align-items: baseline;">
+                    {item['name'].split('（')[0]} {ticker_html}
+                </span>
+                <span class="metric-tag" style="background:rgba(0,0,0,0.05); color:{item['color']};">{item['status']}</span>
+            </div>
+            <div class="metric-body" style="margin: 12px 0 6px 0;">
+                <span class="metric-value" style="color:var(--link-color); font-size:22px;">PE: {item['pe']}</span>
+            </div>
+            <div class="metric-desc" style="border-top: none; padding-top: 0;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px;">
+                    <span>历史分位</span>
+                    <strong style="color:var(--text);">{item['pct']}</strong>
+                </div>
+                <div style="width: 100%; height: 6px; background-color: var(--progress-track); border-radius: 3px; overflow: hidden;">
+                    <div style="width: {item['pct_raw']}%; height: 100%; background-color: {item['color']}; border-radius: 3px; transition: width 1s ease-in-out;"></div>
+                </div>
+            </div>
+        </div>
+        """
+
+    fed_monitor_html = """
+    <div class="fed-card">
+        <div class="fed-title">
+            2026年9月17日 
+            <a href="https://cn.investing.com/central-banks/fed-rate-monitor" target="_blank" style="float:right; color:var(--link-color); font-size: 13px; font-weight: 500; text-decoration: none;">🔗 源数据直达 ↗</a>
+        </div>
+        <div class="fed-info">
+            会议时间: <strong>2026年9月17日 02:00</strong><br>
+            期货价格: <strong>96.263</strong>
+        </div>
+        <div class="fed-bar-row">
+            <div class="fed-bar-label">3.50 - 3.75</div>
+            <div class="fed-bar-track" style="background: transparent; display: flex; align-items: center; margin: 0;">
+                <div class="fed-bar-fill blue" style="width: 8.2%;"></div>
+                <span class="fed-bar-pct">8.2%</span>
+            </div>
+        </div>
+        <div class="fed-bar-row">
+            <div class="fed-bar-label">3.75 - 4.00</div>
+            <div class="fed-bar-track" style="background: transparent; display: flex; align-items: center; margin: 0;">
+                <div class="fed-bar-fill grey" style="width: 91.8%;"></div>
+                <span class="fed-bar-pct">91.8%</span>
+            </div>
+        </div>
+        
+        <table class="fed-table" style="width: 100%; table-layout: fixed;">
+            <thead>
+                <tr>
+                    <th style="width: 40%;">目标利率</th>
+                    <th style="width: 20%;">目前</th>
+                    <th style="width: 20%;">上一日</th>
+                    <th style="width: 20%;">上一周</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>3.50 - 3.75 <span style="color:#aaa;">📈</span></td>
+                    <td>8.2%</td>
+                    <td>10.5%</td>
+                    <td>41.6%</td>
+                </tr>
+                <tr>
+                    <td>3.75 - 4.00 <span style="color:#aaa;">📈</span></td>
+                    <td>91.8%</td>
+                    <td>89.5%</td>
+                    <td>58.4%</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <div style="text-align: right; font-size: 11px; color: var(--footer-text); margin-top: 12px;">更新: 2026年9月15日 19:15 CST</div>
+    </div>
+    """
 
     now_dt = datetime.now()
     update_time_str = now_dt.strftime("%Y-%m-%d %H:%M")
@@ -1414,17 +1658,22 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         .home-container {{
             flex: 1;
             overflow-y: auto;
-            padding-right: 6px;
             display: flex;
             flex-direction: column;
-            gap: 14px;
+            gap: 20px;
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 24px 5%;
+            width: 100%;
+            box-sizing: border-box;
         }}
         
-        .macro-metrics-grid {{
+        .macro-metrics-grid, .index-metrics-grid, .friend-links-grid {{
             display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
         }}
+        
         .metric-card {{
             background: var(--table-bg);
             border: 1px solid var(--border);
@@ -1501,7 +1750,99 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         }}
         [data-theme="dark"] .fng-bar-pointer {{ background: #fff; }}
 
-        .home-grid-section {{ display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }}
+        /* Fed Monitor specific styles */
+        .fed-card {{
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: var(--card-shadow);
+            margin-bottom: 12px;
+        }}
+        .fed-title {{
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+            color: var(--header-text);
+        }}
+        .fed-info {{
+            font-size: 13px;
+            color: var(--text);
+            margin-bottom: 16px;
+            line-height: 1.6;
+        }}
+        .fed-bar-row {{
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }}
+        .fed-bar-label {{
+            width: 80px;
+            font-weight: 600;
+            color: var(--text);
+        }}
+        .fed-bar-track {{
+            flex: 1;
+            height: 24px;
+            background: var(--progress-track);
+            position: relative;
+            margin: 0 12px;
+        }}
+        .fed-bar-fill {{
+            height: 100%;
+            display: flex;
+            align-items: center;
+            padding-left: 8px;
+            color: #fff;
+            font-weight: bold;
+            font-size: 12px;
+            box-sizing: border-box;
+            border-radius: 2px;
+        }}
+        .fed-bar-fill.blue {{ background: #5c8bb5; }}
+        .fed-bar-fill.grey {{ background: #a6a6a6; }}
+        .fed-bar-pct {{
+            margin-left: 6px;
+            font-weight: 600;
+            color: var(--text);
+            font-size: 13px;
+        }}
+        .fed-table {{
+            width: 100%;
+            min-width: 0 !important;
+            max-width: 100%;
+            box-sizing: border-box;
+            border-collapse: collapse;
+            margin-top: 16px;
+            font-size: 13px;
+            text-align: right;
+            table-layout: fixed;
+        }}
+        .fed-table th,
+        .fed-table td {{
+            min-width: 0;
+            box-sizing: border-box;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .fed-table th, .fed-table td {{
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }}
+        .fed-table th {{
+            color: var(--footer-text);
+            font-weight: 500;
+        }}
+        .fed-table td:first-child, .fed-table th:first-child {{
+            text-align: left;
+            font-weight: 600;
+        }}
+
         .home-card-box {{
             background: var(--table-bg);
             border: 1px solid var(--border);
@@ -1649,7 +1990,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             border: 1px solid var(--border);
             margin-bottom: 6px;
         }}
-        table {{ width: 100%; min-width: 2550px; border-collapse: collapse; font-size: 12px; text-align: right; table-layout: fixed; }}
+        #fundTable {{ width: 100%; min-width: 2550px; border-collapse: collapse; font-size: 12px; text-align: right; table-layout: fixed; }}
         th, td {{ padding: 6px 8px; border-bottom: 1px solid var(--border); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }}
         #fundTable thead th {{ position: sticky; top: 0; z-index: 10; background-color: var(--header-bg); border-bottom: 2px solid var(--border); }}
         th:nth-child(1), td:nth-child(1) {{ width: 45px; text-align: center; white-space: nowrap; }}
@@ -1733,9 +2074,32 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             border-color: #3c4043;
         }}
 
-        .progress-container {{ background-color: var(--progress-track); border-radius: 6px; overflow: hidden; height: 20px; width: 100%; position: relative; }}
-        .progress-bar {{ height: 100%; border-radius: 6px; min-width: 42px; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px; box-sizing: border-box; }}
-        .progress-bar span {{ color: #fff; font-size: 11px; font-weight: 600; }}
+        /* 进度条样式修复 */
+        .progress-container {{ 
+            background-color: var(--progress-track); 
+            border-radius: 6px; 
+            overflow: hidden; 
+            height: 20px; 
+            width: 100%; 
+            position: relative; 
+            display: block;
+        }}
+        .progress-bar {{ 
+            height: 100%; 
+            border-radius: 6px; 
+            min-width: 42px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: flex-end; 
+            padding-right: 6px; 
+            box-sizing: border-box; 
+        }}
+        .progress-bar span {{ 
+            color: #fff; 
+            font-size: 11px; 
+            font-weight: 600; 
+            white-space: nowrap;
+        }}
         .bar-red {{ background-color: #d93025; }}
         .bar-blue {{ background-color: #1a73e8; }}
         .bar-green {{ background-color: #188038; }}
@@ -1744,6 +2108,20 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         .gain-positive {{ color: #d93025; font-weight: bold; }}
         .gain-negative {{ color: #188038; font-weight: bold; }}
         .gain-date {{ font-size: 10px; color: var(--footer-text); }}
+
+        /* 贵金属、加密货币、指数最新净值高亮样式 */
+        .highlight-special-nav {{
+            font-weight: bold;
+            color: #d93025;
+            background-color: rgba(217, 48, 37, 0.12);
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+        }}
+        [data-theme="dark"] .highlight-special-nav {{
+            color: #ff8a65;
+            background-color: rgba(255, 138, 101, 0.2);
+        }}
 
         .fund-row {{ cursor: pointer; }}
         .holding-row td {{ background-color: var(--hover-bg) !important; border-top: 1px dashed var(--border); }}
@@ -1824,10 +2202,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         .chart-container canvas {{ width: 100% !important; height: auto !important; max-height: 200px; flex: 1; }}
         
         .footer-note {{ font-size: 11px; color: var(--footer-text); background: var(--footer-bg); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }}
-        .friend-card {{ background: var(--card-bg); border-radius: 6px; padding: 8px 10px; border: 1px solid var(--border); }}
-        .friend-card a {{ color: var(--link-color); text-decoration: none; font-weight: 600; font-size: 12px; display: block; }}
-        .friend-desc {{ font-size: 10px; color: var(--footer-text); }}
-
+        
         /* 定投回测模态弹窗 */
         .modal-overlay {{
             position: fixed;
@@ -1966,7 +2341,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             box-sizing: border-box;
         }}
 
-        /* 移动端与平板响应式适配 */
+        @media (max-width: 1200px) {{
+            .macro-metrics-grid, .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(3, 1fr); }}
+        }}
         @media (max-width: 992px) {{
             body {{
                 height: auto;
@@ -1981,112 +2358,35 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                 flex-wrap: wrap;
                 gap: 8px;
             }}
-            .nav-brand {{
-                font-size: 15px;
-            }}
-            .views-container {{
-                padding: 8px 10px;
-                height: auto;
-                overflow: visible;
-            }}
-            .view-pane {{
-                height: auto;
-                overflow: visible;
-            }}
-            .macro-metrics-grid {{
-                grid-template-columns: repeat(2, 1fr);
-                gap: 8px;
-            }}
-            .home-grid-section {{
-                grid-template-columns: 1fr;
-                gap: 10px;
-            }}
-            .sub-filter-bar {{
-                flex-direction: column;
-                align-items: stretch;
-                padding: 10px;
-                gap: 8px;
-            }}
-            .search-box-wrap {{
-                width: 100%;
-            }}
-            .search-box-wrap input {{
-                height: 32px;
-                font-size: 13px;
-            }}
-            .global-dca-filter-card {{
-                flex-direction: column;
-                align-items: stretch;
-                padding: 10px;
-                gap: 8px;
-            }}
-            .global-dca-filter-body {{
-                flex-direction: column;
-                align-items: stretch;
-                width: 100%;
-            }}
-            .global-dca-filter-card select,
-            .global-dca-filter-card button {{
-                width: 100%;
-                height: 32px;
-                font-size: 12px;
-            }}
-            .table-container {{
-                height: auto;
-                flex: none;
-                max-height: 70vh;
-                padding: 4px;
-            }}
-            .holdings-wrapper {{
-                flex-direction: column;
-                gap: 10px;
-            }}
-            .holdings-container {{
-                width: 100%;
-                flex: none;
-                grid-template-columns: 1fr;
-                gap: 8px;
-            }}
-            .empty-holdings-placeholder {{
-                grid-column: span 1;
-            }}
-            .right-chart-wrapper {{
-                width: 100%;
-                flex: none;
-                flex-direction: column;
-                gap: 10px;
-            }}
-            .country-card, .chart-container {{
-                width: 100%;
-                flex: none;
-            }}
-            .modal-card {{
-                width: 95%;
-                max-height: 90vh;
-            }}
-            .modal-body {{
-                padding: 10px 12px;
-            }}
-            .dca-controls {{
-                grid-template-columns: 1fr;
-            }}
-            .dca-results-grid {{
-                grid-template-columns: repeat(2, 1fr);
-            }}
-            .dca-result-card:last-child {{
-                grid-column: span 2;
-            }}
-            .footer-note {{
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 6px;
-                margin-bottom: 12px;
-            }}
+            .nav-brand {{ font-size: 15px; }}
+            .views-container {{ padding: 8px 10px; height: auto; overflow: visible; }}
+            .view-pane {{ height: auto; overflow: visible; }}
+            
+            .home-container {{ padding: 10px 16px; gap: 10px; }}
+            .macro-metrics-grid, .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+            
+            .home-grid-section {{ grid-template-columns: 1fr; gap: 10px; }}
+            .sub-filter-bar {{ flex-direction: column; align-items: stretch; padding: 10px; gap: 8px; }}
+            .search-box-wrap {{ width: 100%; }}
+            .search-box-wrap input {{ height: 32px; font-size: 13px; }}
+            .global-dca-filter-card {{ flex-direction: column; align-items: stretch; padding: 10px; gap: 8px; }}
+            .global-dca-filter-body {{ flex-direction: column; align-items: stretch; width: 100%; }}
+            .global-dca-filter-card select, .global-dca-filter-card button {{ width: 100%; height: 32px; font-size: 12px; }}
+            .table-container {{ height: auto; flex: none; max-height: 70vh; padding: 4px; }}
+            .holdings-wrapper {{ flex-direction: column; gap: 10px; }}
+            .holdings-container {{ width: 100%; flex: none; grid-template-columns: 1fr; gap: 8px; }}
+            .empty-holdings-placeholder {{ grid-column: span 1; }}
+            .right-chart-wrapper {{ width: 100%; flex: none; flex-direction: column; gap: 10px; }}
+            .country-card, .chart-container {{ width: 100%; flex: none; }}
+            .modal-card {{ width: 95%; max-height: 90vh; }}
+            .modal-body {{ padding: 10px 12px; }}
+            .dca-controls {{ grid-template-columns: 1fr; }}
+            .dca-results-grid {{ grid-template-columns: repeat(2, 1fr); }}
+            .dca-result-card:last-child {{ grid-column: span 2; }}
+            .footer-note {{ flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 12px; }}
         }}
         @media (max-width: 480px) {{
-            .macro-metrics-grid {{
-                grid-template-columns: 1fr;
-            }}
+            .macro-metrics-grid, .index-metrics-grid, .friend-links-grid {{ grid-template-columns: 1fr; }}
         }}
     </style>
 </head>
@@ -2109,11 +2409,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         <!-- 视图 1：首页 -->
         <section id="homeView" class="view-pane active">
             <div class="home-container">
+                
+                <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                    <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🌐 核心宏观风向标</h3>
+                    <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                </div>
                 <div class="macro-metrics-grid">
                     <div class="metric-card">
                         <div class="metric-header">
                             <span>CNN 恐慌贪婪指数</span>
-                            <span style="font-size:10px; color:var(--footer-text);">{fng['time']}</span>
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#1a73e8;">{fng['score']}</span>
@@ -2133,7 +2437,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                     <div class="metric-card">
                         <div class="metric-header">
                             <span>VIX 恐慌指数</span>
-                            <span style="font-size:10px; color:var(--footer-text);">{vix['time']}</span>
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#d93025;">{vix['val']}</span>
@@ -2150,7 +2453,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                     <div class="metric-card">
                         <div class="metric-header">
                             <span>USD/CNY 汇率</span>
-                            <span style="font-size:10px; color:var(--footer-text);">{usdcny['time']}</span>
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#188038;">{usdcny['val']}</span>
@@ -2167,7 +2469,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                     <div class="metric-card">
                         <div class="metric-header">
                             <span>VXN 纳指波动率</span>
-                            <span style="font-size:10px; color:var(--footer-text);">{vxn['time']}</span>
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#34a853;">{vxn['val']}</span>
@@ -2184,7 +2485,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                     <div class="metric-card">
                         <div class="metric-header">
                             <span>SKEW 黑天鹅偏斜</span>
-                            <span style="font-size:10px; color:var(--footer-text);">{skew['time']}</span>
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#e67e22;">{skew['val']}</span>
@@ -2199,11 +2499,26 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                     </div>
                 </div>
 
-                <div class="home-grid-section">
+                <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                    <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">📊 宽基指数估值 (数据源: 蛋卷)</h3>
+                    <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                </div>
+                <div class="index-metrics-grid">
+                    {index_cards_html}
+                </div>
+                
+                <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🏛️ 美联储利率观测器</h3>
+                {fed_monitor_html}
+                
+                <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🔗 研投工具导航</h3>
+                <div class="friend-links-grid">
+                    {friend_cards_html}
+                </div>
+
+                <div class="home-grid-section" style="grid-template-columns: 1fr;">
                     <div class="home-card-box">
                         <div class="home-card-title">
                             <span>📌 宏观资产配置速览与逻辑备忘</span>
-                            <span style="font-size:11px; font-weight:normal; color:var(--link-color);">数据源直通跳转</span>
                         </div>
                         <div class="home-card-body">
                             <p>• <strong>恐慌指标协同判断：</strong> 当 <strong>VIX 恐慌指数</strong> 显著飙升（&gt;20）且 <strong>CNN 情绪指数</strong> 步入极度恐惧（0~25）时，通常对应全市场非理性杀跌的左侧加仓与定投翻倍窗口。</p>
@@ -2211,15 +2526,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                             <div style="padding: 24px; text-align: center; background: var(--hover-bg); border-radius: 8px; margin-top: 10px; border: 1px dashed var(--border);">
                                 💡 每个宏观卡片底部均配有直达源头的官方链接（CNN、CBOE、新浪等），可随时点击校验一手数据。
                             </div>
-                        </div>
-                    </div>
-
-                    <div class="home-card-box">
-                        <div class="home-card-title">
-                            <span>🔗 研投工具导航</span>
-                        </div>
-                        <div style="display:flex; flex-direction:column; gap:8px;">
-                            {friend_cards_html}
                         </div>
                     </div>
                 </div>
@@ -2230,29 +2536,29 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         <section id="fundView" class="view-pane">
             <div class="sub-filter-bar">
                 <div class="category-nav">
-                    <button class="cat-btn fav-filter" data-macro="favorites" data-sub="favorites">⭐ 我的自选</button>
+                    <button class="cat-btn macro-filter fav-filter" data-macro="favorites" data-sub="favorites">⭐ 我的自选</button>
                     <span class="category-title" style="margin-left: 6px;">市场大类:</span>
-                    <button class="cat-btn active" data-macro="all" data-sub="all">全部展示</button>
+                    <button class="cat-btn macro-filter active" data-macro="all" data-sub="all">全部展示</button>
                     
                     <span class="category-title" style="margin-left: 8px;">美股:</span>
-                    <button class="cat-btn" data-macro="us_share" data-sub="all">美股全量</button>
-                    <button class="cat-btn" data-macro="us_share" data-sub="us_active">美股主动</button>
-                    <button class="cat-btn" data-macro="us_share" data-sub="ndx_passive">纳指被动</button>
-                    <button class="cat-btn" data-macro="us_share" data-sub="spx_passive">标普被动</button>
+                    <button class="cat-btn macro-filter" data-macro="us_share" data-sub="all">美股全量</button>
+                    <button class="cat-btn macro-filter" data-macro="us_share" data-sub="us_active">美股主动</button>
+                    <button class="cat-btn macro-filter" data-macro="us_share" data-sub="ndx_passive">纳指被动</button>
+                    <button class="cat-btn macro-filter" data-macro="us_share" data-sub="spx_passive">标普被动</button>
                     
                     <span class="category-title" style="margin-left: 8px;">A股板块:</span>
-                    <button class="cat-btn" data-macro="a_share" data-sub="all">A股全量</button>
-                    <button class="cat-btn" data-macro="a_share" data-sub="cpo">CPO</button>
-                    <button class="cat-btn" data-macro="a_share" data-sub="storage">存储芯片</button>
-                    <button class="cat-btn" data-macro="a_share" data-sub="semiconductor">半导体材料</button>
-                    <button class="cat-btn" data-macro="a_share" data-sub="ai">人工智能</button>
-                    <button class="cat-btn" data-macro="a_share" data-sub="grid">电网设备</button>
-                    <button class="cat-btn" data-macro="a_share" data-sub="robot">机器人</button>
+                    <button class="cat-btn macro-filter" data-macro="a_share" data-sub="all">A股全量</button>
+                    <button class="cat-btn macro-filter" data-macro="a_share" data-sub="cpo">CPO</button>
+                    <button class="cat-btn macro-filter" data-macro="a_share" data-sub="storage">存储芯片</button>
+                    <button class="cat-btn macro-filter" data-macro="a_share" data-sub="semiconductor">半导体材料</button>
+                    <button class="cat-btn macro-filter" data-macro="a_share" data-sub="ai">人工智能</button>
+                    <button class="cat-btn macro-filter" data-macro="a_share" data-sub="grid">电网设备</button>
+                    <button class="cat-btn macro-filter" data-macro="a_share" data-sub="robot">机器人</button>
                     
                     <span class="category-title" style="margin-left: 8px;">其他:</span>
-                    <button class="cat-btn" data-macro="other" data-sub="metals">贵金属</button>
-                    <button class="cat-btn" data-macro="other" data-sub="crypto">加密货币</button>
-                    <button class="cat-btn" data-macro="other" data-sub="index">主流指数</button>
+                    <button class="cat-btn macro-filter" data-macro="other" data-sub="metals">贵金属</button>
+                    <button class="cat-btn macro-filter" data-macro="other" data-sub="crypto">加密货币</button>
+                    <button class="cat-btn macro-filter" data-macro="other" data-sub="index">主流指数</button>
                 </div>
 
                 <div class="search-box-wrap">
@@ -2260,27 +2566,38 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                 </div>
             </div>
 
-            <!-- 全局动态定投筛选栏 -->
-            <div class="global-dca-filter-card" id="gDcaCard">
-                <div class="global-dca-filter-header" id="gDcaToggleBtn">
-                    <span class="global-dca-filter-title">📊 动态定投参数配置</span>
-                    <span id="gDcaToggleIcon">▼</span>
+            <!-- 动态定投与申购状态筛选并列容器 -->
+            <div style="display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; align-items: flex-start;">
+                <!-- 全局动态定投筛选栏 -->
+                <div class="global-dca-filter-card" id="gDcaCard" style="margin-bottom: 0; flex: 1; min-width: 320px;">
+                    <div class="global-dca-filter-header" id="gDcaToggleBtn">
+                        <span class="global-dca-filter-title">📊 动态定投参数配置</span>
+                        <span id="gDcaToggleIcon">▼</span>
+                    </div>
+                    <div class="global-dca-filter-body" id="gDcaBody">
+                        <select id="gDcaFreq">
+                            <option value="daily">每日定投</option>
+                            <option value="weekly">每周定投</option>
+                            <option value="biweekly">双周定投</option>
+                            <option value="monthly" selected>每月定投</option>
+                        </select>
+                        <select id="gDcaDaySelect"></select>
+                        <select id="gDcaRange">
+                            <option value="half">近半年内</option>
+                            <option value="year" selected>近一年内</option>
+                            <option value="ytd">今年以来</option>
+                            <option value="all">统计区间全序列</option>
+                        </select>
+                        <button id="gDcaApplyBtn">计算并刷新排序</button>
+                    </div>
                 </div>
-                <div class="global-dca-filter-body" id="gDcaBody">
-                    <select id="gDcaFreq">
-                        <option value="daily">每日定投</option>
-                        <option value="weekly">每周定投</option>
-                        <option value="biweekly">双周定投</option>
-                        <option value="monthly" selected>每月定投</option>
-                    </select>
-                    <select id="gDcaDaySelect"></select>
-                    <select id="gDcaRange">
-                        <option value="half">近半年内</option>
-                        <option value="year" selected>近一年内</option>
-                        <option value="ytd">今年以来</option>
-                        <option value="all">统计区间全序列</option>
-                    </select>
-                    <button id="gDcaApplyBtn">计算并刷新排序</button>
+
+                <!-- 申购状态独立卡片 -->
+                <div style="background: var(--table-bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; display: flex; align-items: center; gap: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.03); flex-wrap: wrap; min-height: 42px; box-sizing: border-box;">
+                    <span class="category-title" style="margin-right: 4px;">申购状态:</span>
+                    <button class="cat-btn buy-filter active" data-buy="all">全部</button>
+                    <button class="cat-btn buy-filter" data-buy="open">仅开放申购</button>
+                    <button class="cat-btn buy-filter" data-buy="closed">暂停申购</button>
                 </div>
             </div>
 
@@ -2707,12 +3024,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
         }})();
 
         document.addEventListener('DOMContentLoaded', function() {{
-            const catBtns = document.querySelectorAll('.cat-btn');
+            const macroBtns = document.querySelectorAll('.macro-filter');
+            const buyBtns = document.querySelectorAll('.buy-filter');
             const searchInput = document.getElementById('searchInput');
             const emptyRow = document.getElementById('empty-row');
             const allRows = document.querySelectorAll('#fundTable tbody tr:not(#empty-row)');
+            
             let currentMacro = 'all';
             let currentSub = 'all';
+            let currentBuyStatus = 'all';
             let searchKeyword = '';
 
             updateTableDca();
@@ -2757,6 +3077,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                     if (row.classList.contains('holding-row')) return;
                     const macro = row.getAttribute('data-macro');
                     const sub = row.getAttribute('data-group');
+                    const buyStatus = row.getAttribute('data-buy-status') || '';
                     const nameCell = row.querySelector('.name a');
                     const name = nameCell ? nameCell.textContent.toLowerCase() : '';
                     const codeCell = row.querySelector('.code');
@@ -2773,8 +3094,18 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                         matchCategory = (sub === currentSub);
                     }}
 
+                    // 申购状态交叉筛选逻辑
+                    let matchBuy = false;
+                    if (currentBuyStatus === 'all') {{
+                        matchBuy = true;
+                    }} else if (currentBuyStatus === 'open') {{
+                        matchBuy = !buyStatus.includes('暂停申购') && !buyStatus.includes('封闭');
+                    }} else if (currentBuyStatus === 'closed') {{
+                        matchBuy = buyStatus.includes('暂停申购') || buyStatus.includes('封闭');
+                    }}
+
                     const matchSearch = keyword === '' || name.includes(keyword) || code.includes(keyword);
-                    const visible = matchCategory && matchSearch;
+                    const visible = matchCategory && matchSearch && matchBuy;
 
                     if (visible) {{
                         row.style.display = '';
@@ -2796,18 +3127,27 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                         if (currentMacro === 'favorites') {{
                             emptyRow.querySelector('td').textContent = '您尚未收藏任何基金，请点击表格首列 ☆ 进行添加';
                         }} else {{
-                            emptyRow.querySelector('td').textContent = keyword ? '未找到匹配基金' : '当前分类暂无数据';
+                            emptyRow.querySelector('td').textContent = keyword ? '未找到匹配基金' : '当前分类与状态暂无数据';
                         }}
                     }}
                 }}
             }}
 
-            catBtns.forEach(btn => {{
+            macroBtns.forEach(btn => {{
                 btn.addEventListener('click', function() {{
-                    catBtns.forEach(b => b.classList.remove('active'));
+                    macroBtns.forEach(b => b.classList.remove('active'));
                     this.classList.add('active');
                     currentMacro = this.dataset.macro;
                     currentSub = this.dataset.sub;
+                    applyFilters();
+                }});
+            }});
+
+            buyBtns.forEach(btn => {{
+                btn.addEventListener('click', function() {{
+                    buyBtns.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    currentBuyStatus = this.dataset.buy;
                     applyFilters();
                 }});
             }});
@@ -2896,7 +3236,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             return {{ dates: indices.map(i => dates[i]), navs: indices.map(i => navs[i]) }};
         }}
 
-        // 初始化持有人结构环状图（完全对齐国家占比的打开动画与配置结构）[cite: 3]
+        // 初始化持有人结构环状图
         function initHolderChart(code) {{
             const canvas = document.getElementById(`holder-chart-${{code}}`);
             if (!canvas) return;
@@ -2905,11 +3245,19 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                 if (typeof holderChartInstances[code].destroy === 'function') {{
                     holderChartInstances[code].destroy();
                     delete holderChartInstances[code];
-                }}
+                }} else return;
             }}
-            const inst = parseFloat(canvas.getAttribute('data-inst'));
-            const indiv = parseFloat(canvas.getAttribute('data-indiv'));
-            if (isNaN(inst) || isNaN(indiv)) return;
+            
+            let holders = [];
+            try {{
+                holders = JSON.parse(canvas.getAttribute('data-holders')) || [];
+            }} catch(e) {{ holders = []; }}
+            if (!holders.length) return;
+
+            const labels = holders.map(h => h.name);
+            const dataValues = holders.map(h => h.ratio);
+            
+            const colorPalette = ['#1a73e8', '#ff9800'];
 
             const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
             const sliceBorderColor = isDark ? '#2a2a2a' : '#f0f2f5';
@@ -2919,10 +3267,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             holderChartInstances[code] = new Chart(ctx, {{
                 type: 'doughnut',
                 data: {{
-                    labels: ['机构持有', '个人持有'],
+                    labels: labels,
                     datasets: [{{
-                        data: [inst, indiv],
-                        backgroundColor: ['#1a73e8', '#ff9800'],
+                        data: dataValues,
+                        backgroundColor: colorPalette.slice(0, labels.length),
                         borderColor: sliceBorderColor,
                         borderWidth: 1.5,
                         borderRadius: 4,
@@ -2944,11 +3292,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                             display: true,
                             position: 'bottom',
                             labels: {{
-                                font: {{ size: 10, weight: '500' }},
-                                boxWidth: 8,
-                                boxHeight: 8,
+                                font: {{ size: 9, weight: '500' }},
+                                boxWidth: 7,
+                                boxHeight: 7,
                                 usePointStyle: true,
-                                padding: 6,
+                                padding: 5,
                                 color: textColor,
                                 generateLabels: function(chart) {{
                                     const data = chart.data;
@@ -2983,7 +3331,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             }});
         }}
 
-        // 初始化国家资产占比环状图[cite: 3]
+        // 初始化国家资产占比环状图
         function initCountryChart(code) {{
             const canvas = document.getElementById(`country-chart-${{code}}`);
             if (!canvas) return;
@@ -3263,6 +3611,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             }}
         }}
 
+        // ==========================================================
+        // 核心修复：引入 requestAnimationFrame 错峰渲染，保证不掉帧
+        // ==========================================================
         document.addEventListener('DOMContentLoaded', function() {{
             const table = document.getElementById('fundTable');
             table.addEventListener('click', function(e) {{
@@ -3278,15 +3629,20 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
                 if (!target || e.target.tagName === 'A' || e.target.closest('.star-btn')) return;
                 const code = target.dataset.code;
                 const hRow = document.querySelector(`.holding-row[data-code="${{code}}"]`);
+                
                 if (hRow) {{
                     hRow.classList.toggle('show');
                     if (hRow.classList.contains('show')) {{
                         hRow.style.display = '';
-                        setTimeout(() => {{
-                            initChart(code);
-                            initHolderChart(code);
-                            initCountryChart(code);
-                        }}, 50);
+                        
+                        // 强制让出主线程给浏览器排版，确保 Canvas 画布真实物理尺寸已分配完毕，
+                        // 然后再渲染图表，彻底解决 Chart.js 因尺寸不确定而跳过开场动画的 Bug。
+                        window.requestAnimationFrame(() => {{
+                            setTimeout(() => {{ initCountryChart(code); }}, 50);
+                            setTimeout(() => {{ initHolderChart(code); }}, 150);
+                            setTimeout(() => {{ initChart(code); }}, 250);
+                        }});
+                        
                     }} else {{
                         hRow.style.display = 'none';
                     }}
@@ -3302,6 +3658,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             sortTable(colIndex);
         }}
 
+        // ==========================================================
+        // 核心修复：补全被截断的 sortTable 完整功能代码
+        // ==========================================================
         function sortTable(colIndex) {{
             document.querySelectorAll('.holding-row').forEach(row => {{
                 row.classList.remove('show');
@@ -3335,6 +3694,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
             }});
             const empty = document.getElementById('empty-row');
             if (empty) fragment.appendChild(empty);
+            
+            // 清空并重新插入排序后的DOM
             tbody.innerHTML = '';
             tbody.appendChild(fragment);
             
@@ -3401,7 +3762,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, is_d
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html_content)
     return os.path.abspath(filename)
-
 def fetch_crypto_data(symbol, start_date, end_date):
     cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
     if os.path.exists(cache_file):
@@ -3556,6 +3916,7 @@ def main():
     print(f"统计区间: {args.start} 至 {args.end}")
     
     home_metrics = fetch_home_market_metrics(opener)
+    index_valuations = fetch_index_valuations(opener)
     print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {home_metrics['fng']['score']} | VIX {home_metrics['vix']['val']} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
 
     results = []
@@ -3596,7 +3957,6 @@ def main():
             print(f"[{idx}/{len(target_funds)}] {code} - {meta['name']} ... ✅ 完成 (国家披露期: {c_date})")
         time.sleep(random.uniform(0.05, 0.1))
 
-    # 贵金属
     for symbol in target_metals:
         try:
             data = fetch_precious_metals_data(symbol, args.start, args.end)
@@ -3614,7 +3974,6 @@ def main():
                     results.append(res)
         except Exception: pass
 
-    # 加密货币
     for symbol in target_cryptos:
         try:
             data = fetch_crypto_data(symbol, args.start, args.end)
@@ -3631,7 +3990,6 @@ def main():
                     results.append(res)
         except Exception: pass
 
-    # 指数
     for symbol in target_indices:
         try:
             data = fetch_index_data(symbol, args.start, args.end)
@@ -3649,7 +4007,7 @@ def main():
         except Exception: pass
 
     if results:
-        abs_path = generate_html_report(results, args.start, args.end, today_str, home_metrics, is_debug_mode=is_debug, filename=args.out)
+        abs_path = generate_html_report(results, args.start, args.end, today_str, home_metrics, index_valuations, is_debug_mode=is_debug, filename=args.out)
         print(f"\n🎉 升级版网页构建成功！文件路径: {abs_path}")
         try:
             webbrowser.open(f"file://{abs_path}")
