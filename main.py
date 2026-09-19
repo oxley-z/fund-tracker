@@ -121,10 +121,13 @@ INDEX_NAMES = {
     "SOXL": "三倍做多半导体ETF-Direxion"
 }
 
-PRECIOUS_METALS_NAMES = {
+# 【修改】原 PRECIOUS_METALS_NAMES 扩展为大宗商品（新增布伦特原油、LME铜）
+COMMODITY_NAMES = {
     "XAU": "伦敦金 (XAU)",
-    "AUM": "黄金连续 (AUM)",
-    "XAG": "伦敦银 (XAG)"
+    "AUM": "沪金主连 (AUM)",
+    "XAG": "伦敦银 (XAG)",
+    "BRENT": "布伦特原油 (BRENT)",
+    "CAD": "LME铜 (CAD)"
 }
 
 CRYPTO_NAMES = {
@@ -196,7 +199,6 @@ def fetch_index_valuations(opener):
     except Exception:
         pass
 
-    # 1. 尝试获取蛋卷 API 数据
     api_url = "https://danjuanfunds.com/djapi/index_eva/dj"
     req = urllib.request.Request(api_url, headers=headers)
     items = []
@@ -212,7 +214,6 @@ def fetch_index_valuations(opener):
     for item in items:
         eva_dict[item.get("name", "").strip()] = item
 
-    # 2. 尝试获取股查查兜底数据
     guchacha_html = ""
     try:
         req_g = urllib.request.Request("https://guchacha.com/index-valuation", headers={"User-Agent": headers["User-Agent"]})
@@ -226,7 +227,6 @@ def fetch_index_valuations(opener):
         matched = None
         aliases = NAME_MAP.get(target, [target])
         
-        # 优先检索蛋卷返回的数据池
         for alias in aliases:
             for k, v in eva_dict.items():
                 if alias in k:
@@ -235,7 +235,6 @@ def fetch_index_valuations(opener):
             if matched:
                 break
 
-        # 如果蛋卷无数据，启用股查查引擎进行强健的纯数字提取
         if not matched and guchacha_html:
             for alias in aliases:
                 for row in re.findall(r'<tr[^>]*>.*?</tr>', guchacha_html, re.S):
@@ -246,7 +245,6 @@ def fetch_index_valuations(opener):
                         pe_val = None
                         pct_val = None
                         
-                        # 解析逻辑：提取第一个浮点数为PE，提取第一个带%的为百分位
                         for t in clean_tds:
                             if '%' in t:
                                 if pct_val is None:
@@ -362,7 +360,6 @@ def get_cnn_fear_greed(opener) -> tuple[float, str, str, str]:
         "neutral": "中性观望", "greed": "贪婪", "extreme greed": "极度贪婪"
     }
 
-    # 1. 优先请求 CNN 官方 Dataviz 实时接口
     api_url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
     headers_api = {
         **DEFAULT_HEADERS,
@@ -388,7 +385,6 @@ def get_cnn_fear_greed(opener) -> tuple[float, str, str, str]:
     except Exception:
         pass
 
-    # 2. 若 API 接口受阻，降级直接解析 CNN 官方网页源码 (Next.js 注入的静态 JSON)
     headers_web = {
         **DEFAULT_HEADERS,
         "Referer": "https://edition.cnn.com/",
@@ -399,7 +395,6 @@ def get_cnn_fear_greed(opener) -> tuple[float, str, str, str]:
         with opener.open(req_web, timeout=8) as resp:
             html_text = resp.read().decode("utf-8", errors="ignore")
 
-        # 匹配 Next.js / Hydration 数据中的 score 和 rating
         score_match = re.search(r'"score"\s*:\s*([0-9]+(?:\.[0-9]+)?)', html_text)
         rating_match = re.search(r'"rating"\s*:\s*"([^"]+)"', html_text)
 
@@ -416,7 +411,6 @@ def get_cnn_fear_greed(opener) -> tuple[float, str, str, str]:
     except Exception:
         pass
 
-    # 若 CNN 官方渠道均未成功，严格兜底返回 0.0
     return (
         0.0,
         "暂无数据",
@@ -483,6 +477,145 @@ def get_skew(opener) -> tuple[float, str, str]:
     except Exception: pass
     return 0.0, "获取失败", "https://sc.macromicro.me/series/4407/cboe-skew"
 
+def get_brent_oil(opener) -> tuple[float, str, str]:
+    """获取布伦特原油连续价格"""
+    try:
+        val = fetch_from_yahoo_finance(opener, "BZ=F")
+        if val > 0:
+            return val, "Yahoo Finance (BZ=F)", "https://finance.yahoo.com/quote/BZ%3DF/"
+    except Exception: pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=hf_OIL"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 0 and float(parts[0]) > 0:
+                    return round(float(parts[0]), 2), "新浪期货 (hf_OIL)", "https://finance.sina.com.cn/futures/quotes/OIL.shtml"
+    except Exception: pass
+    return 0.0, "获取失败", "https://cn.investing.com/commodities/brent-oil"
+
+# ==============================================================================
+# 大宗商品相关指标获取模块 (伦敦金 / 沪金主连 / 伦敦银 / LME铜)
+# ==============================================================================
+def get_gold_london(opener) -> tuple[float, str, str]:
+    """获取伦敦金 (XAU/USD 现货) 价格"""
+    try:
+        val = fetch_from_yahoo_finance(opener, "GC=F")
+        if val > 0:
+            return val, "Yahoo Finance (GC=F)", "https://finance.yahoo.com/quote/GC%3DF/"
+    except Exception: pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=hf_XAU"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 0:
+                    try:
+                        v = float(parts[0])
+                        if v > 0:
+                            return round(v, 2), "新浪财经 (hf_XAU)", "https://finance.sina.com.cn/money/forex/hq/XAU.shtml"
+                    except ValueError:
+                        pass
+    except Exception: pass
+    return 0.0, "获取失败", "https://cn.investing.com/currencies/xau-usd"
+
+
+def get_gold_shfe(opener) -> tuple[float, str, str]:
+    """获取沪金主连 (AU0) 价格"""
+    try:
+        df = ak.futures_main_sina(symbol="AU0")
+        if df is not None and not df.empty:
+            close_col = "收盘价" if "收盘价" in df.columns else ("close" if "close" in df.columns else df.columns[-1])
+            try:
+                v = float(df.iloc[-1][close_col])
+                if v > 0:
+                    return round(v, 2), "AkShare (futures_main_sina AU0)", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=nf_AU0"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                for idx in [8, 7, 6, 5]:
+                    if len(parts) > idx:
+                        try:
+                            v = float(parts[idx])
+                            if v > 0:
+                                return round(v, 2), "新浪期货 (nf_AU0)", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
+                        except ValueError:
+                            pass
+    except Exception: pass
+    return 0.0, "获取失败", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
+
+
+def get_silver_london(opener) -> tuple[float, str, str]:
+    """获取伦敦银 (XAG/USD 现货) 价格"""
+    try:
+        val = fetch_from_yahoo_finance(opener, "SI=F")
+        if val > 0:
+            return val, "Yahoo Finance (SI=F)", "https://finance.yahoo.com/quote/SI%3DF/"
+    except Exception: pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=hf_XAG"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 0:
+                    try:
+                        v = float(parts[0])
+                        if v > 0:
+                            return round(v, 3), "新浪财经 (hf_XAG)", "https://finance.sina.com.cn/money/forex/hq/XAG.shtml"
+                    except ValueError:
+                        pass
+    except Exception: pass
+    return 0.0, "获取失败", "https://cn.investing.com/currencies/xag-usd"
+
+
+def get_copper_lme(opener) -> tuple[float, str, str]:
+    """获取 LME铜 (CAD) 三个月期铜价格"""
+    try:
+        url = "https://hq.sinajs.cn/list=hf_CAD"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 0:
+                    try:
+                        v = float(parts[0])
+                        if v > 0:
+                            return round(v, 2), "新浪财经 (hf_CAD)", "https://finance.sina.com.cn/futures/quotes/CAD.shtml"
+                    except ValueError:
+                        pass
+    except Exception: pass
+
+    try:
+        val = fetch_from_yahoo_finance(opener, "HG=F")
+        if val > 0:
+            return val, "Yahoo Finance (HG=F)", "https://finance.yahoo.com/quote/HG%3DF/"
+    except Exception: pass
+    return 0.0, "获取失败", "https://cn.investing.com/commodities/copper"
+
 def fetch_home_market_metrics(opener):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     fng_score, fng_rating, fng_src, fng_url = get_cnn_fear_greed(opener)
@@ -498,12 +631,32 @@ def fetch_home_market_metrics(opener):
     skew_val, skew_src, skew_url = get_skew(opener)
     skew_status = "数据暂缺" if skew_val <= 0 else ("尾部黑天鹅预警" if skew_val >= 140 else ("风险积聚" if skew_val >= 132 else "常态平稳"))
 
+    brent_val, brent_src, brent_url = get_brent_oil(opener)
+    brent_status = "数据暂缺" if brent_val <= 0 else ("极度高企" if brent_val >= 95 else ("通胀溢价" if brent_val >= 80 else ("温和中性" if brent_val >= 65 else "需求疲软")))
+
+    gold_val, gold_src, gold_url = get_gold_london(opener)
+    gold_status = "数据暂缺" if gold_val <= 0 else ("极度高企" if gold_val >= 2500 else ("高位震荡" if gold_val >= 2000 else ("温和中性" if gold_val >= 1500 else "低位盘整")))
+
+    shfe_gold_val, shfe_gold_src, shfe_gold_url = get_gold_shfe(opener)
+    shfe_gold_status = "数据暂缺" if shfe_gold_val <= 0 else ("极度高企" if shfe_gold_val >= 700 else ("高位震荡" if shfe_gold_val >= 600 else ("温和中性" if shfe_gold_val >= 500 else "低位盘整")))
+
+    silver_val, silver_src, silver_url = get_silver_london(opener)
+    silver_status = "数据暂缺" if silver_val <= 0 else ("极度高企" if silver_val >= 35 else ("高位震荡" if silver_val >= 28 else ("温和中性" if silver_val >= 20 else "低位盘整")))
+
+    copper_val, copper_src, copper_url = get_copper_lme(opener)
+    copper_status = "数据暂缺" if copper_val <= 0 else ("极度高企" if copper_val >= 10000 else ("高位震荡" if copper_val >= 8500 else ("温和中性" if copper_val >= 7000 else "需求疲软")))
+
     return {
         "fng": {"score": fng_score, "rating": fng_rating, "time": now_str, "source": fng_src, "url": fng_url},
         "vix": {"val": vix_val, "status": vix_status, "time": now_str, "source": vix_src, "url": vix_url, "desc": "<15 平稳低波 | 15~20 正常震荡 | 20~30 警惕波动 | >30 极度恐慌"},
         "usdcny": {"val": usdcny_val, "status": usdcny_status, "time": now_str, "source": usdcny_src, "url": usdcny_url, "desc": "美元兑人民币汇率，QDII换汇成本及折溢价关键锚"},
         "vxn": {"val": vxn_val, "status": vxn_status, "time": now_str, "source": vxn_src, "url": vxn_url, "desc": "纳斯达克100期权隐波，监测科技成长股杀估值抛压"},
-        "skew": {"val": skew_val, "status": skew_status, "time": now_str, "source": skew_src, "url": skew_url, "desc": "基准100。>135提示期权市场尾部极度对冲成本升高"}
+        "skew": {"val": skew_val, "status": skew_status, "time": now_str, "source": skew_src, "url": skew_url, "desc": "基准100。>135提示期权市场尾部极度对冲成本升高"},
+        "brent": {"val": brent_val, "status": brent_status, "time": now_str, "source": brent_src, "url": brent_url, "desc": "国际基准原油，大宗通胀与全球工业周期核心温度计"},
+        "gold_london": {"val": gold_val, "status": gold_status, "time": now_str, "source": gold_src, "url": gold_url, "desc": "伦敦现货金价（美元/盎司），全球避险与美元信用对冲核心锚点"},
+        "gold_shfe": {"val": shfe_gold_val, "status": shfe_gold_status, "time": now_str, "source": shfe_gold_src, "url": shfe_gold_url, "desc": "上海期货交易所黄金主连（元/克），国内实物金与人民币金价风向标"},
+        "silver_london": {"val": silver_val, "status": silver_status, "time": now_str, "source": silver_src, "url": silver_url, "desc": "伦敦现货白银（美元/盎司），兼具贵金属避险与光伏新能源工业需求属性"},
+        "copper_lme": {"val": copper_val, "status": copper_status, "time": now_str, "source": copper_src, "url": copper_url, "desc": "LME 三个月期铜（美元/吨），'铜博士' 全球工业周期与经济景气核心温度计"}
     }
 
 def fetch_fund_country_distribution(opener, code, is_qdii=False):
@@ -1274,12 +1427,10 @@ def fetch_cme_fedwatch(opener) -> dict:
 
 def fetch_fed_rate_monitor(opener) -> dict:
     """美联储利率观测器：多源抓取 + 优雅降级，确保首页 100% 正常完整展示"""
-    # 1. 尝试 CME 官方数据源
     result = fetch_cme_fedwatch(opener)
     if result.get('probabilities') and result.get('meeting_iso'):
         return result
 
-    # 2. 尝试从 Investing.com 抓取真实最新数据
     source_url = "https://cn.investing.com/central-banks/fed-rate-monitor"
     result = {
         "source_url": source_url,
@@ -1302,7 +1453,6 @@ def fetch_fed_rate_monitor(opener) -> dict:
         with opener.open(req, timeout=6) as resp:
             html_content = resp.read().decode('utf-8', errors='ignore')
 
-        # 尝试提取决议时间
         m = re.search(r'(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日\s*(\d{1,2}:\d{2})', html_content)
         if m:
             y, mo, d = map(int, m.group(1, 2, 3))
@@ -1310,17 +1460,14 @@ def fetch_fed_rate_monitor(opener) -> dict:
             result['meeting_text'] = f'{y}年{mo:02d}月{d:02d}日 {hh:02d}:{mm:02d}'
             result['meeting_iso'] = f"{y:04d}-{mo:02d}-{d:02d}T{hh:02d}:{mm:02d}:00+08:00"
 
-        # 提取期货价格
         fm = re.search(r'期货价格\s*[:：]?\s*([0-9]+(?:\.\d+)?)', html_content)
         if fm:
             result['futures_price'] = fm.group(1)
 
-        # 提取更新时间
         up_m = re.search(r'更新[:：]\s*([^\r\n<]+)', html_content)
         if up_m:
             result['update_text'] = f"更新: {up_m.group(1).strip()}"
 
-        # 提取表格
         tables = _cme_html_tables(html_content)
         for tbl in tables:
             rows = []
@@ -1350,7 +1497,6 @@ def fetch_fed_rate_monitor(opener) -> dict:
     except Exception:
         pass
 
-    # 3. 兜底保护：若因反爬导致未提取到行，载入基准利率矩阵，确保看板组件正常渲染
     if not result['table_rows']:
         result['meeting_text'] = "2026年10月29日 02:00"
         result['meeting_iso'] = "2026-10-29T02:00:00+08:00"
@@ -1365,7 +1511,6 @@ def fetch_fed_rate_monitor(opener) -> dict:
             {"rate": "4.00 - 4.25", "pct": 57.4}
         ]
 
-    # 4. 计算剩余倒计时
     try:
         from datetime import timezone
         dt_target = datetime.fromisoformat(result['meeting_iso'])
@@ -1484,7 +1629,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     GRID_CODES = {"025857", "023639", "023675", "019411", "167002", "020425", "002164", "017133", "017042", "026681", "016387", "025833", "011172", "001665", "018919"}
     ROBOT_CODES = {"016531", "018345", "020482", "018125", "007519", "014243", "018957", "003835", "014939", "008998", "004233", "008182", "017968", "024648"}
     INDEX_SET_LOCAL = {"NDX", "SPX", "SOXX", "SOXL"}
-    PRECIOUS_METALS_LOCAL = {"XAU", "AUM", "XAG"}
+    # 【修改】贵金属集合扩展为大宗商品集合（含布伦特原油、LME铜）
+    COMMODITIES_LOCAL = {"XAU", "AUM", "XAG", "BRENT", "CAD"}
     CRYPTO_LOCAL = {"BTC", "ETH", "SOL", "BNB"}
     col_count = 22
 
@@ -1557,14 +1703,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         elif r['code'] in AI_CODES: group = "ai"; macro_category = "a_share"
         elif r['code'] in GRID_CODES: group = "grid"; macro_category = "a_share"
         elif r['code'] in ROBOT_CODES: group = "robot"; macro_category = "a_share"
-        elif r['code'] in PRECIOUS_METALS_LOCAL: group = "metals"; macro_category = "other"
+        elif r['code'] in COMMODITIES_LOCAL: group = "commodities"; macro_category = "other"
         elif r['code'] in CRYPTO_LOCAL: group = "crypto"; macro_category = "other"
         elif r['code'] in INDEX_SET_LOCAL: group = "index"; macro_category = "other"
         elif r['code'] in NDX_PASSIVE_CODES: group = "ndx_passive"; macro_category = "us_share"
         elif r['code'] in SPX_PASSIVE_CODES: group = "spx_passive"; macro_category = "us_share"
         else: group = "us_active"; macro_category = "us_share"
 
-        nav_display_html = f'<span class="highlight-special-nav">{r["latest_nav"]:.4f}</span>' if group in ["metals", "crypto", "index"] else f'{r["latest_nav"]:.4f}'
+        # 【修改】新增 commodities / currency 组的高亮显示
+        nav_display_html = f'<span class="highlight-special-nav">{r["latest_nav"]:.4f}</span>' if group in ["commodities", "currency", "crypto", "index"] else f'{r["latest_nav"]:.4f}'
         holdings_history = r.get('holdings', [])
         today_gain_val = r.get('today_gain', None)
         latest_date = r['latest_date']
@@ -1767,12 +1914,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         chart_html = f"""
         <div class="chart-container" id="chart-container-{r['code']}">
             <div class="chart-controls">
-                <button class="period-btn active" data-period="month" data-code="{r['code']}">近一月</button>
+                <button class="period-btn active" data-period="week" data-code="{r['code']}">近一周</button>
+                <button class="period-btn" data-period="month" data-code="{r['code']}">近一月</button>
                 <button class="period-btn" data-period="quarter" data-code="{r['code']}">近三月</button>
                 <button class="period-btn" data-period="half" data-code="{r['code']}">近半年</button>
                 <button class="period-btn" data-period="year" data-code="{r['code']}">近一年</button>
                 <button class="period-btn" data-period="ytd" data-code="{r['code']}">今年内</button>
-                <button class="period-btn" data-period="week" data-code="{r['code']}">近一周</button>
             </div>
             <canvas id="chart-{r['code']}" width="400" height="200"></canvas>
         </div>
@@ -1895,7 +2042,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     else:
         fed_table_body = '<tr><td colspan="4" style="text-align:center;">暂无历史概率数据</td></tr>'
 
-    # 浏览器端每秒刷新倒计时；数据以本次生成网页时从 CME FedWatch 抓取的会议时间为准。
     fed_countdown_js = ""
     if fed_meeting_iso:
         fed_countdown_js = f"""
@@ -1977,6 +2123,19 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     usdcny = metrics["usdcny"]
     vxn = metrics["vxn"]
     skew = metrics["skew"]
+    brent = metrics["brent"]
+
+    # 大宗商品指标提取
+    gold_london = metrics.get("gold_london", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+    gold_shfe = metrics.get("gold_shfe", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+    silver_london = metrics.get("silver_london", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+    copper_lme = metrics.get("copper_lme", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+
+    brent_tag_color = "#70757a" if brent['val'] <= 0 else ("#d93025" if brent['val'] >= 95 else ("#e67e22" if brent['val'] >= 80 else ("#188038" if brent['val'] >= 65 else "#1a73e8")))
+    gold_tag_color = "#70757a" if gold_london['val'] <= 0 else ("#d93025" if gold_london['val'] >= 2500 else ("#e67e22" if gold_london['val'] >= 2000 else ("#188038" if gold_london['val'] >= 1500 else "#1a73e8")))
+    gold_shfe_tag_color = "#70757a" if gold_shfe['val'] <= 0 else ("#d93025" if gold_shfe['val'] >= 700 else ("#e67e22" if gold_shfe['val'] >= 600 else ("#188038" if gold_shfe['val'] >= 500 else "#1a73e8")))
+    silver_tag_color = "#70757a" if silver_london['val'] <= 0 else ("#d93025" if silver_london['val'] >= 35 else ("#e67e22" if silver_london['val'] >= 28 else ("#188038" if silver_london['val'] >= 20 else "#1a73e8")))
+    copper_tag_color = "#70757a" if copper_lme['val'] <= 0 else ("#d93025" if copper_lme['val'] >= 10000 else ("#e67e22" if copper_lme['val'] >= 8500 else ("#188038" if copper_lme['val'] >= 7000 else "#1a73e8")))
 
     html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -2115,7 +2274,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             box-sizing: border-box;
         }}
         
-        .macro-metrics-grid, .index-metrics-grid, .friend-links-grid {{
+        .macro-metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }}
+
+        .index-metrics-grid, .friend-links-grid {{
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 12px;
@@ -2520,7 +2685,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             border-color: #3c4043;
         }}
 
-        /* --- 修正进度条样式 --- */
+        /* --- 进度条样式 --- */
         .progress-container {{ 
             background-color: var(--progress-track); 
             border-radius: 6px; 
@@ -2790,7 +2955,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
 
         @media (max-width: 1200px) {{
-            .macro-metrics-grid, .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(3, 1fr); }}
+            .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(3, 1fr); }}
         }}
         @media (max-width: 992px) {{
             body {{
@@ -2811,7 +2976,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             .view-pane {{ height: auto; overflow: visible; }}
             
             .home-container {{ padding: 10px 16px; gap: 10px; }}
-            .macro-metrics-grid, .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+            .macro-metrics-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+            .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
             
             .home-grid-section {{ grid-template-columns: 1fr; gap: 10px; }}
             .sub-filter-bar {{ flex-direction: column; align-items: stretch; padding: 10px; gap: 8px; }}
@@ -2835,7 +3001,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             .footer-note {{ flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 12px; }}
         }}
         @media (max-width: 480px) {{
-            .macro-metrics-grid, .index-metrics-grid, .friend-links-grid {{ grid-template-columns: 1fr; }}
+            .macro-metrics-grid {{ grid-template-columns: 1fr; }}
+            .index-metrics-grid, .friend-links-grid {{ grid-template-columns: 1fr; }}
         }}
     </style>
 </head>
@@ -2958,7 +3125,94 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 
                 <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🏛️ 美联储利率观测器</h3>
                 {fed_monitor_html}
-                
+
+                <!-- 大宗商品栏 -->
+                <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                    <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🛢️ 大宗商品风向标</h3>
+                    <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                </div>
+                <div class="macro-metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span>伦敦金 (XAU/USD)</span>
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#f39c12;">{gold_london['val']}</span>
+                            <span class="metric-tag" style="background:rgba(243,156,18,0.12); color:{gold_tag_color};">{gold_london['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {gold_london['desc']}
+                        </div>
+                        <a href="{gold_london['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {gold_london['source']} ↗
+                        </a>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span>沪金主连 (AUM / AU0)</span>
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#e67e22;">{gold_shfe['val']}</span>
+                            <span class="metric-tag" style="background:rgba(230,126,34,0.12); color:{gold_shfe_tag_color};">{gold_shfe['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {gold_shfe['desc']}
+                        </div>
+                        <a href="{gold_shfe['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {gold_shfe['source']} ↗
+                        </a>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span>伦敦银 (XAG/USD)</span>
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#95a5a6;">{silver_london['val']}</span>
+                            <span class="metric-tag" style="background:rgba(149,165,166,0.12); color:{silver_tag_color};">{silver_london['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {silver_london['desc']}
+                        </div>
+                        <a href="{silver_london['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {silver_london['source']} ↗
+                        </a>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span>LME铜 (CAD)</span>
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#b87333;">{copper_lme['val']}</span>
+                            <span class="metric-tag" style="background:rgba(184,115,51,0.12); color:{copper_tag_color};">{copper_lme['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {copper_lme['desc']}
+                        </div>
+                        <a href="{copper_lme['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {copper_lme['source']} ↗
+                        </a>
+                    </div>
+                    
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span>布伦特原油 (BZ=F)</span>
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#2c3e50;">{brent['val']}</span>
+                            <span class="metric-tag" style="background:rgba(44,62,80,0.12); color:{brent_tag_color};">{brent['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {brent['desc']}
+                        </div>
+                        <a href="{brent['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {brent['source']} ↗
+                        </a>
+                    </div>
+                </div>
+
                 <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🔗 研投工具导航</h3>
                 <div class="friend-links-grid">
                     {friend_cards_html}
@@ -2971,9 +3225,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </div>
                         <div class="home-card-body">
                             <p>• <strong>恐慌指标协同判断：</strong> 当 <strong>VIX 恐慌指数</strong> 显著飙升（&gt;20）且 <strong>CNN 情绪指数</strong> 步入极度恐惧（0~25）时，通常对应全市场非理性杀跌的左侧加仓与定投翻倍窗口。</p>
+                            <p>• <strong>大宗周期与通胀压力：</strong> 跟踪 <strong>布伦特原油连续</strong> 价格，当油价迅速推高（&gt;85美元）时，通胀再抬头预期增强，美联储降息周期受阻；当油价跌破65美元时，需警惕全球制造业需求衰退风险。</p>
+                            <p>• <strong>贵金属与工业金属：</strong> <strong>伦敦金/沪金</strong> 与 <strong>伦敦银/LME铜</strong> 协同观察。黄金走强多对应避险与宽松预期，铜价走强则反映全球工业需求回暖，二者同步上行时通常对应“再通胀交易”主线。</p>
                             <p>• <strong>汇率对冲与折溢价：</strong> 跟踪 <strong>USD/CNY 汇率</strong> 走势，当汇率波动较大时，QDII 基金的实际净值波动将叠加汇率损益，需警惕场内溢价过高风险。</p>
                             <div style="padding: 24px; text-align: center; background: var(--hover-bg); border-radius: 8px; margin-top: 10px; border: 1px dashed var(--border);">
-                                💡 每个宏观卡片底部均配有直达源头的官方链接（CNN、CBOE、新浪等），可随时点击校验一手数据。
+                                💡 每个宏观卡片底部均配有直达源头的官方链接（CNN、CBOE、新浪、Yahoo 等），可随时点击校验一手数据。
                             </div>
                         </div>
                     </div>
@@ -3005,7 +3261,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <button class="cat-btn macro-filter" data-macro="a_share" data-sub="robot">机器人</button>
                     
                     <span class="category-title" style="margin-left: 8px;">其他:</span>
-                    <button class="cat-btn macro-filter" data-macro="other" data-sub="metals">贵金属</button>
+                    <!-- 【修改】贵金属 -> 大宗商品 -->
+                    <button class="cat-btn macro-filter" data-macro="other" data-sub="commodities">大宗商品</button>
                     <button class="cat-btn macro-filter" data-macro="other" data-sub="crypto">加密货币</button>
                     <button class="cat-btn macro-filter" data-macro="other" data-sub="index">主流指数</button>
                 </div>
@@ -3538,7 +3795,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         matchCategory = (sub === currentSub);
                     }}
 
-                    // 申购状态交叉筛选逻辑
                     let matchBuy = false;
                     if (currentBuyStatus === 'all') {{
                         matchBuy = true;
@@ -3608,7 +3864,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         var holderChartInstances = {{}};
         var countryChartInstances = {{}};
 
-        // 环形图中心百分比标签插件
         const pieLabelsPlugin = {{
             id: 'pieLabels',
             afterDraw(chart) {{
@@ -3635,7 +3890,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }};
         Chart.register(pieLabelsPlugin);
 
-        // 专业十字光标插件（Crosshair）
         const fundCrosshairPlugin = {{
             id: 'fundCrosshairPlugin',
             afterDraw(chart) {{
@@ -3680,7 +3934,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             return {{ dates: indices.map(i => dates[i]), navs: indices.map(i => navs[i]) }};
         }}
 
-        // 初始化持有人结构环状图
         function initHolderChart(code) {{
             const canvas = document.getElementById(`holder-chart-${{code}}`);
             if (!canvas) return;
@@ -3775,7 +4028,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }});
         }}
 
-        // 初始化国家资产占比环状图
         function initCountryChart(code) {{
             const canvas = document.getElementById(`country-chart-${{code}}`);
             if (!canvas) return;
@@ -3872,7 +4124,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }});
         }}
 
-        // 双轴折线图构建函数
         function initChart(code) {{
             const canvas = document.getElementById(`chart-${{code}}`);
             if (!canvas) return;
@@ -4055,9 +4306,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
         }}
 
-        // ==========================================================
-        // 核心修复：引入 requestAnimationFrame 错峰渲染，保证不掉帧
-        // ==========================================================
         document.addEventListener('DOMContentLoaded', function() {{
             const table = document.getElementById('fundTable');
             table.addEventListener('click', function(e) {{
@@ -4078,15 +4326,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     hRow.classList.toggle('show');
                     if (hRow.classList.contains('show')) {{
                         hRow.style.display = '';
-                        
-                        // 强制让出主线程给浏览器排版，确保 Canvas 画布真实物理尺寸已分配完毕，
-                        // 然后再渲染图表，彻底解决 Chart.js 因尺寸不确定而跳过开场动画的 Bug。
                         window.requestAnimationFrame(() => {{
                             setTimeout(() => {{ initCountryChart(code); }}, 50);
                             setTimeout(() => {{ initHolderChart(code); }}, 150);
                             setTimeout(() => {{ initChart(code); }}, 250);
                         }});
-                        
                     }} else {{
                         hRow.style.display = 'none';
                     }}
@@ -4102,9 +4346,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             sortTable(colIndex);
         }}
 
-        // ==========================================================
-        // 核心修复：补全被截断的 sortTable 完整功能代码
-        // ==========================================================
         function sortTable(colIndex) {{
             document.querySelectorAll('.holding-row').forEach(row => {{
                 row.classList.remove('show');
@@ -4139,7 +4380,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             const empty = document.getElementById('empty-row');
             if (empty) fragment.appendChild(empty);
             
-            // 清空并重新插入排序后的DOM
             tbody.innerHTML = '';
             tbody.appendChild(fragment);
             
@@ -4206,6 +4446,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     with open(filename, "w", encoding="utf-8") as f:
         f.write(html_content)
     return os.path.abspath(filename)
+
 def fetch_crypto_data(symbol, start_date, end_date):
     cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
     if os.path.exists(cache_file):
@@ -4285,6 +4526,182 @@ def fetch_precious_metals_data(symbol, start_date, end_date):
     except Exception: pass
     return None
 
+# ==============================================================================
+# 【新增】大宗商品（布伦特原油 / LME铜）与货币汇率（USD/CNY、USD/JPY、DXY）抓取
+# ==============================================================================
+def fetch_yahoo_history(symbol, start_date, end_date):
+    """从 Yahoo Finance 抓取日线历史收盘价（通用函数，供大宗商品与货币兜底使用）"""
+    data = []
+    try:
+        start_ts = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp())
+        end_ts = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp()) + 86400
+        url = (
+            f"https://query1.finance.yahoo.com/v8/finance/chart/"
+            f"{urllib.parse.quote(symbol)}?period1={start_ts}&period2={end_ts}&interval=1d"
+        )
+        req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+        no_proxy = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with no_proxy.open(req, timeout=10) as resp:
+            res = json.loads(resp.read().decode('utf-8'))
+            result = res.get("chart", {}).get("result", [{}])[0]
+            timestamps = result.get("timestamp", []) or []
+            closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", []) or []
+            from datetime import timezone
+            for ts, c in zip(timestamps, closes):
+                if c is None: continue
+                try:
+                    v = float(c)
+                except (TypeError, ValueError):
+                    continue
+                if v <= 0: continue
+                d = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d')
+                data.append({"date": d, "nav": round(v, 4)})
+    except Exception:
+        pass
+    if data:
+        data = sorted(data, key=lambda x: x['date'])
+        return data
+    return None
+
+
+def fetch_commodity_data(symbol, start_date, end_date):
+    """抓取大宗商品历史行情（BRENT / CAD），带本地缓存。优先 AkShare 外盘期货，兜底 Yahoo Finance。"""
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get('start_date', '') <= start_date and cache.get('end_date', '') >= end_date:
+                return cache.get('data', [])
+        except Exception: pass
+
+    df = None
+    data = []
+    try:
+        candidate_syms = []
+        if symbol == "BRENT":
+            candidate_syms = ["OIL", "BRENT"]
+        elif symbol == "CAD":
+            candidate_syms = ["CAD", "HG"]
+        for sym in candidate_syms:
+            try:
+                df = ak.futures_foreign_hist(symbol=sym)
+                if df is not None and not df.empty: break
+            except Exception:
+                continue
+
+        if df is not None and not df.empty:
+            d_col = '日期' if '日期' in df.columns else ('date' if 'date' in df.columns else df.columns[0])
+            c_col = '收盘价' if '收盘价' in df.columns else ('close' if 'close' in df.columns else df.columns[4])
+            df = df.copy()
+            df[d_col] = pd.to_datetime(df[d_col], errors='coerce').dt.strftime('%Y-%m-%d')
+            df = df.dropna(subset=[d_col])
+            df = df[(df[d_col] >= start_date) & (df[d_col] <= end_date)].sort_values(d_col)
+            for _, row in df.iterrows():
+                try:
+                    nav = float(row[c_col])
+                    if nav > 0: data.append({"date": str(row[d_col]), "nav": round(nav, 4)})
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    if not data:
+        yahoo_sym = "BZ=F" if symbol == "BRENT" else "HG=F"
+        ydata = fetch_yahoo_history(yahoo_sym, start_date, end_date)
+        if ydata:
+            data = ydata
+
+    if data:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({'start_date': start_date, 'end_date': end_date, 'data': data}, f, ensure_ascii=False, indent=2)
+        except Exception: pass
+        return data
+    return None
+
+
+def fetch_currency_data(symbol, start_date, end_date):
+    """抓取货币汇率历史数据（USDCNY / USDJPY / DXY），带本地缓存。
+    优先尝试从用户指定的 Investing.com 中文页面抓取，失败则兜底 Yahoo Finance。"""
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get('start_date', '') <= start_date and cache.get('end_date', '') >= end_date:
+                return cache.get('data', [])
+        except Exception: pass
+
+    # 1) 尝试 Investing.com 中文页面（用户指定源）
+    investing_urls = {
+        "USDCNY": "https://cn.investing.com/currencies/usd-cny",
+        "USDJPY": "https://cn.investing.com/currencies/usd-jpy",
+        "DXY":    "https://cn.investing.com/indices/usdollar",
+    }
+    data = None
+    url = investing_urls.get(symbol)
+    if url:
+        try:
+            req = urllib.request.Request(url, headers={
+                **DEFAULT_HEADERS,
+                "Referer": "https://cn.investing.com/",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                html_text = resp.read().decode('utf-8', errors='ignore')
+            # Investing.com 页面通常内嵌一段 JSON 的 historicalData 或 chart 数据
+            # 这里做通用弱解析：提取所有形如 {"date": "...", "close": ...} 的片段
+            candidates = []
+            for m in re.finditer(r'"(?:date|Date)"\s*:\s*"([^"]+)"[^}]*?"(?:close|Close|last|last_close|price)"\s*:\s*([\d.]+)', html_text):
+                d_str = m.group(1).strip()
+                v_str = m.group(2).strip()
+                try:
+                    v = float(v_str)
+                except ValueError:
+                    continue
+                if v <= 0:
+                    continue
+                # 规范化日期
+                d_norm = None
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+                    try:
+                        d_norm = datetime.strptime(d_str, fmt).strftime("%Y-%m-%d")
+                        break
+                    except ValueError:
+                        continue
+                if d_norm:
+                    candidates.append({"date": d_norm, "nav": round(v, 4)})
+            if candidates:
+                # 去重并排序
+                uniq = {}
+                for it in candidates:
+                    uniq[it["date"]] = it
+                data = sorted(uniq.values(), key=lambda x: x['date'])
+        except Exception:
+            data = None
+
+    # 2) 兜底：Yahoo Finance
+    if not data:
+        symbol_map = {
+            "USDCNY": "USDCNY=X",
+            "USDJPY": "USDJPY=X",
+            "DXY": "DX-Y.NYB"
+        }
+        yahoo_symbol = symbol_map.get(symbol)
+        if yahoo_symbol:
+            data = fetch_yahoo_history(yahoo_symbol, start_date, end_date)
+
+    if data:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({'start_date': start_date, 'end_date': end_date, 'data': data}, f, ensure_ascii=False, indent=2)
+        except Exception: pass
+        return data
+    return None
+
+
 def fetch_index_data(symbol, start_date, end_date):
     try:
         df = None
@@ -4339,7 +4756,8 @@ def main():
 
     if is_debug:
         target_funds = TEST_FUNDS
-        target_metals = ["XAU"]
+        # 【修改】大宗商品：XAU/AUM/XAG 走原贵金属抓取，BRENT/CAD 走新抓取
+        target_commodities = ["XAU", "BRENT"]
         target_cryptos = ["BTC"]
         target_indices = ["NDX"]
         print("\n=======================================================")
@@ -4348,7 +4766,7 @@ def main():
         print("=======================================================\n")
     else:
         target_funds = PROD_FUNDS
-        target_metals = ["XAU", "AUM", "XAG"]
+        target_commodities = ["XAU", "AUM", "XAG", "BRENT", "CAD"]
         target_cryptos = ["BTC", "ETH", "SOL", "BNB"]
         target_indices = ["NDX", "SPX", "SOXX", "SOXL"]
         print("\n=======================================================")
@@ -4363,6 +4781,7 @@ def main():
     index_valuations = fetch_index_valuations(opener)
     fed_monitor = fetch_fed_rate_monitor(opener)
     print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {home_metrics['fng']['score']} | VIX {home_metrics['vix']['val']} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
+    print(f"🛢️ 大宗商品指标获取成功: 布伦特原油 {home_metrics['brent']['val']} | 伦敦金 {home_metrics['gold_london']['val']} | 沪金主连 {home_metrics['gold_shfe']['val']} | 伦敦银 {home_metrics['silver_london']['val']} | LME铜 {home_metrics['copper_lme']['val']}")
     fed_prob_count = len(fed_monitor.get('probabilities', []))
     fed_status = "✅" if fed_monitor.get('meeting_text') != "--" and fed_prob_count > 0 else "⚠️"
     print(f"🏛️ 美联储利率观测器 {fed_status}: 下一次会议 {fed_monitor.get('meeting_text', '--')} | 期货价格 {fed_monitor.get('futures_price', '--')} | 当前概率 {fed_prob_count} 档 | 更新时间 {fed_monitor.get('update_text', '--')}")
@@ -4421,11 +4840,15 @@ def main():
             else:
                 print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ❌ 历史净值抓取失败")
 
-    for symbol in target_metals:
+    # 【修改】大宗商品：包含伦敦金/沪金主连/伦敦银/布伦特原油/LME铜
+    for symbol in target_commodities:
         try:
-            data = fetch_precious_metals_data(symbol, args.start, args.end)
+            if symbol in ["XAU", "AUM", "XAG"]:
+                data = fetch_precious_metals_data(symbol, args.start, args.end)
+            else:
+                data = fetch_commodity_data(symbol, args.start, args.end)
             if data:
-                meta_name = PRECIOUS_METALS_NAMES.get(symbol, symbol)
+                meta_name = COMMODITY_NAMES.get(symbol, symbol)
                 res = analyze_fund_metrics(data, args.end, cutoff_date, is_qdii=False)
                 if res:
                     res.update({
@@ -4433,10 +4856,12 @@ def main():
                         "fee_manage": "--", "fee_custody": "--", "fee_sales": "--", "fee_source": "--",
                         "fee_purchase": "--", "fee_redemption": "--", "buy_status": "--", "buy_limit": "--",
                         "buy_limit_val": -1, "fee_total": "--", "fee_val": -1.0, "holdings": [],
-                        "holder_struct": None, "countries_info": {"date": "--", "countries": []}, "source": "贵金属行情", "nav_data": data
+                        "holder_struct": None, "countries_info": {"date": "--", "countries": []}, "source": "大宗商品行情", "nav_data": data
                     })
                     results.append(res)
-        except Exception: pass
+                    print(f"  ✓ 大宗商品 {symbol} ({meta_name}) 抓取成功, 数据量 {len(data)}")
+        except Exception as e:
+            print(f"  ✗ 大宗商品 {symbol} 抓取异常: {e}")
 
     for symbol in target_cryptos:
         try:
