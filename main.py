@@ -8,6 +8,8 @@ import argparse
 import webbrowser
 import urllib.request
 import urllib.parse
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="akshare")
 import akshare as ak
 import pandas as pd
 import requests
@@ -1539,13 +1541,74 @@ def fetch_holdings(opener, code):
 # ==============================================================================
 _FEE_LABELS = ['管理费率', '托管费率', '销售服务费率', '申购费率', '赎回费率', '认购费率']
 
-def _extract_fee_rate(html_text, label, max_chars=300):
-    """从 HTML 文本中提取某个费率标签后的数字（%）。
+# ==============================================================================
+# 运作费兜底：蛋卷基金（覆盖天天基金 F10 缺失的次新基金）
+# ==============================================================================
+def _fetch_operation_fees_danjuan(opener, code):
+    """从蛋卷基金详情接口抓管理费/托管费/销售服务费。
+    返回 dict，例如 {'fee_manage': '1.20', 'fee_custody': '0.20'}
+    """
+    result = {}
+    url = f"https://danjuanfunds.com/djapi/fund/detail/{code}"
+    headers = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": f"https://danjuanfunds.com/detail/{code}",
+        "Accept": "application/json, text/plain, */*",
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with opener.open(req, timeout=10) as resp:
+            raw = resp.read().decode('utf-8', errors='ignore')
+        data = json.loads(raw)
+    except Exception:
+        return result
+
+    # 递归查找 other_rate_table（应对不同 JSON 层级）
+    rate_table = None
+    def _walk(obj):
+        nonlocal rate_table
+        if rate_table is not None:
+            return
+        if isinstance(obj, dict):
+            if "other_rate_table" in obj and isinstance(obj["other_rate_table"], list):
+                rate_table = obj["other_rate_table"]
+                return
+            for v in obj.values():
+                _walk(v)
+        elif isinstance(obj, list):
+            for it in obj:
+                _walk(it)
+    _walk(data)
+
+    if not rate_table:
+        return result
+
+    name_map = {
+        "基金管理费": "fee_manage",
+        "基金托管费": "fee_custody",
+        "销售服务费": "fee_sales",
+        "销售服务费率": "fee_sales",
+    }
+    for item in rate_table:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        value = item.get("value")
+        if name in name_map and value is not None:
+            m = re.search(r'([\d.]+)', str(value))
+            if m:
+                result[name_map[name]] = m.group(1)
+
+    return result
+# ==============================================================================
+
+def _extract_fee_rate(html_text, label, max_chars=400):
+    """从 HTML/JS 文本中提取某个费率标签后的数字（%）。
 
     返回值语义：
-      - 字符串 "0.00"  → 该费用明确不存在（源页面为 --- / -- / 不适用 / 无 等占位符）
+      - 字符串 "0.00"  → 该费用明确不存在（--- / -- / 不适用 / 无 等占位符）
       - 字符串 "x.xx"  → 抓到了具体费率数字
-      - None          → HTML 中未找到该标签
+      - None          → 未找到该标签或无法解析
     """
     if not html_text or label not in html_text:
         return None
@@ -1556,7 +1619,7 @@ def _extract_fee_rate(html_text, label, max_chars=300):
 
     window = html_text[pos + len(label): pos + len(label) + max_chars]
 
-    # 1) 截断到下一个费率标签之前，避免跨标签乱抓数字
+    # 1) 截断到下一个费率标签之前
     for stop in _FEE_LABELS:
         if stop == label:
             continue
@@ -1564,44 +1627,82 @@ def _extract_fee_rate(html_text, label, max_chars=300):
         if stop_pos >= 0:
             window = window[:stop_pos]
 
-    # 2) 识别"无此项费用"的占位符（--- / -- / 不适用 / 无）
-    ph = re.search(r'[-–—]{2,}|不适用|无', window)
-    if ph:
-        # 占位符后面 60 字符内若没有任何"数字%"，即认定为"无此项费用"
-        after = window[ph.end(): ph.end() + 60]
-        if not re.search(r'[\d.]+\s*%', after):
-            return "0.00"
+    # 2) 截断到明显分隔符之前
+    for stop in ['</td>', '</tr>', '</p>', '</table>', '基金费率', '费率结构', '申购费率', '赎回费率']:
+        stop_pos = window.find(stop)
+        if stop_pos >= 0:
+            window = window[:stop_pos]
 
-    # 3) 正常情况：抓第一个 "数字%"
-    num = re.search(r'([\d.]+)\s*%', window)
-    return num.group(1) if num else None
+    # 3) ★ 先剥离 HTML 标签和实体，再做判断
+    clean = re.sub(r'<[^>]+>', ' ', window)
+    clean = clean.replace('&nbsp;', ' ').replace('&amp;', '&')
+    clean = re.sub(r'\s+', ' ', clean).strip()
+
+    # 4) ★ 关键修复：先抓数字，抓不到再判占位符
+    num = re.search(r'([\d.]+)\s*%', clean)
+    if num:
+        return num.group(1)
+
+    # 5) 无数字时，才判断"无此项费用"占位符
+    if re.match(r'^[\s\-–—/]*$', clean) or re.match(r'^(?:不适用|无|None)\s*$', clean):
+        return "0.00"
+
+    return None
 
 def _extract_redemption_tiers(html_text):
     """从天天基金 HTML/片段中提取赎回费率阶梯（全面兼容普通基金、QDII、LOF与C类）"""
     if not html_text:
         return None
 
-    # 1. 检查是否存在明确的免收赎回费说明
+    # ★ 修复A：先做 JS / HTML 反转义，兼容 FundArchivesDatas.aspx 的 JS 包装
+    #   —— 004320 / 160213 / 001438 等基金的 <table> 会被转义成 &lt;table&gt; 或 \u003ctable\u003e
+    text = html_text
+    if '\\u003c' in text or '\\u003e' in text or '\\u0026' in text:
+        text = (text.replace('\\u003c', '<')
+                    .replace('\\u003e', '>')
+                    .replace('\\u0026', '&')
+                    .replace('\\u0022', '"'))
+    if '&lt;' in text or '&gt;' in text or '&amp;' in text:
+        try:
+            text = html.unescape(text)
+        except Exception:
+            pass
+
+    # ★ 修复B：若是 var apidata={ content:"...", ...} 结构，把 content 里的 HTML 拼回主文本
+    m = re.search(r'content\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.S)
+    if m:
+        inner = (m.group(1)
+                 .replace('\\"', '"')
+                 .replace('\\/', '/')
+                 .replace('\\u003c', '<')
+                 .replace('\\u003e', '>')
+                 .replace('\\u0026', '&'))
+        if '&lt;' in inner or '&gt;' in inner:
+            try:
+                inner = html.unescape(inner)
+            except Exception:
+                pass
+        if '<table' in inner or '<tr' in inner:
+            text = text + '\n' + inner
+    html_text = text
+
+    # 1. 明确的免赎回费说明
     if re.search(r'(?:本基金|该基金|C类|份额)?(?:不收取赎回费|免赎回费|赎回费率为\s*0|不计提赎回费)', html_text):
         return ["大于等于0天: 0.00%"]
 
-    # 2. 匹配包含“赎回费率”、“场外赎回费率”或“日常赎回费率”的相关表格
-    # 切分所有表格独立检测，避免跨模块错位
-    tables = re.findall(r'(?:(?:场外|日常)?赎回费率.*?)?<table[^>]*>(.*?)</table>', html_text, re.S)
-    
-    # 如果没带标题匹配到，则遍历所有 table 寻找包含赎回语义的表格
+    # 2. 遍历所有表格，找含"赎回"语义的那张
     all_raw_tables = re.findall(r'<table[^>]*>(.*?)</table>', html_text, re.S)
     candidate_tables = []
-    
-    # 优先选取紧跟在“赎回费率”后面的表格
-    for kw in ['场外赎回费率', '日常赎回费率', '赎回费率']:
-        for m in re.finditer(kw, html_text):
-            sub_window = html_text[m.start(): m.start() + 3500]
+
+    # 优先：紧跟"赎回费率/赎回费用"等关键词之后的表格
+    # ★ 修复C：扩展关键词，覆盖 LOF/QDII 的"场内赎回费率"等标题写法
+    for kw in ['场外赎回费率', '日常赎回费率', '场内赎回费率', '赎回费率', '赎回费用']:
+        for m_kw in re.finditer(kw, html_text):
+            sub_window = html_text[m_kw.start(): m_kw.start() + 3500]
             tbl_m = re.search(r'<table[^>]*>(.*?)</table>', sub_window, re.S)
             if tbl_m:
                 candidate_tables.append(tbl_m.group(1))
 
-    # 加入全局所有表格作补充备选
     candidate_tables.extend(all_raw_tables)
 
     for tbl_content in candidate_tables:
@@ -1623,30 +1724,34 @@ def _extract_redemption_tiers(html_text):
                     is_redemption_table = True
                     continue
 
-                # 识别有效数字费率
+                # 识别有效数字费率（第二列找不到就尝试第三列，兼容 LOF 的"金额/期限/费率"三列结构）
                 rate_m = re.search(r'([\d\.]+\s*%)', c1)
-                if not rate_m:
-                    # 有些 LOF 表格在第 3 列（适用金额/适用期限/场外费率）
-                    if len(cols) >= 3:
-                        c2 = re.sub(r'<[^>]+>', '', cols[2]).replace('&nbsp;', ' ').strip()
-                        rate_m = re.search(r'([\d\.]+\s*%)', c2)
-                
+                if not rate_m and len(cols) >= 3:
+                    c2 = re.sub(r'<[^>]+>', '', cols[2]).replace('&nbsp;', ' ').strip()
+                    rate_m = re.search(r'([\d\.]+\s*%)', c2)
+
                 if c0 and rate_m:
                     tiers.append(f"{c0}: {rate_m.group(1)}")
 
         if tiers and (is_redemption_table or any('%' in t for t in tiers)):
             return tiers
 
-    # 3. 文本行直接兜底（防止有些页面使用 div 列表）
+    # 3. 文本兜底
+    # ★ 修复D：原实现按行拆分，遇到 <td>天</td><td>费率</td> 被换行拆开无法匹配
+    #         这里改为先压缩空白，再全局正则配对
     text_tiers = []
-    clean_text = re.sub(r'<[^>]+>', '\n', html_text)
-    for line in clean_text.split('\n'):
-        line = line.replace('&nbsp;', ' ').strip()
-        if not line or '管理费' in line or '托管费' in line:
-            continue
-        m = re.search(r'((?:小于|大于|等于|[\d]+[天月年]|不足|以上|以内|起).*?)[：:\s]+([\d\.]+\s*%)', line)
-        if m and ('天' in m.group(1) or '月' in m.group(1) or '年' in m.group(1)):
-            text_tiers.append(f"{m.group(1).strip()}: {m.group(2).strip()}")
+    clean = re.sub(r'<[^>]+>', ' ', html_text)
+    clean = clean.replace('&nbsp;', ' ')
+    clean = re.sub(r'\s+', ' ', clean)
+    for m2 in re.finditer(
+        r'((?:小于|大于|等于|大于等于|小于等于|不超过|不足|多于)?\s*\d+\s*[天月年](?:以内|以上|以下)?)'
+        r'[\s：:，,]{0,6}'
+        r'([\d\.]+\s*%)',
+        clean
+    ):
+        tier = f"{m2.group(1).strip()}: {m2.group(2).strip()}"
+        if tier not in text_tiers:
+            text_tiers.append(tier)
 
     if text_tiers:
         return text_tiers
@@ -1710,18 +1815,31 @@ def fetch_fund_detail_meta(opener, code):
         if meta["name"] == f"基金_{code}":
             match_name = re.search(r'var\s+fS_name\s*=\s*["\']([^"\']+)["\']', js_content)
             if match_name: meta["name"] = match_name.group(1)
-        rate_match = re.search(r'var\s+Data_rateInverstment\s*=\s*["\']([^"\']+)["\']', js_content)
+
+        # ★ 强化：直接从 Data_rateInverstment 里用精确正则抓，不再依赖 _extract_fee_rate
+        rate_match = re.search(r'var\s+Data_rateInverstment\s*=\s*["\']([^"\']*)["\']', js_content)
         if rate_match:
             rate_text = rate_match.group(1)
-            if meta["fee_manage"] is None:
-                _v = _extract_fee_rate(rate_text, '管理费')
-                if _v is not None: meta["fee_manage"] = _v
-            if meta["fee_custody"] is None:
-                _v = _extract_fee_rate(rate_text, '托管费')
-                if _v is not None: meta["fee_custody"] = _v
-            if meta["fee_sales"] is None:
-                _v = _extract_fee_rate(rate_text, '销售服务费')
-                if _v is not None: meta["fee_sales"] = _v
+            # 尝试多个别名，兼容"管理费"和"管理费率"
+            _FEE_ALIAS = {
+                'fee_manage':  ['管理费率', '管理费'],
+                'fee_custody': ['托管费率', '托管费'],
+                'fee_sales':   ['销售服务费率', '销售服务费'],
+            }
+            for key, aliases in _FEE_ALIAS.items():
+                if meta.get(key) is not None and meta[key] != "0.00":
+                    continue   # 已有确定值就不覆盖
+                for alias in aliases:
+                    # 容忍 <span>、</span> 等标签穿插；抓第一个数字%
+                    m = re.search(
+                        rf'{re.escape(alias)}\s*[:：]?\s*(?:<[^>]*>\s*)*([\d.]+)\s*%',
+                        rate_text
+                    )
+                    if m:
+                        meta[key] = m.group(1)
+                        break
+
+        # 保留原有的 fund_sourceRate / fund_Rate 抓取
         buy_source_m = re.search(r'var\s+fund_sourceRate\s*=\s*"([^"]+)";', js_content)
         buy_rate_m = re.search(r'var\s+fund_Rate\s*=\s*"([^"]+)";', js_content)
         if buy_source_m and buy_source_m.group(1): meta["fee_source"] = buy_source_m.group(1)
@@ -1731,26 +1849,53 @@ def fetch_fund_detail_meta(opener, code):
         query_c = MAIN_CODE_MAP.get(code, code)
         codes_to_try = [code] if query_c == code else [code, query_c]
 
-        # 1. 尝试从移动端 API 获取（涵盖 ENDNAV、FUNDSIZE、CLGM成立规模、BENCHMARK）
+        # 1. 尝试从移动端新版 API 获取（FundMNBasicInformation）
         for c_try in codes_to_try:
             if meta["scale"] != "未知":
                 break
             try:
-                mob_url = f"https://fundmobapi.eastmoney.com/FundMapi/FundDetailBaseInformation.ashx?FCODE={c_try}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
-                req_mob = urllib.request.Request(mob_url, headers={"User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"})
-                with opener.open(req_mob, timeout=4) as resp:
+                mob_url = (
+                    f"https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation"
+                    f"?FCODE={c_try}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
+                )
+                req_mob = urllib.request.Request(mob_url, headers={
+                    "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"
+                })
+                with opener.open(req_mob, timeout=6) as resp:
                     j_mob = json.loads(resp.read().decode('utf-8'))
                 d_mob = j_mob.get("Datas") or {}
-                
-                # 兼容次新基金成立规模字段：ENDNAV / FUNDSIZE / CLGM / SGMS
-                scale_raw = d_mob.get("ENDNAV") or d_mob.get("FUNDSIZE") or d_mob.get("CLGM") or d_mob.get("SGMS")
-                if scale_raw and str(scale_raw).strip() not in ("--", "", "0", "0.00", "None"):
-                    s_m = re.search(r'([\d\.]+)', str(scale_raw))
-                    if s_m and float(s_m.group(1)) > 0:
-                        val = float(s_m.group(1))
-                        meta["scale_val"] = val
-                        meta["scale"] = f"{val:.2f} 亿"
-                        break
+
+                # 规模：ENDNAV 是净资产（元）
+                endnav = d_mob.get("ENDNAV")
+                if endnav:
+                    try:
+                        v = float(endnav) / 1e8    # 元 → 亿
+                        if v > 0:
+                            meta["scale_val"] = v
+                            meta["scale"] = f"{v:.2f} 亿"
+                    except (TypeError, ValueError):
+                        pass
+
+                # ★ 顺手把申购费率也抓了（这个接口有）
+                src_rate = d_mob.get("SOURCERATE")     # 原费率，如 "1.50%"
+                real_rate = d_mob.get("RATE")          # 折后费率，如 "0.15%"
+                if src_rate and re.search(r'[\d.]+', str(src_rate)):
+                    meta["fee_source"] = str(src_rate).strip()
+                if real_rate and re.search(r'[\d.]+', str(real_rate)):
+                    meta["fee_purchase"] = str(real_rate).strip()
+
+                # 交易状态
+                sgzt = d_mob.get("SGZT")               # 申购状态
+                sgztmark = d_mob.get("SGZTMARK")       # 带限额说明
+                if sgzt:
+                    meta["buy_status"] = str(sgzt).strip()
+                if sgztmark:
+                    m_lim = re.search(r'单日累计购买上限([\d.]+)(万?)元', str(sgztmark))
+                    if m_lim:
+                        num = float(m_lim.group(1))
+                        if m_lim.group(2) == "万": num *= 10000
+                        meta["buy_limit"] = f"{m_lim.group(1)}{m_lim.group(2)}元"
+                        meta["buy_limit_val"] = num
             except Exception:
                 pass
 
@@ -1793,51 +1938,115 @@ def fetch_fund_detail_meta(opener, code):
                 except Exception:
                     pass
 
-        # 4. 尝试天天基金底层历史规模接口 (lsgm API)
-        if meta["scale"] == "未知":
-            for c_try in codes_to_try:
-                try:
-                    lsgm_url = f"https://api.fund.eastmoney.com/f10/lsgm?fundCode={c_try}&pageIndex=1&pageSize=3"
-                    req_lsgm = urllib.request.Request(lsgm_url, headers={**headers, "Referer": f"https://fundf10.eastmoney.com/jbgk_{c_try}.html"})
-                    with opener.open(req_lsgm, timeout=4) as resp:
-                        j_lsgm = json.loads(resp.read().decode('utf-8'))
-                    items = j_lsgm.get("Data") or []
-                    for it in items:
-                        raw_nav = it.get("NETNAV") or it.get("PURCHASE")
-                        if raw_nav and float(raw_nav) > 0:
-                            val_num = float(raw_nav)
-                            meta["scale_val"] = val_num
-                            meta["scale"] = f"{val_num:.2f} 亿"
-                            break
-                    if meta["scale"] != "未知":
-                        break
-                except Exception:
-                    pass
+        # 5. AkShare 雪球接口（抓规模 + 费率，一次调用搞定）
+        for c_try in codes_to_try:
+            # 如果规模和三项费率都齐了，就不必再查
+            if (meta["scale"] != "未知"
+                    and meta["fee_manage"] is not None
+                    and meta["fee_custody"] is not None):
+                break
+            try:
+                df_xq = ak.fund_individual_basic_info_xq(symbol=c_try)
+                if df_xq is None or df_xq.empty:
+                    continue
+                cols = df_xq.columns.tolist()
+                if len(cols) < 2:
+                    continue
+                info_dict = dict(zip(df_xq[cols[0]], df_xq[cols[1]]))
 
-        # 5. AkShare 雪球接口兜底（兼顾匹配“成立规模”）
-        if meta["scale"] == "未知":
-            for c_try in codes_to_try:
-                try:
-                    df_xq = ak.fund_individual_basic_info_xq(symbol=c_try)
-                    if df_xq is not None and not df_xq.empty:
-                        cols = df_xq.columns.tolist()
-                        if len(cols) >= 2:
-                            info_dict = dict(zip(df_xq[cols[0]], df_xq[cols[1]]))
-                            for k in ["基金规模", "资产规模", "最新规模", "成立规模", "募集规模"]:
-                                if k in info_dict and info_dict[k]:
-                                    scale_str = str(info_dict[k])
-                                    unit_match = re.search(r'([\d.]+)\s*(亿|万)', scale_str)
-                                    if unit_match:
-                                        num = float(unit_match.group(1))
-                                        if unit_match.group(2) == '万': num /= 10000.0
-                                        meta["scale_val"] = num
-                                        meta["scale"] = f"{num:.2f} 亿"
-                                        break
-                    if meta["scale"] != "未知":
-                        break
-                except Exception:
-                    pass
+                # --- 抓规模 ---
+                if meta["scale"] == "未知":
+                    for k in ["基金规模", "资产规模", "最新规模", "成立规模", "募集规模"]:
+                        if k in info_dict and info_dict[k]:
+                            scale_str = str(info_dict[k])
+                            unit_match = re.search(r'([\d.]+)\s*(亿|万)', scale_str)
+                            if unit_match:
+                                num = float(unit_match.group(1))
+                                if unit_match.group(2) == '万': num /= 10000.0
+                                meta["scale_val"] = num
+                                meta["scale"] = f"{num:.2f} 亿"
+                                break
 
+                # --- ★ 抓三项运作费 ---
+                for key, aliases in [
+                    ('fee_manage',  ['管理费率', '管理费']),
+                    ('fee_custody', ['托管费率', '托管费']),
+                    ('fee_sales',   ['销售服务费率', '销售服务费']),
+                ]:
+                    if meta.get(key) is not None and meta[key] != "0.00":
+                        continue
+                    for alias in aliases:
+                        if alias in info_dict and info_dict[alias]:
+                            raw_val = str(info_dict[alias])
+                            m = re.search(r'([\d.]+)', raw_val)
+                            if m:
+                                meta[key] = m.group(1)
+                                break
+            except Exception:
+                pass
+
+# ===== 运作费抓取：天天基金 F10 静态页（requests 直连版，避开 urllib header 坑）=====
+    _q = MAIN_CODE_MAP.get(code, code)
+    _codes = [code] if _q == code else [code, _q]
+    for _c in _codes:
+        if meta.get("fee_manage") not in (None, "0.00") and \
+           meta.get("fee_custody") not in (None, "0.00") and \
+           meta.get("fee_sales") not in (None, "0.00"):
+            break
+        try:
+            f10_url = f"https://fundf10.eastmoney.com/jjfl_{_c}.html"
+            r = requests.get(f10_url, headers={
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
+                "Referer": f10_url,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }, timeout=8)
+            f10_html = r.text  # requests 自动处理编码
+
+            # 剥离 HTML 标签，压缩空白
+            clean = re.sub(r'<[^>]+>', ' ', f10_html)
+            clean = clean.replace('&nbsp;', ' ').replace('&amp;', '&')
+            clean = re.sub(r'\s+', ' ', clean)
+
+            # ★ 更稳的正则：允许"管理费率"和数字之间出现任意非数字字符（应对 </td><td> 等残留）
+            if meta.get("fee_manage") in (None, "0.00"):
+                mm = re.search(r'管理费率?\D{0,40}?([\d.]+)\s*%', clean)
+                if mm:
+                    meta["fee_manage"] = mm.group(1)
+
+            if meta.get("fee_custody") in (None, "0.00"):
+                cc = re.search(r'托管费率?\D{0,40}?([\d.]+)\s*%', clean)
+                if cc:
+                    meta["fee_custody"] = cc.group(1)
+
+            if meta.get("fee_sales") in (None, "0.00"):
+                ss = re.search(r'销售服务费率?\D{0,40}?([\d.]+)\s*%', clean)
+                if ss:
+                    meta["fee_sales"] = ss.group(1)
+
+            # 调试日志：只在 prod 模式下打印（方便你现场看）
+            if code == "023675":
+                print(f"    [F10] {_c}: 管理={meta.get('fee_manage')} 托管={meta.get('fee_custody')} 销服={meta.get('fee_sales')}")
+        except Exception as e:
+            print(f"    [F10] {_c} 异常: {e}")
+            pass
+# ============================================================
+# ===== 运作费兜底：蛋卷基金（覆盖 F10 静态页缺失的次新基金）=====
+    if (meta.get("fee_manage") in (None, "0.00")
+            or meta.get("fee_custody") in (None, "0.00")):
+        _q_dj = MAIN_CODE_MAP.get(code, code)
+        _codes_dj = [code] if _q_dj == code else [code, _q_dj]
+        for _c in _codes_dj:
+            if (meta.get("fee_manage") not in (None, "0.00")
+                    and meta.get("fee_custody") not in (None, "0.00")):
+                break
+            try:
+                _dj = _fetch_operation_fees_danjuan(opener, _c)
+                for k in ('fee_manage', 'fee_custody', 'fee_sales'):
+                    if meta.get(k) in (None, "0.00") and k in _dj:
+                        meta[k] = _dj[k]
+            except Exception:
+                pass
+# ============================================================
 # ===== 赎回费率提取：三级强化兜底机制 =====
     query_code = MAIN_CODE_MAP.get(code, code)
     
