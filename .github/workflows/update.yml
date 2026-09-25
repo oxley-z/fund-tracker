@@ -22,6 +22,7 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       # 1. 拉取代码
@@ -41,10 +42,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Restore cache
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: fund-cache-${{ github.run_number }}
+          restore-keys: |
+            fund-cache-
+
       # 4. 运行基金数据抓取脚本
       - name: Run script to generate HTML
         run: |
-          python main.py --out index.html
+          mkdir -p public
+          python main.py --mode prod --out public/index.html
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'public'
 
       # 5. 配置 GitHub Pages
       - name: Setup Pages
