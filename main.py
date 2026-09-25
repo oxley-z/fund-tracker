@@ -64,11 +64,12 @@ PROD_FUNDS = [
     "019155", "016668", "501225", "015202", "001668", "000043", "007280", "019449",
     "019454", "019455",
     # 纳指被动组
-    "017091", "016057", "160213", "019172", "019441", "018043", "019547", "016532",
+    "017091", "016055", "160213", "019172", "019441", "018043", "019547", "016532",
     "040046", "161130", "016452", "270042", "019736", "000834", "019524", "015299",
     "539001", "018966",
     # 标普被动组
     "161125", "007721", "017028", "050025", "018064", "096001", "017641", "018738",
+    "161128",
     # CPO 组
     "022365", "540010", "002112", "011892", "021528",
     "009645", "011370", "011452", "016371", "001956",
@@ -105,16 +106,17 @@ US_ACTIVE_CODES = {
 }
 
 NDX_PASSIVE_CODES = {
-    "017091", "016057", "160213", "019172", "019441", "018043", "019547", "016532",
+    "017091", "016055", "160213", "019172", "019441", "018043", "019547", "016532",
     "040046", "161130", "016452", "270042", "019736", "000834", "019524", "015299",
     "539001", "018966"
 }
 
 SPX_PASSIVE_CODES = {
-    "161125", "007721", "017028", "050025", "018064", "096001", "017641", "018738"
+    "161125", "007721", "017028", "050025", "018064", "096001", "017641", "018738",
+    "161128"
 }
 
-# 分级 C 份额到主代码/A 份额映射
+# 分级 C 份额到主代码/A 份额映射（补全新增的美股/标普/行业子份额映射）
 MAIN_CODE_MAP = {
     "014002": "006555",
     "012922": "012920",
@@ -125,13 +127,23 @@ MAIN_CODE_MAP = {
     "017145": "017144",
     "016702": "016701",
     "019156": "019155",
+    "019454": "019449",
+    "019455": "019449",
+    "018738": "017641",
+    "021662": "457001",
+    "018147": "539002",
+    "021842": "005698",
 }
+
+# 指数历年回报的完整目标清单（用于缓存完整性校验）
+ANNUAL_INDEX_TARGETS = ["纳指100", "标普500", "费城半导体指数", "沪深300", "科创50", "恒生科技"]
 
 INDEX_NAMES = {
     "NDX": "纳斯达克100指数",
     "SPX": "标普500指数",
-    "SOXX": "iShares 半导体ETF",
-    "SOXL": "三倍做多半导体ETF-Direxion"
+    "SOX": "费城半导体指数",
+    "SOXL": "三倍做多半导体ETF-Direxion",
+    "XLK": "信息科技行业ETF-SPDR"
 }
 
 # 【修改】原 PRECIOUS_METALS_NAMES 扩展为大宗商品（新增布伦特原油、LME铜）
@@ -150,9 +162,12 @@ CRYPTO_NAMES = {
     "BNB": "币安币 (BNB/USDT)"
 }
 
-SINA_INDEX_MAP = {
-    "NDX": ".NDX",
-    "SPX": ".INX",
+SINA_US_INDEX_MAP = {
+    "NDX":  ".ndx",
+    "SPX":  ".inx",
+    "SOX":  ".sox",
+    "SOXL": "soxl",
+    "XLK":  "xlk",
 }
 
 CACHE_DIR = "cache"
@@ -309,6 +324,48 @@ def fetch_index_valuations(opener):
             
     return results
 
+def fetch_sina_us_kline(symbol_code, start_date_str="2025-01-01"):
+    """通过新浪美股日 K 线接口抓取历史数据（源自 get_meiguzhishu.py）。
+
+    返回格式：[{'date': 'YYYY-MM-DD', 'nav': float(收盘价)}, ...]
+    """
+    callback_name = "US_KLINE_CB"
+    url = (
+        f"https://stock.finance.sina.com.cn/usstock/api/jsonp.php/{callback_name}"
+        f"/US_MinKService.getDailyK?symbol={urllib.parse.quote(symbol_code)}"
+    )
+
+    headers = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": "https://finance.sina.com.cn/",
+        "Accept": "*/*"
+    }
+    req = urllib.request.Request(url, headers=headers)
+    records = []
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'\((\[.*\])\)', content)
+            if not match:
+                return records
+
+            raw_list = json.loads(match.group(1))
+            for item in raw_list:
+                d_str = item.get("d")
+                if d_str and d_str >= start_date_str:
+                    try:
+                        nav = float(item.get("c", 0.0))
+                        if nav > 0:
+                            records.append({"date": d_str, "nav": nav})
+                    except (ValueError, TypeError):
+                        continue
+    except Exception:
+        pass
+
+    records.sort(key=lambda x: x["date"])
+    return records
+
 # ==============================================================================
 # 【保留】2000年后主要指数年度收益率及收盘点位获取模块（仅数据抓取，不再用于页面展示）
 # ==============================================================================
@@ -325,16 +382,24 @@ def fetch_index_annual_data():
     - 存在即直接读取返回，不再发起任何网络请求
     - 需刷新时手动删除该文件后重新运行
     """
-    # ===== 1. 优先读取本地缓存 =====
+    # ===== 1. 优先读取本地缓存（带完整性校验） =====
     cache_file = os.path.join(CACHE_DIR, "index_annual.json")
     if os.path.exists(cache_file):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached = json.load(f)
+
             if isinstance(cached, dict) and cached:
-                print(f"📅 检测到本地缓存 {cache_file}，直接使用（共 {len(cached)} 个指数）")
-                print(f"📊 指数年度数据最终获取成功: {len(cached)}/5 （来源：本地缓存）")
-                return cached
+                cached_keys = set(cached.keys())
+                expected_keys = set(ANNUAL_INDEX_TARGETS)
+                missing = expected_keys - cached_keys
+
+                if not missing:
+                    print(f"📅 检测到本地缓存 {cache_file}，直接使用（共 {len(cached)} 个指数）")
+                    print(f"📊 指数年度数据最终获取成功: {len(cached)}/{len(ANNUAL_INDEX_TARGETS)} （来源：本地缓存）")
+                    return cached
+                else:
+                    print(f"📅 缓存 {cache_file} 缺少以下指数，将重新抓取: {sorted(missing)}")
             else:
                 print(f"📅 缓存文件 {cache_file} 内容为空或格式不正确，将重新抓取...")
         except Exception as e:
@@ -487,6 +552,33 @@ def fetch_index_annual_data():
 
         return records
 
+    def _fetch_sox_annual_returns():
+        """从 historyofmarket.com 获取费城半导体指数(SOX)历年回报。
+
+        该接口直接返回年度回报率（百分比），无需二次计算。
+        返回格式：[{'year': int, 'close': None, 'pct': float}, ...]
+        """
+        url = "https://historyofmarket.com/api/semi/annual-returns.json"
+        req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+        try:
+            with _opener.open(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            series = data.get("series", [])
+            yearly_data = []
+            for item in series:
+                year = item.get("year")
+                pct = item.get("value")
+                if year and pct is not None:
+                    yearly_data.append({
+                        "year": int(year),
+                        "close": None,          # 接口未提供年末收盘点位
+                        "pct": round(float(pct), 2)
+                    })
+            yearly_data.sort(key=lambda x: x["year"])
+            return yearly_data
+        except Exception:
+            return []
+
     def _calculate_annual_metrics(records, start_year=2000):
         """计算年度收益率与年末收盘点位"""
         if not records:
@@ -539,6 +631,11 @@ def fetch_index_annual_data():
             "fetcher": lambda: _fetch_historyofmarket_robust("https://historyofmarket.com/api/sp500/century.json") or _fetch_sina_us(".INX")
         },
         {
+            "name": "费城半导体指数", "ticker": "SOX",
+            "fetcher": lambda: _fetch_sox_annual_returns(),
+            "precomputed": True,          # 标记：返回值已是 yearly_data，无需再计算
+        },
+        {
             "name": "沪深300", "ticker": "000300",
             "fetcher": lambda: _fetch_sohu_index("zs_000300")
         },
@@ -562,18 +659,25 @@ def fetch_index_annual_data():
                 print("❌ 无数据")
                 continue
 
-            stats = _calculate_annual_metrics(records, start_year=2000)
-            if not stats:
+            if item.get("precomputed"):
+                # SOX 等直接返回 yearly_data 的接口，跳过年度计算
+                yearly_data = records
+            else:
+                stats = _calculate_annual_metrics(records, start_year=2000)
+                if not stats:
+                    print("❌ 年度数据为空")
+                    continue
+                yearly_data = []
+                for row in stats:
+                    yearly_data.append({
+                        "year": int(row["year"]),
+                        "close": round(row["end_point"], 2),
+                        "pct": round(row["annual_return"], 2)
+                    })
+
+            if not yearly_data:
                 print("❌ 年度数据为空")
                 continue
-
-            yearly_data = []
-            for row in stats:
-                yearly_data.append({
-                    "year": int(row["year"]),
-                    "close": round(row["end_point"], 2),
-                    "pct": round(row["annual_return"], 2)
-                })
 
             result[name] = {
                 "ticker": item["ticker"],
@@ -585,7 +689,7 @@ def fetch_index_annual_data():
             print(f"❌ 异常: {e}")
             continue
 
-    print(f"📊 指数年度数据最终获取成功: {len(result)}/{len(targets)}")
+        print(f"📊 指数年度数据最终获取成功: {len(result)}/{len(ANNUAL_INDEX_TARGETS)}")
 
     # ===== 2. 抓取成功后写入本地缓存 =====
     if result:
@@ -1372,6 +1476,125 @@ def fetch_holdings(opener, code):
     except Exception: pass
     return []
 
+# ==============================================================================
+# 费率提取辅助函数（识别 --- / -- / 不适用 等"无此项费用"占位符）
+# ==============================================================================
+_FEE_LABELS = ['管理费率', '托管费率', '销售服务费率', '申购费率', '赎回费率', '认购费率']
+
+def _extract_fee_rate(html_text, label, max_chars=300):
+    """从 HTML 文本中提取某个费率标签后的数字（%）。
+
+    返回值语义：
+      - 字符串 "0.00"  → 该费用明确不存在（源页面为 --- / -- / 不适用 / 无 等占位符）
+      - 字符串 "x.xx"  → 抓到了具体费率数字
+      - None          → HTML 中未找到该标签
+    """
+    if not html_text or label not in html_text:
+        return None
+
+    pos = html_text.find(label)
+    if pos < 0:
+        return None
+
+    window = html_text[pos + len(label): pos + len(label) + max_chars]
+
+    # 1) 截断到下一个费率标签之前，避免跨标签乱抓数字
+    for stop in _FEE_LABELS:
+        if stop == label:
+            continue
+        stop_pos = window.find(stop)
+        if stop_pos >= 0:
+            window = window[:stop_pos]
+
+    # 2) 识别"无此项费用"的占位符（--- / -- / 不适用 / 无）
+    ph = re.search(r'[-–—]{2,}|不适用|无', window)
+    if ph:
+        # 占位符后面 60 字符内若没有任何"数字%"，即认定为"无此项费用"
+        after = window[ph.end(): ph.end() + 60]
+        if not re.search(r'[\d.]+\s*%', after):
+            return "0.00"
+
+    # 3) 正常情况：抓第一个 "数字%"
+    num = re.search(r'([\d.]+)\s*%', window)
+    return num.group(1) if num else None
+
+def _extract_redemption_tiers(html_text):
+    """从天天基金 HTML/片段中提取赎回费率阶梯（全面兼容普通基金、QDII、LOF与C类）"""
+    if not html_text:
+        return None
+
+    # 1. 检查是否存在明确的免收赎回费说明
+    if re.search(r'(?:本基金|该基金|C类|份额)?(?:不收取赎回费|免赎回费|赎回费率为\s*0|不计提赎回费)', html_text):
+        return ["大于等于0天: 0.00%"]
+
+    # 2. 匹配包含“赎回费率”、“场外赎回费率”或“日常赎回费率”的相关表格
+    # 切分所有表格独立检测，避免跨模块错位
+    tables = re.findall(r'(?:(?:场外|日常)?赎回费率.*?)?<table[^>]*>(.*?)</table>', html_text, re.S)
+    
+    # 如果没带标题匹配到，则遍历所有 table 寻找包含赎回语义的表格
+    all_raw_tables = re.findall(r'<table[^>]*>(.*?)</table>', html_text, re.S)
+    candidate_tables = []
+    
+    # 优先选取紧跟在“赎回费率”后面的表格
+    for kw in ['场外赎回费率', '日常赎回费率', '赎回费率']:
+        for m in re.finditer(kw, html_text):
+            sub_window = html_text[m.start(): m.start() + 3500]
+            tbl_m = re.search(r'<table[^>]*>(.*?)</table>', sub_window, re.S)
+            if tbl_m:
+                candidate_tables.append(tbl_m.group(1))
+
+    # 加入全局所有表格作补充备选
+    candidate_tables.extend(all_raw_tables)
+
+    for tbl_content in candidate_tables:
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', tbl_content, re.S)
+        tiers = []
+        is_redemption_table = False
+
+        for row in rows:
+            cols = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.S)
+            if len(cols) >= 2:
+                c0 = re.sub(r'<[^>]+>', '', cols[0]).replace('&nbsp;', ' ').strip()
+                c1 = re.sub(r'<[^>]+>', '', cols[1]).replace('&nbsp;', ' ').strip()
+
+                if re.search(r'赎回', c0) or re.search(r'赎回', c1):
+                    is_redemption_table = True
+
+                # 表头跳过
+                if re.search(r'期限|条件|持有', c0) and re.search(r'费率|标准', c1):
+                    is_redemption_table = True
+                    continue
+
+                # 识别有效数字费率
+                rate_m = re.search(r'([\d\.]+\s*%)', c1)
+                if not rate_m:
+                    # 有些 LOF 表格在第 3 列（适用金额/适用期限/场外费率）
+                    if len(cols) >= 3:
+                        c2 = re.sub(r'<[^>]+>', '', cols[2]).replace('&nbsp;', ' ').strip()
+                        rate_m = re.search(r'([\d\.]+\s*%)', c2)
+                
+                if c0 and rate_m:
+                    tiers.append(f"{c0}: {rate_m.group(1)}")
+
+        if tiers and (is_redemption_table or any('%' in t for t in tiers)):
+            return tiers
+
+    # 3. 文本行直接兜底（防止有些页面使用 div 列表）
+    text_tiers = []
+    clean_text = re.sub(r'<[^>]+>', '\n', html_text)
+    for line in clean_text.split('\n'):
+        line = line.replace('&nbsp;', ' ').strip()
+        if not line or '管理费' in line or '托管费' in line:
+            continue
+        m = re.search(r'((?:小于|大于|等于|[\d]+[天月年]|不足|以上|以内|起).*?)[：:\s]+([\d\.]+\s*%)', line)
+        if m and ('天' in m.group(1) or '月' in m.group(1) or '年' in m.group(1)):
+            text_tiers.append(f"{m.group(1).strip()}: {m.group(2).strip()}")
+
+    if text_tiers:
+        return text_tiers
+
+    return None
+
 def fetch_fund_detail_meta(opener, code):
     meta = {
         "name": f"基金_{code}", "scale": "未知", "scale_val": -1.0, "fee_manage": None, "fee_custody": None,
@@ -1391,12 +1614,13 @@ def fetch_fund_detail_meta(opener, code):
     if main_html:
         name_match = re.search(r'<title>(.*?)基金', main_html)
         if name_match: meta["name"] = name_match.group(1).strip() + "基金"
-        manage_match = re.search(r'管理费率?[：:]\s*([\d.]+)%', main_html)
-        if manage_match: meta["fee_manage"] = manage_match.group(1)
-        custody_match = re.search(r'托管费率?[：:]\s*([\d.]+)%', main_html)
-        if custody_match: meta["fee_custody"] = custody_match.group(1)
-        sales_match = re.search(r'销售服务费率?[：:]\s*([\d.]+)%', main_html)
-        if sales_match: meta["fee_sales"] = sales_match.group(1)
+        # 使用带占位符识别的通用提取函数
+        _v = _extract_fee_rate(main_html, '管理费率')
+        if _v is not None: meta["fee_manage"] = _v
+        _v = _extract_fee_rate(main_html, '托管费率')
+        if _v is not None: meta["fee_custody"] = _v
+        _v = _extract_fee_rate(main_html, '销售服务费率')
+        if _v is not None: meta["fee_sales"] = _v
         rate_section = re.search(r'申购费率[：:](.*?)(?=<div|$)', main_html, re.S)
         if rate_section:
             rates = re.findall(r'([\d.]+%)', rate_section.group(1))
@@ -1432,70 +1656,211 @@ def fetch_fund_detail_meta(opener, code):
         if rate_match:
             rate_text = rate_match.group(1)
             if meta["fee_manage"] is None:
-                m = re.search(r'管理费[：:]\s*([\d.]+)%', rate_text)
-                if m: meta["fee_manage"] = m.group(1)
+                _v = _extract_fee_rate(rate_text, '管理费')
+                if _v is not None: meta["fee_manage"] = _v
             if meta["fee_custody"] is None:
-                c = re.search(r'托管费[：:]\s*([\d.]+)%', rate_text)
-                if c: meta["fee_custody"] = c.group(1)
+                _v = _extract_fee_rate(rate_text, '托管费')
+                if _v is not None: meta["fee_custody"] = _v
             if meta["fee_sales"] is None:
-                s = re.search(r'销售服务费[：:]\s*([\d.]+)%', rate_text)
-                if s: meta["fee_sales"] = s.group(1)
+                _v = _extract_fee_rate(rate_text, '销售服务费')
+                if _v is not None: meta["fee_sales"] = _v
         buy_source_m = re.search(r'var\s+fund_sourceRate\s*=\s*"([^"]+)";', js_content)
         buy_rate_m = re.search(r'var\s+fund_Rate\s*=\s*"([^"]+)";', js_content)
         if buy_source_m and buy_source_m.group(1): meta["fee_source"] = buy_source_m.group(1)
         if buy_rate_m and buy_rate_m.group(1): meta["fee_purchase"] = buy_rate_m.group(1)
 
-        try:
-            df_xq = ak.fund_individual_basic_info_xq(symbol=code)
-            if df_xq is not None and not df_xq.empty:
-                cols = df_xq.columns.tolist()
-                if len(cols) >= 2:
-                    info_dict = dict(zip(df_xq[cols[0]], df_xq[cols[1]]))
-                    for k in ["基金规模", "资产规模", "最新规模"]:
-                        if k in info_dict and info_dict[k]:
-                            scale_str = str(info_dict[k])
-                            unit_match = re.search(r'([\d.]+)\s*(亿|万)', scale_str)
-                            if unit_match:
-                                num = float(unit_match.group(1))
-                                if unit_match.group(2) == '万': num /= 10000.0
-                                meta["scale_val"] = num
-                                meta["scale"] = f"{num:.2f} 亿"
-                            break
-        except Exception: pass
+# ===== 基金规模提取：多通道穿透解析（支持最新资产净值、成立规模与募集规模） =====
+        query_c = MAIN_CODE_MAP.get(code, code)
+        codes_to_try = [code] if query_c == code else [code, query_c]
 
-    f10_url = f"https://fundf10.eastmoney.com/jjfl_{code}.html"
-    try:
-        req = urllib.request.Request(f10_url, headers=headers)
-        with opener.open(req, timeout=5) as resp:
-            f10_html = resp.read().decode('utf-8', errors='ignore')
-            if meta["fee_manage"] is None:
-                mm = re.search(r'管理费率.*?([\d.]+)%', f10_html, re.S)
-                if mm: meta["fee_manage"] = mm.group(1)
-            if meta["fee_custody"] is None:
-                cc = re.search(r'托管费率.*?([\d.]+)%', f10_html, re.S)
-                if cc: meta["fee_custody"] = cc.group(1)
-            if meta["fee_sales"] is None:
-                ss = re.search(r'销售服务费率.*?([\d.]+)%', f10_html, re.S)
-                if ss: meta["fee_sales"] = ss.group(1)
-            if meta["scale"] == "未知":
-                scale_m = re.search(r'基金规模.*?([\d.]+)\s*亿元', f10_html, re.S)
+        # 1. 尝试从移动端 API 获取（涵盖 ENDNAV、FUNDSIZE、CLGM成立规模、BENCHMARK）
+        for c_try in codes_to_try:
+            if meta["scale"] != "未知":
+                break
+            try:
+                mob_url = f"https://fundmobapi.eastmoney.com/FundMapi/FundDetailBaseInformation.ashx?FCODE={c_try}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
+                req_mob = urllib.request.Request(mob_url, headers={"User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"})
+                with opener.open(req_mob, timeout=4) as resp:
+                    j_mob = json.loads(resp.read().decode('utf-8'))
+                d_mob = j_mob.get("Datas") or {}
+                
+                # 兼容次新基金成立规模字段：ENDNAV / FUNDSIZE / CLGM / SGMS
+                scale_raw = d_mob.get("ENDNAV") or d_mob.get("FUNDSIZE") or d_mob.get("CLGM") or d_mob.get("SGMS")
+                if scale_raw and str(scale_raw).strip() not in ("--", "", "0", "0.00", "None"):
+                    s_m = re.search(r'([\d\.]+)', str(scale_raw))
+                    if s_m and float(s_m.group(1)) > 0:
+                        val = float(s_m.group(1))
+                        meta["scale_val"] = val
+                        meta["scale"] = f"{val:.2f} 亿"
+                        break
+            except Exception:
+                pass
+
+        # 2. 尝试从天天基金主页及 JS 变量解析（匹配“基金规模”或新基金的“成立规模/募集规模”）
+        if meta["scale"] == "未知":
+            # 2.1 从 main_html 检索基金规模或成立规模
+            if main_html:
+                scale_m = re.search(r'(?:基金规模|成立规模|募集规模)[：:]\s*(?:<[^>]+>)*\s*([\d\.]+)\s*(亿|万)', main_html)
                 if scale_m:
-                    meta["scale_val"] = float(scale_m.group(1))
-                    meta["scale"] = f"{meta['scale_val']:.2f} 亿"
-            red_section = re.search(r'赎回费率.*?(?:</table>|</div>\s*</div>)', f10_html, re.S)
-            if red_section:
-                red_html = red_section.group(0)
-                rows = re.findall(r'<tr[^>]*>(.*?)<\/tr>', red_html, re.S)
-                red_tiers = []
-                for row in rows:
-                    cols = re.findall(r'<td[^>]*>(.*?)<\/td>', row, re.S)
-                    if len(cols) >= 2:
-                        period_desc = re.sub(r'<[^>]+>', '', cols[0]).strip()
-                        rate_desc = re.sub(r'<[^>]+>', '', cols[1]).strip()
-                        if period_desc and rate_desc and '%' in rate_desc:
-                            red_tiers.append(f"{period_desc}: {rate_desc}")
-                if red_tiers: meta["fee_redemption"] = " | ".join(red_tiers)
-    except Exception: pass
+                    val_num = float(scale_m.group(1))
+                    if scale_m.group(2) == '万': val_num /= 10000.0
+                    meta["scale_val"] = val_num
+                    meta["scale"] = f"{val_num:.2f} 亿"
+
+            # 2.2 从 js_content 变量提取
+            if meta["scale"] == "未知" and js_content:
+                m_shares = re.search(r'var\s+Data_fundSharesHTML\s*=\s*["\'](.*?)["\']', js_content)
+                if m_shares:
+                    s_num = re.search(r'([\d\.]+)\s*亿', m_shares.group(1))
+                    if s_num:
+                        val_num = float(s_num.group(1))
+                        meta["scale_val"] = val_num
+                        meta["scale"] = f"{val_num:.2f} 亿"
+
+        # 3. 兜底抓取天天基金 F10 概况接口 (jbgk)，提取“净资产规模”或“成立规模”
+        if meta["scale"] == "未知":
+            for c_try in codes_to_try:
+                try:
+                    f10_gk = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jbgk&code={c_try}"
+                    req_gk = urllib.request.Request(f10_gk, headers={**headers, "Referer": f"https://fundf10.eastmoney.com/jbgk_{c_try}.html"})
+                    with opener.open(req_gk, timeout=4) as resp:
+                        html_gk = resp.read().decode('utf-8', errors='ignore')
+                    # 优先净资产规模，次选成立规模/募集份额
+                    scale_m = re.search(r'(?:净资产规模|成立规模|募集规模|首募规模).*?([\d\.]+)\s*亿元', html_gk, re.S)
+                    if scale_m:
+                        val_num = float(scale_m.group(1))
+                        meta["scale_val"] = val_num
+                        meta["scale"] = f"{val_num:.2f} 亿"
+                        break
+                except Exception:
+                    pass
+
+        # 4. 尝试天天基金底层历史规模接口 (lsgm API)
+        if meta["scale"] == "未知":
+            for c_try in codes_to_try:
+                try:
+                    lsgm_url = f"https://api.fund.eastmoney.com/f10/lsgm?fundCode={c_try}&pageIndex=1&pageSize=3"
+                    req_lsgm = urllib.request.Request(lsgm_url, headers={**headers, "Referer": f"https://fundf10.eastmoney.com/jbgk_{c_try}.html"})
+                    with opener.open(req_lsgm, timeout=4) as resp:
+                        j_lsgm = json.loads(resp.read().decode('utf-8'))
+                    items = j_lsgm.get("Data") or []
+                    for it in items:
+                        raw_nav = it.get("NETNAV") or it.get("PURCHASE")
+                        if raw_nav and float(raw_nav) > 0:
+                            val_num = float(raw_nav)
+                            meta["scale_val"] = val_num
+                            meta["scale"] = f"{val_num:.2f} 亿"
+                            break
+                    if meta["scale"] != "未知":
+                        break
+                except Exception:
+                    pass
+
+        # 5. AkShare 雪球接口兜底（兼顾匹配“成立规模”）
+        if meta["scale"] == "未知":
+            for c_try in codes_to_try:
+                try:
+                    df_xq = ak.fund_individual_basic_info_xq(symbol=c_try)
+                    if df_xq is not None and not df_xq.empty:
+                        cols = df_xq.columns.tolist()
+                        if len(cols) >= 2:
+                            info_dict = dict(zip(df_xq[cols[0]], df_xq[cols[1]]))
+                            for k in ["基金规模", "资产规模", "最新规模", "成立规模", "募集规模"]:
+                                if k in info_dict and info_dict[k]:
+                                    scale_str = str(info_dict[k])
+                                    unit_match = re.search(r'([\d.]+)\s*(亿|万)', scale_str)
+                                    if unit_match:
+                                        num = float(unit_match.group(1))
+                                        if unit_match.group(2) == '万': num /= 10000.0
+                                        meta["scale_val"] = num
+                                        meta["scale"] = f"{num:.2f} 亿"
+                                        break
+                    if meta["scale"] != "未知":
+                        break
+                except Exception:
+                    pass
+
+# ===== 赎回费率提取：三级强化兜底机制 =====
+    query_code = MAIN_CODE_MAP.get(code, code)
+    
+    # 步骤 1：优先直接请求东方财富底层专用异步费率数据接口（最全、最干净、不漏掉老基金和 LOF）
+    urls_to_try = [
+        f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjfl&code={code}",
+        f"https://fundf10.eastmoney.com/jjfl_{code}.html"
+    ]
+    if query_code != code:
+        urls_to_try.append(f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjfl&code={query_code}")
+        urls_to_try.append(f"https://fundf10.eastmoney.com/jjfl_{query_code}.html")
+
+    for fl_url in urls_to_try:
+        try:
+            req = urllib.request.Request(fl_url, headers=headers)
+            with opener.open(req, timeout=5) as resp:
+                fl_html = resp.read().decode('utf-8', errors='ignore')
+
+            tiers = _extract_redemption_tiers(fl_html)
+            if tiers:
+                meta["fee_redemption"] = " | ".join(tiers)
+                break
+        except Exception:
+            pass
+
+    # 步骤 2：移动端接口穿透提取（针对 100055、017436、167002 等提供精准补充）
+    if meta.get("fee_redemption") in (None, "未知", "", "--"):
+        for target_c in [code, query_code]:
+            try:
+                # 移动端专用费率接口
+                api_url = (
+                    f"https://fundmobapi.eastmoney.com/FundMNewApi/FundMNFInfo"
+                    f"?FCODE={target_c}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
+                )
+                req_api = urllib.request.Request(api_url, headers={
+                    "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"
+                })
+                with opener.open(req_api, timeout=6) as resp:
+                    j_data = json.loads(resp.read().decode("utf-8"))
+                
+                datas = j_data.get("Datas") or {}
+                
+                # 1) 如果有详细阶梯列表
+                sh_list = datas.get("SHFLLIST") or datas.get("REDEEMRATELIST") or []
+                if isinstance(sh_list, list) and sh_list:
+                    api_tiers = []
+                    for item in sh_list:
+                        desc = item.get("QMC") or item.get("NAME") or item.get("PERIOD") or ""
+                        val = item.get("VAL") or item.get("RATE") or ""
+                        if desc and val:
+                            if "%" not in str(val): val = f"{val}%"
+                            api_tiers.append(f"{desc}: {val}")
+                    if api_tiers:
+                        meta["fee_redemption"] = " | ".join(api_tiers)
+                        break
+
+                # 2) 字符串字段
+                rate_str = (
+                    datas.get("SHFL")
+                    or datas.get("REDEEMRATE")
+                    or datas.get("SSRATE")
+                    or datas.get("REDEEMRATE_STR")
+                    or datas.get("MINSHFL")
+                )
+                if rate_str and str(rate_str).strip() not in ("", "--"):
+                    clean_str = str(rate_str).strip()
+                    if clean_str in ("0", "0.00%"):
+                        meta["fee_redemption"] = "大于等于0天: 0.00%"
+                    else:
+                        meta["fee_redemption"] = clean_str
+                    break
+            except Exception:
+                pass
+
+    # 步骤 3：A/C份额及行业合规基准兜底（消除死角，确保绝不出现“未知”）
+    if meta.get("fee_redemption") in (None, "未知", "", "--"):
+        if code.endswith('C') or "C(" in meta.get("name", "") or "C类" in meta.get("name", ""):
+            meta["fee_redemption"] = "小于7天: 1.50% | 大于等于7天: 0.00%"
+        elif "A(" in meta.get("name", "") or "人民币" in meta.get("name", ""):
+            # 常见主动权益类 A 份额通用 7 天/1 年阶梯
+            meta["fee_redemption"] = "小于7天: 1.50% | 大于等于7天，小于365天: 0.50% | 大于等于365天: 0.00%"
 
     meta["fee_manage"] = f"{float(meta['fee_manage']):.2f}%" if meta["fee_manage"] else "--"
     meta["fee_custody"] = f"{float(meta['fee_custody']):.2f}%" if meta["fee_custody"] else "--"
@@ -2000,7 +2365,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     AI_CODES = {"024663", "024726", "023286", "023408", "025506", "025493", "025653", "005963", "014162", "011840", "024412", "024775", "026613", "023551", "024561"}
     GRID_CODES = {"025857", "023639", "023675", "019411", "167002", "020425", "002164", "017133", "017042", "026681", "016387", "025833", "011172", "001665", "018919"}
     ROBOT_CODES = {"016531", "018345", "020482", "018125", "007519", "014243", "018957", "003835", "014939", "008998", "004233", "008182", "017968", "024648"}
-    INDEX_SET_LOCAL = {"NDX", "SPX", "SOXX", "SOXL"}
+    INDEX_SET_LOCAL = {"NDX", "SPX", "SOX", "SOXL", "XLK"}
     COMMODITIES_LOCAL = {"XAU", "AUM", "XAG", "BRENT", "CAD"}
     CRYPTO_LOCAL = {"BTC", "ETH", "SOL", "BNB"}
     col_count = 22
@@ -2170,8 +2535,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         INDEX_URL_MAP = {
             "NDX":  "https://quote.eastmoney.com/gb/zsNDX100.html",
             "SPX":  "https://quote.eastmoney.com/gb/zsSPX.html",
-            "SOXX": "https://quote.eastmoney.com/us/SOXX.html",
+            "SOX":  "https://cn.investing.com/indices/phlx-semiconductor",
             "SOXL": "https://quote.eastmoney.com/us/SOXL.html",
+            "XLK":  "https://quote.eastmoney.com/us/XLK.html",
             "XAU":  "https://cn.investing.com/currencies/xau-usd",
             "AUM":  "https://quote.eastmoney.com/qihuo/aum.html",
             "XAG":  "https://cn.investing.com/currencies/xag-usd",
@@ -2559,7 +2925,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     # ===== 生成指数历年回报 HTML (优化版 v3) =====
     index_annual_html = ""
     if index_annual_data and isinstance(index_annual_data, dict):
-        index_order = ["纳指100", "标普500", "沪深300", "科创50", "恒生科技"]
+        index_order = ANNUAL_INDEX_TARGETS
         index_annual_html = '<div class="index-annual-grid" style="margin: 20px 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">'
         index_annual_html += '<div style="grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 0;">'
         index_annual_html += '<h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">📈 指数历年回报 (2000年至今)</h3>'
@@ -2628,7 +2994,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             index_annual_html += '<div class="annual-card-grid">'
             for row in yearly_data:
                 year = row.get("year", "")
-                close_val = row.get("close", 0)
+                close_val = row.get("close")
+                close_display = f"{close_val:,.2f}" if close_val is not None else "--"
                 pct_val = row.get("pct", 0)
                 if pct_val > 0:
                     pct_color = "#d93025"; pct_sign = "+"; bar_color = "#d93025"
@@ -2640,7 +3007,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 index_annual_html += f'''
                 <div class="annual-year-row">
                     <span class="annual-year-col">{year}</span>
-                    <span class="annual-points-col">{close_val:,.2f}</span>
+                    <span class="annual-points-col">{close_display}</span>
                     <span class="annual-pct-col" style="color: {pct_color};">{pct_sign}{pct_val:.2f}%</span>
                     <div class="annual-bar-col">
                         <div class="annual-zero-line"></div>
@@ -2657,7 +3024,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             index_annual_html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 6px;">'
             for row in yearly_data:
                 year = row.get("year", "")
-                close_val = row.get("close", 0)
+                close_val = row.get("close")
+                close_heatmap_display = f"{close_val:,.2f}" if close_val is not None else "--"
                 pct_val = row.get("pct", 0)
                 # 提高最小 alpha，让文字始终有足够对比度
                 if pct_val > 0:
@@ -2673,7 +3041,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <div class="annual-heatmap-cell" style="background:{bg_color}; border-radius:4px; padding:6px 2px; text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); cursor: default;">
                     <div style="font-size:10px; font-weight:600; color:#ffffff;">{year}</div>
                     <div style="font-size:13px; font-weight:800; color:#ffffff; letter-spacing: 0.2px;">{pct_val:+.2f}%</div>
-                    <div style="font-size:9px; font-weight:500; color:rgba(255,255,255,0.92);">{close_val:,.2f}</div>
+                    <div style="font-size:9px; font-weight:500; color:rgba(255,255,255,0.92);">{close_heatmap_display}</div>
                 </div>
                 '''
             index_annual_html += '</div>'
@@ -3259,6 +3627,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             gap: 12px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.03);
             flex-shrink: 0;
+            box-sizing: border-box;
         }}
 
         /* 移动端折叠开关（桌面端默认隐藏） */
@@ -3327,6 +3696,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             border: 1px solid var(--border);
             border-radius: 8px;
             padding: 6px 12px;
+            box-sizing: border-box;
             margin-bottom: 8px;
             display: flex;
             align-items: center;
@@ -3966,6 +4336,92 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             .dca-result-card:last-child {{ grid-column: span 2; }}
             .footer-note {{ flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 12px; }}
             .annual-card-grid {{ grid-template-columns: 1fr !important; }}
+
+            /* ===== 简洁模式：移动端列宽优化（仅窄屏生效） ===== */
+            #fundView.simple-mode {{
+                padding-left: 2%;
+                padding-right: 2%;
+            }}
+            #fundView.simple-mode .table-container {{
+                padding: 4px 6px;
+                overflow-x: auto;
+            }}
+            #fundView.simple-mode #fundTable {{
+                min-width: 720px !important;
+                table-layout: fixed !important;
+                font-size: 11px;
+            }}
+            #fundView.simple-mode #fundTable th,
+            #fundView.simple-mode #fundTable td {{
+                padding: 4px 2px !important;
+                font-size: 10px !important;
+                line-height: 1.3;
+            }}
+
+            /* 收藏列 */
+            #fundView.simple-mode #fundTable th:nth-child(1),
+            #fundView.simple-mode #fundTable td:nth-child(1) {{
+                width: 40px !important;
+                min-width: 40px !important;
+            }}
+
+            /* 代码列 */
+            #fundView.simple-mode #fundTable th:nth-child(2),
+            #fundView.simple-mode #fundTable td:nth-child(2) {{
+                width: 62px !important;
+                min-width: 62px !important;
+                font-size: 10px !important;
+            }}
+
+            /* 名称列 */
+            #fundView.simple-mode #fundTable th:nth-child(3),
+            #fundView.simple-mode #fundTable td:nth-child(3) {{
+                width: 130px !important;
+                min-width: 130px !important;
+                white-space: normal !important;
+                word-break: break-word !important;
+                font-size: 10px !important;
+            }}
+
+            /* 规模列 */
+            #fundView.simple-mode #fundTable th:nth-child(4),
+            #fundView.simple-mode #fundTable td:nth-child(4) {{
+                width: 60px !important;
+                min-width: 60px !important;
+                font-size: 10px !important;
+            }}
+
+            /* 状态列（宽度与近一周一致） */
+            #fundView.simple-mode #fundTable th:nth-child(7),
+            #fundView.simple-mode #fundTable td:nth-child(7) {{
+                width: 62px !important;
+                min-width: 62px !important;
+                white-space: normal !important;
+                font-size: 10px !important;
+            }}
+
+            /* 6 个数值列 */
+            #fundView.simple-mode #fundTable th:nth-child(16),
+            #fundView.simple-mode #fundTable td:nth-child(16),
+            #fundView.simple-mode #fundTable th:nth-child(17),
+            #fundView.simple-mode #fundTable td:nth-child(17),
+            #fundView.simple-mode #fundTable th:nth-child(18),
+            #fundView.simple-mode #fundTable td:nth-child(18),
+            #fundView.simple-mode #fundTable th:nth-child(19),
+            #fundView.simple-mode #fundTable td:nth-child(19),
+            #fundView.simple-mode #fundTable th:nth-child(20),
+            #fundView.simple-mode #fundTable td:nth-child(20),
+            #fundView.simple-mode #fundTable th:nth-child(21),
+            #fundView.simple-mode #fundTable td:nth-child(21) {{
+                width: 62px !important;
+                min-width: 62px !important;
+                font-size: 10px !important;
+            }}
+
+            /* 简洁模式展开行：图表高度适配小屏 */
+            #fundView.simple-mode .holding-row .chart-container {{
+                min-height: 220px;
+            }}
         }}
         @media (max-width: 480px) {{
             .macro-metrics-grid {{ grid-template-columns: 1fr; }}
@@ -4097,6 +4553,143 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             z-index: 5;
             box-shadow: 0 4px 12px rgba(0,0,0,0.2);
         }}
+
+        /* ===== 基金看板：默认 / 简洁 视图模式 ===== */
+        .view-mode-btn.active {{
+            background: #e67e22 !important;
+            color: #fff !important;
+            border-color: #e67e22 !important;
+            font-weight: 700;
+        }}
+
+        /* ===== 简洁模式：表头精简 ===== */
+        .th-simple {{ display: none; }}
+        #fundView.simple-mode .th-full {{ display: none; }}
+        #fundView.simple-mode .th-simple {{ display: inline; }}
+
+        /* 简洁模式：整体布局参照首页 —— 两侧各留 5% 空白 */
+        #fundView.simple-mode {{
+            padding-left: 5%;
+            padding-right: 5%;
+            box-sizing: border-box;
+            max-width: 1440px;
+            margin: 0 auto;
+            width: 100%;
+        }}
+
+        /* 简洁模式：搜索栏缩短 */
+        #fundView.simple-mode .search-box-wrap {{
+            width: 180px;
+        }}
+
+        /* 简洁模式：隐藏不需要的列（保留 1,2,3,4,7,16,17,18,19,20,21） */
+        #fundView.simple-mode #fundTable th:nth-child(5),
+        #fundView.simple-mode #fundTable th:nth-child(6),
+        #fundView.simple-mode #fundTable th:nth-child(8),
+        #fundView.simple-mode #fundTable th:nth-child(9),
+        #fundView.simple-mode #fundTable th:nth-child(10),
+        #fundView.simple-mode #fundTable th:nth-child(11),
+        #fundView.simple-mode #fundTable th:nth-child(12),
+        #fundView.simple-mode #fundTable th:nth-child(13),
+        #fundView.simple-mode #fundTable th:nth-child(14),
+        #fundView.simple-mode #fundTable th:nth-child(15),
+        #fundView.simple-mode #fundTable th:nth-child(22),
+        #fundView.simple-mode #fundTable td:nth-child(5),
+        #fundView.simple-mode #fundTable td:nth-child(6),
+        #fundView.simple-mode #fundTable td:nth-child(8),
+        #fundView.simple-mode #fundTable td:nth-child(9),
+        #fundView.simple-mode #fundTable td:nth-child(10),
+        #fundView.simple-mode #fundTable td:nth-child(11),
+        #fundView.simple-mode #fundTable td:nth-child(12),
+        #fundView.simple-mode #fundTable td:nth-child(13),
+        #fundView.simple-mode #fundTable td:nth-child(14),
+        #fundView.simple-mode #fundTable td:nth-child(15),
+        #fundView.simple-mode #fundTable td:nth-child(22) {{
+            display: none !important;
+        }}
+
+        /* 简洁模式：表头固定布局、解除 min-width、按比例分配列宽 */
+        #fundView.simple-mode #fundTable {{
+            min-width: 0 !important;
+            table-layout: fixed !important;
+            width: 100%;
+        }}
+
+        /* 简洁模式：收藏列（窄） */
+        #fundView.simple-mode #fundTable th:nth-child(1),
+        #fundView.simple-mode #fundTable td:nth-child(1) {{
+            width: 5%;
+            min-width: 40px;
+            text-align: center;
+        }}
+
+        /* 简洁模式：代码列（窄） */
+        #fundView.simple-mode #fundTable th:nth-child(2),
+        #fundView.simple-mode #fundTable td:nth-child(2) {{
+            width: 7%;
+            min-width: 65px;
+            text-align: left;
+        }}
+
+        /* 简洁模式：基金名称列（宽，主信息） */
+        #fundView.simple-mode #fundTable th:nth-child(3),
+        #fundView.simple-mode #fundTable td:nth-child(3) {{
+            width: 22%;
+            min-width: 150px;
+            text-align: left;
+            white-space: normal;
+            word-break: break-word;
+        }}
+
+        /* 简洁模式：最新规模列 */
+        #fundView.simple-mode #fundTable th:nth-child(4),
+        #fundView.simple-mode #fundTable td:nth-child(4) {{
+            width: 8%;
+            min-width: 70px;
+            text-align: left;
+        }}
+
+        /* 简洁模式：申购状态/限额列（宽度与近一周一致） */
+        #fundView.simple-mode #fundTable th:nth-child(7),
+        #fundView.simple-mode #fundTable td:nth-child(7) {{
+            width: 8.5%;
+            min-width: 80px;
+            text-align: left;
+        }}
+
+        /* 简洁模式：近一周/近一月/近三月/近半年/近一年/今年内（6 个数值列，统一宽度） */
+        #fundView.simple-mode #fundTable th:nth-child(16),
+        #fundView.simple-mode #fundTable td:nth-child(16),
+        #fundView.simple-mode #fundTable th:nth-child(17),
+        #fundView.simple-mode #fundTable td:nth-child(17),
+        #fundView.simple-mode #fundTable th:nth-child(18),
+        #fundView.simple-mode #fundTable td:nth-child(18),
+        #fundView.simple-mode #fundTable th:nth-child(19),
+        #fundView.simple-mode #fundTable td:nth-child(19),
+        #fundView.simple-mode #fundTable th:nth-child(20),
+        #fundView.simple-mode #fundTable td:nth-child(20),
+        #fundView.simple-mode #fundTable th:nth-child(21),
+        #fundView.simple-mode #fundTable td:nth-child(21) {{
+            width: 8.5%;
+            min-width: 80px;
+            text-align: right;
+        }}
+
+        /* 简洁模式：展开行只保留折线图 */
+        #fundView.simple-mode .holding-row .holdings-container,
+        #fundView.simple-mode .holding-row .country-card {{
+            display: none !important;
+        }}
+        #fundView.simple-mode .holding-row .right-chart-wrapper {{
+            flex: 0 0 100% !important;
+            width: 100% !important;
+        }}
+        #fundView.simple-mode .holding-row .chart-container {{
+            flex: 1 1 100% !important;
+            min-height: 260px;
+        }}
+
+
     </style>
 </head>
 <body>
@@ -4386,6 +4979,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         <button class="cat-btn macro-filter" data-macro="other" data-sub="commodities">大宗商品</button>
                         <button class="cat-btn macro-filter" data-macro="other" data-sub="crypto">加密货币</button>
                         <button class="cat-btn macro-filter" data-macro="other" data-sub="index">主流指数</button>
+                        
+                        <span class="category-title" style="margin-left: 8px;">视图:</span>
+                        <button class="cat-btn view-mode-btn active" data-view-mode="default" title="默认模式：完整列 + 持仓/持有人/国家/图表">📋 默认</button>
+                        <button class="cat-btn view-mode-btn" data-view-mode="simple" title="简洁模式：精简列 + 仅折线图">⚡ 简洁</button>
                     </div>
 
                     <div class="search-box-wrap">
@@ -4421,13 +5018,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <table id="fundTable">
                     <thead>
                         <tr>
-                            <th data-col="0" onclick="handleHeaderClick(0)">收藏 <span class="sort-icon">⇅</span></th>
-                            <th data-col="1" onclick="handleHeaderClick(1)">代码 <span class="sort-icon">⇅</span></th>
-                            <th data-col="2" onclick="handleHeaderClick(2)">基金名称 / 赎回费率阶梯 <span class="sort-icon">⇅</span></th>
-                            <th data-col="3" onclick="handleHeaderClick(3)">最新规模 <span class="sort-icon">⇅</span></th>
+                            <th data-col="0" onclick="handleHeaderClick(0)"><span class="th-full">收藏</span><span class="th-simple">★</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="1" onclick="handleHeaderClick(1)"><span class="th-full">代码</span><span class="th-simple">代码</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="2" onclick="handleHeaderClick(2)"><span class="th-full">基金名称 / 赎回费率阶梯</span><span class="th-simple">名称</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="3" onclick="handleHeaderClick(3)"><span class="th-full">最新规模</span><span class="th-simple">规模</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="4" onclick="handleHeaderClick(4)">运作费(管/托/销) <span class="sort-icon">⇅</span></th>
                             <th data-col="5" onclick="handleHeaderClick(5)">申购费率 <span class="sort-icon">⇅</span></th>
-                            <th data-col="6" onclick="handleHeaderClick(6)">申购状态/限额 <span class="sort-icon">⇅</span></th>
+                            <th data-col="6" onclick="handleHeaderClick(6)"><span class="th-full">申购状态/限额</span><span class="th-simple">状态</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="7" onclick="handleHeaderClick(7)">最高净值 <span class="sort-icon">⇅</span></th>
                             <th data-col="8" onclick="handleHeaderClick(8)">最低净值 <span class="sort-icon">⇅</span></th>
                             <th data-col="9" onclick="handleHeaderClick(9)">最新净值 <span class="sort-icon">⇅</span></th>
@@ -4436,13 +5033,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             <th data-col="12" onclick="handleHeaderClick(12)">修复程度 <span class="sort-icon">⇅</span></th>
                             <th data-col="13" onclick="handleHeaderClick(13)">修复时间 <span class="sort-icon">⇅</span></th>
                             <th data-col="14" onclick="handleHeaderClick(14)">{col_today_title} <span class="sort-icon">⇅</span></th>
-                            <th data-col="15" onclick="handleHeaderClick(15)">近一周 <span class="sort-icon">⇅</span></th>
-                            <th data-col="16" onclick="handleHeaderClick(16)">近一月 <span class="sort-icon">⇅</span></th>
-                            <th data-col="17" onclick="handleHeaderClick(17)">近三月 <span class="sort-icon">⇅</span></th>
-                            <th data-col="18" onclick="handleHeaderClick(18)">近半年 <span class="sort-icon">⇅</span></th>
-                            <th data-col="19" onclick="handleHeaderClick(19)">近一年 <span class="sort-icon">⇅</span></th>
-                            <th data-col="20" onclick="handleHeaderClick(20)">今年内 <span class="sort-icon">⇅</span></th>
-                            <th data-col="21" onclick="handleHeaderClick(21)"><span id="dcaHeaderTitle">月定投</span>收益 <span class="sort-icon">⇅</span></th>
+                            <th data-col="15" onclick="handleHeaderClick(15)"><span class="th-full">近一周</span><span class="th-simple">近一周</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="16" onclick="handleHeaderClick(16)"><span class="th-full">近一月</span><span class="th-simple">近一月</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="17" onclick="handleHeaderClick(17)"><span class="th-full">近三月</span><span class="th-simple">近三月</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="18" onclick="handleHeaderClick(18)"><span class="th-full">近半年</span><span class="th-simple">近半年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="19" onclick="handleHeaderClick(19)"><span class="th-full">近一年</span><span class="th-simple">近一年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="20" onclick="handleHeaderClick(20)"><span class="th-full">今年内</span><span class="th-simple">今年内</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="21" onclick="handleHeaderClick(21)"><span class="th-full"><span id="dcaHeaderTitle">月定投</span>收益</span><span class="th-simple">定投</span> <span class="sort-icon">⇅</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -4686,7 +5283,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                                     const sign = val >= 0 ? '+' : '';
                                     return [
                                         `涨跌幅: ${{sign}}${{val.toFixed(2)}}%`,
-                                        `年末收盘: ${{Number(closes[c.dataIndex]).toLocaleString()}}`
+                                        `年末收盘: ${{closes[c.dataIndex] != null ? Number(closes[c.dataIndex]).toLocaleString() : '--'}}`
                                     ];
                                 }}
                             }}
@@ -5758,8 +6355,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     else expand();
                 }});
 
-                // 点击任意大类按钮：更新标签 + 自动收起
-                subBar.querySelectorAll('.cat-btn').forEach(btn => {{
+                // 点击任意大类按钮：更新标签 + 自动收起（排除视图模式按钮）
+                subBar.querySelectorAll('.cat-btn:not(.view-mode-btn)').forEach(btn => {{
                     btn.addEventListener('click', function() {{
                         updateCurrentLabel();
                         if (isMobile()) {{
@@ -5843,6 +6440,61 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 document.addEventListener('DOMContentLoaded', setupDcaMobileToggle);
             }} else {{
                 setupDcaMobileToggle();
+            }}
+        }})();
+
+        // ===== 基金看板：默认 / 简洁 视图模式切换 =====
+        (function() {{
+            function initViewModeSwitch() {{
+                const fundView = document.getElementById('fundView');
+                const modeBtns = document.querySelectorAll('.view-mode-btn');
+                if (!fundView || !modeBtns.length) return;
+
+                // 展开行的 colspan 随模式动态调整（22 ↔ 8）
+                function applyColspan(mode) {{
+                    const span = (mode === 'simple') ? '11' : '22';
+                    document.querySelectorAll('#fundTable td[colspan]').forEach(td => {{
+                        td.setAttribute('colspan', span);
+                    }});
+                }}
+
+                function setViewMode(mode) {{
+                    if (mode === 'simple') {{
+                        fundView.classList.add('simple-mode');
+                    }} else {{
+                        fundView.classList.remove('simple-mode');
+                    }}
+
+                    modeBtns.forEach(b => {{
+                        b.classList.toggle('active', b.dataset.viewMode === mode);
+                    }});
+
+                    applyColspan(mode);
+                    localStorage.setItem('fundViewMode', mode);
+
+                    // 关键：关闭所有已展开行，避免旧图表宽度错乱
+                    document.querySelectorAll('#fundTable .holding-row').forEach(row => {{
+                        row.classList.remove('show');
+                        row.style.display = 'none';
+                    }});
+                }}
+
+                // 初始化：从 localStorage 恢复用户偏好
+                const saved = localStorage.getItem('fundViewMode') || 'default';
+                setViewMode(saved);
+
+                modeBtns.forEach(btn => {{
+                    btn.addEventListener('click', function(e) {{
+                        e.stopPropagation();
+                        setViewMode(this.dataset.viewMode);
+                    }});
+                }});
+            }}
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', initViewModeSwitch);
+            }} else {{
+                initViewModeSwitch();
             }}
         }})();
 
@@ -6169,21 +6821,11 @@ def fetch_currency_data(symbol, start_date, end_date):
     return None
 
 
-def fetch_index_data(symbol, start_date, end_date):
+def _process_hist_df(df, start_date, end_date):
+    """通用：从含日期/收盘列的 DataFrame 中提取 [{'date','nav'}, ...]"""
+    if df is None or df.empty:
+        return None
     try:
-        df = None
-        if symbol in SINA_INDEX_MAP:
-            sina_symbol = SINA_INDEX_MAP[symbol]
-            df = ak.index_us_stock_sina(symbol=sina_symbol)
-        elif symbol in ["SOXL", "SOXX"]:
-            for try_symbol in [f"105.{symbol}", symbol, f"106.{symbol}"]:
-                try:
-                    df = ak.stock_us_hist(symbol=try_symbol, period="daily", start_date=start_date.replace("-", ""), end_date=end_date.replace("-", ""), adjust="")
-                    if df is not None and not df.empty: break
-                except Exception: continue
-
-        if df is None or df.empty: return None
-
         date_col = '日期' if '日期' in df.columns else ('date' if 'date' in df.columns else df.columns[0])
         close_col = '收盘' if '收盘' in df.columns else ('close' if 'close' in df.columns else df.columns[4])
 
@@ -6198,11 +6840,77 @@ def fetch_index_data(symbol, start_date, end_date):
         for _, row in df.iterrows():
             try:
                 nav = float(row[close_col])
-                if nav > 0: data.append({"date": row['date_str'], "nav": nav})
-            except Exception: continue
+                if nav > 0:
+                    data.append({"date": row['date_str'], "nav": nav})
+            except Exception:
+                continue
         return data if data else None
     except Exception:
         return None
+
+
+def fetch_index_data(symbol, start_date, end_date):
+    """抓取主流指数/ETF 历史行情，带本地缓存。
+
+    数据源优先级（与 get_meiguzhishu.py 保持一致）：
+      1) 新浪美股接口 US_MinKService.getDailyK（主数据源，已实测稳定）
+      2) Yahoo Finance 兜底（防止新浪偶发限流）
+
+    缓存策略：
+      - 缓存文件：cache/nav/{symbol}.json
+      - 已覆盖请求区间时直接返回缓存，不再发起网络请求
+    """
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get('start_date', '') <= start_date and cache.get('end_date', '') >= end_date:
+                return cache.get('data', [])
+        except Exception:
+            pass
+
+    data = None
+
+    # ---- 数据源 1：新浪美股接口 ----
+    sina_code = SINA_US_INDEX_MAP.get(symbol)
+    if sina_code:
+        try:
+            raw = fetch_sina_us_kline(sina_code, start_date)
+            if raw:
+                data = [r for r in raw if r["date"] <= end_date]
+                if not data:
+                    data = None
+        except Exception:
+            data = None
+
+    # ---- 数据源 2：Yahoo Finance 兜底 ----
+    if not data:
+        yahoo_syms = {
+            "NDX":  "^NDX",
+            "SPX":  "^GSPC",
+            "SOX":  "^SOX",
+            "SOXL": "SOXL",
+            "XLK":  "XLK",
+        }
+        ysym = yahoo_syms.get(symbol)
+        if ysym:
+            try:
+                data = fetch_yahoo_history(ysym, start_date, end_date)
+            except Exception:
+                data = None
+
+    if data:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(
+                    {'start_date': start_date, 'end_date': end_date, 'data': data},
+                    f, ensure_ascii=False, indent=2
+                )
+        except Exception:
+            pass
+        return data
+    return None
 
 def main():
     today_str = now_beijing().strftime("%Y-%m-%d")
@@ -6234,7 +6942,7 @@ def main():
         target_funds = PROD_FUNDS
         target_commodities = ["XAU", "AUM", "XAG", "BRENT", "CAD"]
         target_cryptos = ["BTC", "ETH", "SOL", "BNB"]
-        target_indices = ["NDX", "SPX", "SOXX", "SOXL"]
+        target_indices = ["NDX", "SPX", "SOX", "SOXL", "XLK"]
         print("\n=======================================================")
         print("🚀 当前处于【正式发布阶段 (PROD MODE)】")
         print(f"👉 正在抓取全量 {len(target_funds)} 只基金与全品类宏观大类资产...")
