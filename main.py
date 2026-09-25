@@ -188,6 +188,123 @@ os.makedirs(COUNTRY_CACHE_DIR, exist_ok=True)
 
 _THREAD_LOCAL = threading.local()
 
+# ==============================================================================
+# F10 专用：线程级 Session + 全局限速器 + 重试/514 退避 + 本地缓存
+# ==============================================================================
+import threading as _threading
+
+# --- 1. 线程级 Session（连接池复用） ---
+def _get_f10_session():
+    if not hasattr(_THREAD_LOCAL, "f10_session"):
+        _s = requests.Session()
+        _adapter = HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=0,
+            pool_block=False,
+        )
+        _s.mount("https://", _adapter)
+        _s.mount("http://", _adapter)
+        _s.trust_env = False
+        _THREAD_LOCAL.f10_session = _s
+    return _THREAD_LOCAL.f10_session
+
+
+# --- 2. 全局令牌桶限速器（所有线程共享） ---
+class _RateLimiter:
+    """控制每秒最多发出 rate 个请求，允许 burst 个瞬时突发。"""
+    def __init__(self, rate=1.2, burst=2):
+        self.rate = rate
+        self.capacity = burst
+        self.tokens = float(burst)
+        self.lock = _threading.Lock()
+        self.last = time.monotonic()
+
+    def acquire(self, timeout=60):
+        deadline = time.monotonic() + timeout
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                self.tokens = min(
+                    self.capacity,
+                    self.tokens + (now - self.last) * self.rate,
+                )
+                self.last = now
+                if self.tokens >= 1:
+                    self.tokens -= 1
+                    return True
+                wait = (1 - self.tokens) / self.rate
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(min(wait, 0.8))
+
+
+_F10_LIMITER = _RateLimiter(rate=1.2, burst=2)
+_F10_CACHE_DIR = os.path.join(CACHE_DIR, "f10")
+os.makedirs(_F10_CACHE_DIR, exist_ok=True)
+
+
+# --- 3. 底层抓取：限速 + 514 专属退避 + 普通重试 ---
+def _fetch_f10_html(url, max_retries=4, timeout=15):
+    sess = _get_f10_session()
+    headers = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": url,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Connection": "keep-alive",
+    }
+
+    last_exc = None
+    for attempt in range(max_retries):
+        # 发请求前先拿令牌（全局共享）
+        if not _F10_LIMITER.acquire(timeout=60):
+            raise TimeoutError(f"限速器等待超时: {url}")
+
+        try:
+            r = sess.get(url, headers=headers, timeout=timeout)
+
+            # 514：频率限制，走长退避，不 raise
+            if r.status_code == 514:
+                last_exc = requests.HTTPError(f"514 Frequency Capped: {url}")
+                backoff = [5, 12, 25, 45][min(attempt, 3)]
+                time.sleep(backoff + random.random() * 2)
+                continue
+
+            r.raise_for_status()
+            return r.text
+
+        except requests.HTTPError as e:
+            last_exc = e
+            time.sleep(1.5 * (attempt + 1) + random.random())
+        except Exception as e:
+            last_exc = e
+            time.sleep(1.0 * (attempt + 1) + random.random() * 0.5)
+
+    raise last_exc
+
+
+# --- 4. 带本地缓存的包装（7 天有效） ---
+def _fetch_f10_html_cached(code, url):
+    cache_file = os.path.join(_F10_CACHE_DIR, f"{code}.html")
+    if os.path.exists(cache_file):
+        try:
+            if time.time() - os.path.getmtime(cache_file) < 7 * 86400:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached = f.read()
+                if cached and "管理费" in cached:
+                    return cached
+        except Exception:
+            pass
+
+    html = _fetch_f10_html(url)
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            f.write(html)
+    except Exception:
+        pass
+    return html
+# ==============================================================================
 # ================= requests.Session 包装器：复用连接，兼容 urllib 风格 =================
 class _RespWrapper:
     """把 requests.Response 包装成 urllib 风格的响应对象。"""
@@ -1995,6 +2112,7 @@ def fetch_fund_detail_meta(opener, code):
             break
         try:
             f10_url = f"https://fundf10.eastmoney.com/jjfl_{_c}.html"
+            f10_html = _fetch_f10_html_cached(_c, f10_url)
             r = requests.get(f10_url, headers={
                 "User-Agent": DEFAULT_HEADERS["User-Agent"],
                 "Referer": f10_url,
@@ -7359,7 +7477,7 @@ def main():
             return code, meta["name"], res
         return code, meta["name"], None
 
-    max_workers = 12 if is_debug else 25            # ★ 原 3 / 10
+    max_workers = 8 if is_debug else 12
     print(f"⚙️ 启用多线程并发抓取 (并发数: {max_workers}) ...")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(process_single_fund, code) for code in target_funds]
