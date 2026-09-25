@@ -709,6 +709,103 @@ def fetch_index_annual_data():
 
         return records
 
+    def _fetch_kc50_final():
+        """抓取科创50指数（000688）历史日线。多源兜底：
+        1) 腾讯财经港股/沪市通用 K 线接口
+        2) 东方财富 push2his 接口
+        3) 新浪财经 K 线接口
+        """
+        records = []
+
+        # ---------- 方案 A：腾讯财经 ----------
+        try:
+            url_tx = (
+                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+                "?param=sh000688,day,,,2000,qfq"
+            )
+            req_tx = urllib.request.Request(
+                url_tx,
+                headers={**DEFAULT_HEADERS, "Referer": "https://gu.qq.com/"}
+            )
+            with _opener.open(req_tx, timeout=8) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                data_node = res.get("data", {}).get("sh000688", {})
+                kline_list = data_node.get("day") or data_node.get("qfqday", [])
+                for k in kline_list:
+                    if len(k) >= 3:
+                        records.append({
+                            "date": k[0],
+                            "open": float(k[1]),
+                            "close": float(k[2])
+                        })
+            if records:
+                records.sort(key=lambda x: x["date"])
+                print(f"    ✅ 科创50: 腾讯财经 {len(records)} 条")
+                return records
+        except Exception as e:
+            print(f"    ⚠️ 科创50 腾讯财经异常: {e}")
+
+        # ---------- 方案 B：东方财富 push2his ----------
+        records = []
+        try:
+            url_em = (
+                "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+                "?secid=1.000688"
+                "&fields1=f1,f2,f3,f4,f5,f6"
+                "&fields2=f51,f52,f53,f54,f55,f56"
+                "&klt=101&fqt=1&end=20500101&lmt=2000"
+            )
+            req_em = urllib.request.Request(url_em, headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+                "Referer": "https://quote.eastmoney.com/"
+            })
+            with _opener.open(req_em, timeout=8) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+                lines = (raw.get("data") or {}).get("klines", [])
+                for line in lines:
+                    parts = line.split(",")
+                    if len(parts) >= 3:
+                        records.append({
+                            "date": parts[0],
+                            "open": float(parts[1]),
+                            "close": float(parts[2])
+                        })
+            if records:
+                records.sort(key=lambda x: x["date"])
+                print(f"    ✅ 科创50: 东方财富 {len(records)} 条")
+                return records
+        except Exception as e:
+            print(f"    ⚠️ 科创50 东方财富异常: {e}")
+
+        # ---------- 方案 C：新浪财经 ----------
+        records = []
+        try:
+            url_sina = (
+                "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                "CN_MarketData.getKLineData?symbol=sh000688&scale=240&ma=no&datalen=2000"
+            )
+            req_sina = urllib.request.Request(
+                url_sina,
+                headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"}
+            )
+            with _opener.open(req_sina, timeout=8) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+                data = json.loads(raw)
+                for item in data:
+                    records.append({
+                        "date": item["day"],
+                        "open": float(item["open"]),
+                        "close": float(item["close"])
+                    })
+            if records:
+                records.sort(key=lambda x: x["date"])
+                print(f"    ✅ 科创50: 新浪财经 {len(records)} 条")
+                return records
+        except Exception as e:
+            print(f"    ⚠️ 科创50 新浪财经异常: {e}")
+
+        return []
+
     def _fetch_sox_annual_returns():
         """从 historyofmarket.com 获取费城半导体指数(SOX)历年回报。
 
@@ -798,7 +895,7 @@ def fetch_index_annual_data():
         },
         {
             "name": "科创50", "ticker": "000688",
-            "fetcher": lambda: _fetch_sohu_index("zs_000688")
+            "fetcher": lambda: _fetch_kc50_final()
         },
         {
             "name": "恒生科技", "ticker": "HSTECH",
