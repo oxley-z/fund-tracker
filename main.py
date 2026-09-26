@@ -214,12 +214,14 @@ HOLDINGS_CACHE_DIR = os.path.join(CACHE_DIR, "holdings")
 NAV_CACHE_DIR = os.path.join(CACHE_DIR, "nav")
 HOLDER_CACHE_DIR = os.path.join(CACHE_DIR, "holder")
 COUNTRY_CACHE_DIR = os.path.join(CACHE_DIR, "country")
+FEE_CACHE_DIR = os.path.join(CACHE_DIR, "fees")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(HOLDINGS_CACHE_DIR, exist_ok=True)
 os.makedirs(NAV_CACHE_DIR, exist_ok=True)
 os.makedirs(HOLDER_CACHE_DIR, exist_ok=True)
 os.makedirs(COUNTRY_CACHE_DIR, exist_ok=True)
+os.makedirs(FEE_CACHE_DIR, exist_ok=True)
 
 _THREAD_LOCAL = threading.local()
 
@@ -1990,6 +1992,22 @@ def _extract_redemption_tiers(html_text):
     return None
 
 def fetch_fund_detail_meta(opener, code):
+    cache_file = os.path.join(FEE_CACHE_DIR, f"{code}_meta.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            # 校验是否具备完整的有效数据
+            if cached.get("fee_manage") not in (None, "--") and cached.get("fee_redemption") not in (None, "未知"):
+                # 动态补齐持仓、持有人与国家分布（这些内部有独立缓存）
+                is_qdii_fund = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
+                cached["holdings"] = fetch_holdings(opener, code)
+                cached["holder_struct"] = fetch_fund_holder_structure(opener, code)
+                cached["countries_info"] = fetch_fund_country_distribution(opener, code, is_qdii=is_qdii_fund)
+                return cached
+        except Exception:
+            pass
+
     meta = {
         "name": f"基金_{code}", "scale": "未知", "scale_val": -1.0, "fee_manage": None, "fee_custody": None,
         "fee_sales": None, "fee_source": "", "fee_purchase": "0.00%", "fee_redemption": "未知", "buy_status": "--",
@@ -2076,7 +2094,7 @@ def fetch_fund_detail_meta(opener, code):
         if buy_source_m and buy_source_m.group(1): meta["fee_source"] = buy_source_m.group(1)
         if buy_rate_m and buy_rate_m.group(1): meta["fee_purchase"] = buy_rate_m.group(1)
 
-# ===== 基金规模提取：多通道穿透解析（支持最新资产净值、成立规模与募集规模） =====
+        # ===== 基金规模提取：多通道穿透解析（支持最新资产净值、成立规模与募集规模） =====
         query_c = MAIN_CODE_MAP.get(code, code)
         codes_to_try = [code] if query_c == code else [code, query_c]
 
@@ -2228,12 +2246,10 @@ def fetch_fund_detail_meta(opener, code):
             break
         try:
             f10_url = f"https://fundf10.eastmoney.com/jjfl_{_c}.html"
-            r = requests.get(f10_url, headers={
-                "User-Agent": DEFAULT_HEADERS["User-Agent"],
-                "Referer": f10_url,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            }, timeout=8)
-            f10_html = r.text
+            # 改用脚本顶部已经定义好的受控抓取函数，自动享有限速与退避重试
+            f10_html = _fetch_f10_html(f10_url, max_retries=2, timeout=10)
+            if not f10_html:
+                continue
 
             # 剥离 HTML 标签，压缩空白
             clean = re.sub(r'<[^>]+>', ' ', f10_html)
@@ -2375,6 +2391,15 @@ def fetch_fund_detail_meta(opener, code):
     meta["holdings"] = fetch_holdings(opener, code)
     meta["holder_struct"] = fetch_fund_holder_structure(opener, code)
     meta["countries_info"] = fetch_fund_country_distribution(opener, code, is_qdii=is_qdii_fund)
+
+    if meta.get("fee_manage") not in (None, "--") and meta.get("fee_redemption") not in (None, "未知"):
+        try:
+            save_meta = {k: v for k, v in meta.items() if k not in ("holdings", "holder_struct", "countries_info")}
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(save_meta, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     return meta
 
 def fetch_from_eastmoney(opener, code, start_date, end_date):
