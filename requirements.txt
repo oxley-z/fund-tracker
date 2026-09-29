@@ -1,4 +1,6 @@
-akshare
 pandas
+numpy
 requests
 beautifulsoup4
+akshare
+yfinance

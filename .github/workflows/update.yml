@@ -1,17 +1,13 @@
-name: Daily Fund Dashboard Update
+name: Update Fund & CFTC Dashboard
 
 on:
   schedule:
-    # 每天北京时间 15:30 执行 (对应 UTC 07:30)
-    - cron: '30 7 * * *'
-    # 每天北京时间 21:00 执行 (对应 UTC 13:00)
-    - cron: '0 13 * * *'
-
-  # 支持 GitHub 网页手动执行
-  workflow_dispatch:
+    # 每天北京时间 22:30 (UTC 14:30) 执行（周六凌晨 CFTC 会公布本周二的数据）
+    - cron: '30 14 * * *'
+  workflow_dispatch: # 支持网页端手动点击运行
 
 permissions:
-  contents: read
+  contents: write  # 必须开启写入权限，以便回写 report/ 目录中的数据和缓存
   pages: write
   id-token: write
 
@@ -22,56 +18,75 @@ concurrency:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
-    # 环境声明有利于 GitHub Pages 状态追踪
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
-      # 1. 拉取代码
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      # 2. 配置 GitHub Pages（建议放在构建前，检查环境与权限）
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      # 3. 安装 Python 并启用 pip 依赖缓存
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: 'pip'
 
-      # 4. 安装依赖
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      # 5. 基金历史数据增量缓存
-      - name: Restore fund cache
-        uses: actions/cache@v4
-        with:
-          path: cache
-          # 基于日期构建 key，当天内复用，跨天后 fallback 读取旧缓存增量更新
-          key: fund-cache-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: |
-            fund-cache-${{ runner.os }}-
-
-      # 6. 运行基金数据抓取脚本
-      - name: Run script to generate HTML
         run: |
-          mkdir -p public
-          python main.py --mode prod --out public/index.html
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      # 7. 上传生成的静态文件
-      - name: Upload Pages artifact
+      # -------------------------------------------------------------
+      # 步骤 1：抓取最新一期 CFTC 报告，存放到 report/
+      # -------------------------------------------------------------
+      - name: 1. Fetch latest CFTC report
+        run: |
+          python cftc_position_analysis.py
+
+      # -------------------------------------------------------------
+      # 步骤 2：生成 CFTC 交互式面板与持久化价格缓存
+      # （生成 cftc_dashboard.html 以及更新 report/cftc_价格历史缓存.json）
+      # -------------------------------------------------------------
+      - name: 2. Generate CFTC Dashboard & Update Cache
+        run: |
+          python cftc_generate_dashboard.py
+
+      # -------------------------------------------------------------
+      # 步骤 3：将抓取到的新周报 HTML 与 JSON 缓存提交并推送到 GitHub
+      # -------------------------------------------------------------
+      - name: 3. Commit and Push new data & cache to repository
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # 仅暂存 report 目录下的文件（周报 HTML、价格历史缓存 JSON、面板完整数据 JSON）
+          git add report/
+          
+          # 检查是否有新增或修改的内容
+          if git diff --staged --quiet; then
+            echo "No new CFTC data to commit."
+          else
+            git commit -m "chore(cftc): auto-update CFTC reports and price cache"
+            git push
+          fi
+
+      # -------------------------------------------------------------
+      # 步骤 4：运行 main.py 生成包含 CFTC 链接的基金主面板 index.html
+      # -------------------------------------------------------------
+      - name: 4. Run main script to generate index.html
+        run: |
+          python main.py --out index.html
+
+      # -------------------------------------------------------------
+      # 步骤 5：发布静态站点至 GitHub Pages
+      # -------------------------------------------------------------
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: 'public'
+          path: '.' # 上传整个仓库根目录（包含 index.html、cftc_dashboard.html 与 report/ 目录）
 
-      # 8. 发布到 GitHub Pages
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
