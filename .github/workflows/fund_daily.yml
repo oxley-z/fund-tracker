@@ -33,12 +33,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 确保静态页面中包含 cftc_dashboard.html 供 iframe 引用（基于仓库已有缓存极速生成）
-      - name: Ensure CFTC Dashboard Exists
+      # ★ 每次都基于 report/ 里的最新报告重新生成 CFTC 面板：
+      #   仓库里的 cftc_dashboard.html 可能滞后于 report/（历史 bug），
+      #   若直接沿用，会把线上面板的日历日期回退成旧日期。
+      - name: Rebuild CFTC Dashboard
         run: |
-          if [ ! -f "cftc_dashboard.html" ]; then
-            python cftc_generate_dashboard.py
-          fi
+          python cftc_generate_dashboard.py || echo "⚠️ CFTC 面板重建失败，本次沿用仓库中的版本"
 
       # 运行基金主程序，生成 index.html
       - name: Generate Main Fund Dashboard

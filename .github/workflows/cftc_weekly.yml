@@ -50,7 +50,9 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add report/
+          # ★ 必须连 cftc_dashboard.html 一起提交：日历里的 reportDates 是生成面板时写死进去的，
+          #   只提交 report/ 会导致仓库里的面板永远停留在旧日期（每日部署又用这份旧面板覆盖线上）。
+          git add report/ cftc_dashboard.html
           if git diff --staged --quiet; then
             echo "No new CFTC data to commit."
           else
