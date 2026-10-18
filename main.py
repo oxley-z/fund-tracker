@@ -6611,22 +6611,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
                     <div class="metric-card">
                         <div class="metric-header">
-                            <span>USD/CNY 汇率</span>
-                        </div>
-                        <div class="metric-body">
-                            <span class="metric-value" style="color:#188038;">{usdcny['val']}</span>
-                            <span class="metric-tag" style="background:rgba(24,128,56,0.12); color:#188038;">{usdcny['status']}</span>
-                        </div>
-                        <div class="metric-desc">
-                            美元兑人民币汇率，QDII换汇成本及折溢价关键锚
-                        </div>
-                        <a href="{usdcny['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
-                            🔗 来源: 新浪外汇 (实时) ↗
-                        </a>
-                    </div>
-
-                    <div class="metric-card">
-                        <div class="metric-header">
                             <span>VXN 纳指波动率</span>
                         </div>
                         <div class="metric-body">
@@ -6638,6 +6622,22 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </div>
                         <a href="{vxn['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
                             🔗 来源: CBOE 官方 (_VXN) ↗
+                        </a>
+                    </div>
+                    
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span>USD/CNY 汇率</span>
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#188038;">{usdcny['val']}</span>
+                            <span class="metric-tag" style="background:rgba(24,128,56,0.12); color:#188038;">{usdcny['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            美元兑人民币汇率，QDII换汇成本及折溢价关键锚
+                        </div>
+                        <a href="{usdcny['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: 新浪外汇 (实时) ↗
                         </a>
                     </div>
 
