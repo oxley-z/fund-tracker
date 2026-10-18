@@ -96,7 +96,7 @@
   @media(max-width:900px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
   @media(max-width:720px){body{padding:14px}.header h1{font-size:20px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.stats .card:last-child{grid-column:1/-1}.toolbar{gap:12px}.control,.control select{width:100%;max-width:none}.segmented{max-width:100%;overflow-x:auto}.chart-head{align-items:flex-start;flex-direction:column}.chart-note{text-align:left}#chart{height:430px}.cval{font-size:21px}.chart-panel,.table-panel{overflow:hidden}}
 
-    /* ============ 🌙 深色主题（与主看板联动） ============ */
+  /* ============ 🌙 深色主题（与主看板联动） ============ */
   [data-theme="dark"]{
     color-scheme:dark;
     --bg:#14161a;--surface:#1b1e24;--surface-soft:#20242c;--border:#2c313a;
@@ -111,10 +111,8 @@
   [data-theme="dark"] ::-webkit-scrollbar{width:10px;height:10px}
   [data-theme="dark"] ::-webkit-scrollbar-track{background:#171a20}
   [data-theme="dark"] ::-webkit-scrollbar-thumb{background:#3a4049;border-radius:5px}
-  /* ★ 修复 Plotly 框选缩放时的灰色遮罩 + 白框：去掉遮罩，只保留蓝色四角标记 */
-  .js-plotly-plot .zoombox{fill:none!important;stroke:none!important}
-  .js-plotly-plot .zoombox-corners{fill:var(--blue,#1f63d6)!important;stroke:var(--blue,#1f63d6)!important;stroke-width:1px!important}
-</style>
+
+ </style>
 </head>
 <body>
 <div class="page">
@@ -438,7 +436,7 @@ window.addEventListener('resize',function(){
 });
 fillSelect();
 updateAll();
-</script>
+ </script>
 <script>
 /* 暗色下让 Plotly 图表跟随主题（在 layoutConfig 定义之后包裹一次） */
 (function () {
@@ -477,5 +475,5 @@ updateAll();
   window.__dualThemeChanged();
 })();
 </script>
-</body>
+ </body>
 </html>
