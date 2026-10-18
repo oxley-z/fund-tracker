@@ -18,12 +18,13 @@ REPORT_DIR = "report"
 os.makedirs(REPORT_DIR, exist_ok=True)
 
 # ★ 生成的分析面板输出到【当前文件夹】（与脚本同级）
-OUTPUT_FILE = "cftc_dashboard.html"
+OUTPUT_FILE = os.path.join("web", "cftc_dashboard.html")
+os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
 
 # 持仓报告 HTML 命名规则：report/cftc_持仓报告_YYYY-MM-DD.html
 HTML_PATTERN = os.path.join(REPORT_DIR, "cftc_持仓报告_*.html")
 # 供前端日历点击时拼接 URL 使用的相对前缀（必须以 / 结尾）
-REPORT_URL_PREFIX = REPORT_DIR + "/"
+REPORT_URL_PREFIX = "../" + REPORT_DIR + "/"   # 面板位于 web/，报告在项目根的 report/
 REPORT_FILE_STEM = "cftc_持仓报告_"
 REPORT_FILE_EXT = ".html"
 

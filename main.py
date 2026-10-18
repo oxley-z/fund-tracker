@@ -145,7 +145,8 @@ MAIN_CODE_MAP = {
 # 指数历年回报的完整目标清单（用于缓存完整性校验）
 ANNUAL_INDEX_TARGETS = ["纳指100", "标普500", "费城半导体指数", "沪深300", "科创50", "恒生科技"]
 
-CFTC_DASHBOARD_FILE = "cftc_dashboard.html"
+CFTC_DASHBOARD_FILE = "web/cftc_dashboard.html"
+DUAL_DASHBOARD_FILE = "web/dual_final_dashboard.html"
 
 INDEX_NAMES = {
     "NDX": "纳斯达克100指数",
@@ -4561,7 +4562,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .view-pane.active {{ display: flex; }}
 
         /* ★ 新增：CFTC资产数据内嵌框架 */
-        #allAssetView {{
+        #allAssetView,
+        #dualView {{
             padding: 0;
             overflow: hidden;
         }}
@@ -4630,7 +4632,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
 
             /* 内嵌面板：移动端改为纵向布局，iframe 撑满可视区域，避免高度塌陷 */
-            #allAssetView {{ overflow: visible; }}
+            #allAssetView,
+            #dualView {{ overflow: visible; }}
             .asset-iframe-wrap {{
                 flex: none;
                 flex-direction: column;
@@ -6554,6 +6557,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             <button class="nav-tab-btn" data-view="fundView"><span class="tab-ico">📊</span>基金量化看板</button>
             <button class="nav-tab-btn" data-view="qdiiView"><span class="tab-ico">🌐</span>QDII 监控</button>
             <button class="nav-tab-btn" data-view="allAssetView"><span class="tab-ico">📊</span>CFTC资产数据</button>
+            <button class="nav-tab-btn" data-view="dualView"><span class="tab-ico">📈</span>ETF份额看板</button>
         </div>
         <div class="nav-right-tools">
             <button class="theme-toggle" id="themeToggle">🌓 切换主题</button>
@@ -6937,6 +6941,25 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             </div>
         </section>
 
+        <!-- ★ 视图 5：沪深宽基 ETF 份额（dual 脚本生成的看板，内嵌进主页面） -->
+        <section id="dualView" class="view-pane">
+            <div class="asset-iframe-wrap">
+                <div class="asset-iframe-bar">
+                    <span>📱 面板可上下滑动查看，图表可双指缩放</span>
+                    <a href="{DUAL_DASHBOARD_FILE}" target="_blank" rel="noopener">新窗口打开 ↗</a>
+                </div>
+                <div class="asset-iframe-loading" id="dualIframeLoading">⏳ 正在加载沪深宽基 ETF 份额看板...</div>
+                <iframe
+                    id="dualFrame"
+                    data-src="{DUAL_DASHBOARD_FILE}"
+                    title="沪深宽基 ETF 份额看板"
+                    loading="lazy"
+                    referrerpolicy="no-referrer"
+                    sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                ></iframe>
+            </div>
+        </section>
+
     </main>
 
     <!-- 定投独立测算弹窗 -->
@@ -7012,20 +7035,27 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         var fundNames = {json.dumps(fund_names_json, ensure_ascii=False)};
         var fundParsedDates = {{}};
 
-        // ★ CFTC 内嵌面板与主看板主题联动（?theme= 参数 + postMessage 双保险）
-        function cftcThemedSrc() {{
-            const frame = document.getElementById('cftcFrame');
+        // ★ 内嵌面板（CFTC / 沪深宽基ETF）懒加载 + 主题联动
+        const EMBED_FRAMES = {{
+            allAssetView: {{ frameId: 'cftcFrame', loadingId: 'assetIframeLoading' }},
+            dualView:     {{ frameId: 'dualFrame', loadingId: 'dualIframeLoading' }}
+        }};
+        function iframeThemedSrc(frameId) {{
+            const frame = document.getElementById(frameId);
             if (!frame) return '';
             const base = (frame.getAttribute('data-src') || '').split('?')[0];
             const theme = document.documentElement.getAttribute('data-theme') || 'light';
             return base + '?theme=' + encodeURIComponent(theme);
         }}
-        function syncCftcTheme(theme) {{
-            const frame = document.getElementById('cftcFrame');
+        function syncIframeTheme(frameId, theme) {{
+            const frame = document.getElementById(frameId);
             if (!frame || frame.dataset.loaded !== '1' || !frame.contentWindow) return;
             try {{
                 frame.contentWindow.postMessage({{ type: 'cftc-theme', theme: theme || 'light' }}, '*');
             }} catch (e) {{}}
+        }}
+        function syncAllEmbedIframes(theme) {{
+            Object.values(EMBED_FRAMES).forEach(cfg => syncIframeTheme(cfg.frameId, theme));
         }}
 
         // Tab 切换
@@ -7037,19 +7067,20 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 const targetView = document.getElementById(this.dataset.view);
                 if (targetView) targetView.classList.add('active');
 
-                // ★ 新增：懒加载CFTC资产 iframe（仅首次进入该视图时真正加载外部 HTML）
-                if (this.dataset.view === 'allAssetView') {{
-                    const frame = document.getElementById('cftcFrame');
-                    const loadingTip = document.getElementById('assetIframeLoading');
+                // ★ 懒加载内嵌 iframe（仅首次进入该视图时真正加载外部 HTML）
+                const embed = EMBED_FRAMES[this.dataset.view];
+                if (embed) {{
+                    const frame = document.getElementById(embed.frameId);
+                    const loadingTip = document.getElementById(embed.loadingId);
                     if (frame && !frame.dataset.loaded) {{
                         frame.dataset.loaded = '1';
                         if (loadingTip) loadingTip.style.display = 'flex';
                         frame.addEventListener('load', function() {{
                             if (loadingTip) loadingTip.style.display = 'none';
                             // 双保险：加载完成后再同步一次主题（防止 query 参数被浏览器丢弃）
-                            syncCftcTheme(document.documentElement.getAttribute('data-theme'));
+                            syncIframeTheme(embed.frameId, document.documentElement.getAttribute('data-theme'));
                         }}, {{ once: true }});
-                        frame.src = cftcThemedSrc();
+                        frame.src = iframeThemedSrc(embed.frameId);
                     }} else if (loadingTip) {{
                         loadingTip.style.display = 'none';
                     }}
@@ -7070,8 +7101,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 localStorage.setItem('theme', next);
                 toggle.textContent = next === 'dark' ? '☀️ 亮色' : '🌓 暗色';
                 window._crosshairLineColor = null;
-                // ★ 同步内嵌的 CFTC 面板主题
-                syncCftcTheme(next);
+                // ★ 同步所有内嵌面板（CFTC / 沪深宽基ETF）主题
+                syncAllEmbedIframes(next);
             }});
         }})();
 

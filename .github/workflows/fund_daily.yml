@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # 支持手动点击立即执行
 
 permissions:
-  contents: read   # 日常任务仅读取，不污染 Git 提交历史
+  contents: write  # 需要提交 dual 断点与 ETF 看板，保证每天走增量更新
   pages: write
   id-token: write
 
@@ -34,11 +34,31 @@ jobs:
           pip install -r requirements.txt
 
       # ★ 每次都基于 report/ 里的最新报告重新生成 CFTC 面板：
-      #   仓库里的 cftc_dashboard.html 可能滞后于 report/（历史 bug），
+      #   仓库里的 web/cftc_dashboard.html 可能滞后于 report/（历史 bug），
       #   若直接沿用，会把线上面板的日历日期回退成旧日期。
       - name: Rebuild CFTC Dashboard
         run: |
           python cftc_generate_dashboard.py || echo "⚠️ CFTC 面板重建失败，本次沿用仓库中的版本"
+
+      # ★ 沪深宽基 ETF 份额看板：基于 data/ 里的断点做增量，生成 web/dual_final_dashboard.html
+      - name: Rebuild Dual ETF Dashboard
+        env:
+          BROWSER: "true"   # CI 无需真的打开浏览器
+        run: |
+          python dual_etf_dashboard.py || echo "⚠️ ETF 份额看板更新失败，本次沿用仓库中的版本"
+
+      # ★ 提交断点与看板，让下一次仍能从最新日期继续增量
+      - name: Commit Dual ETF Data
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add data/ web/dual_final_dashboard.html
+          if git diff --staged --quiet; then
+            echo "No dual ETF changes to commit."
+          else
+            git commit -m "chore(dual): auto-update ETF dashboard"
+            git push || (git pull --rebase origin "$GITHUB_REF_NAME" && git push)
+          fi
 
       # 运行基金主程序，生成 index.html
       - name: Generate Main Fund Dashboard

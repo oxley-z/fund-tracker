@@ -41,7 +41,7 @@ REPORT_FILE_EXT  = ".html"
 
 # ★ 汇总面板文件名（位于项目根目录，即脚本同级）
 #    周报位于 report/ 子目录，因此返回链接使用 ../<面板文件名>
-DASHBOARD_FILENAME = "cftc_dashboard.html"
+DASHBOARD_FILENAME = "web/cftc_dashboard.html"
 DASHBOARD_BACK_URL = f"../{DASHBOARD_FILENAME}"
 
 # ============================================================================
@@ -544,7 +544,7 @@ REPORT_THEME_JS = """    <script>
             function syncBackLink() {
                 var back = document.querySelector('a.back-btn');
                 if (!back) return;
-                var href = (back.getAttribute('href') || '../cftc_dashboard.html').split('?')[0].split('#')[0];
+                var href = (back.getAttribute('href') || '../web/cftc_dashboard.html').split('?')[0].split('#')[0];
                 back.setAttribute('href', href + '?theme=' + encodeURIComponent(current));
             }
 

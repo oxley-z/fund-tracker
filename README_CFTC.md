@@ -22,7 +22,8 @@ pip install pandas numpy requests yfinance beautifulsoup4 akshare
 ├── cftc_generate_dashboard.py         # 汇总生成交互式分析面板
 ├── README.md
 │
-├── cftc_dashboard.html       # 面板输出（根目录，含日历）
+├── web/
+│   └── cftc_dashboard.html   # 面板输出（含日历）
 │
 └── report/                            # 所有报告与缓存
     ├── cftc_持仓报告_2025-01-07.html
@@ -32,9 +33,9 @@ pip install pandas numpy requests yfinance beautifulsoup4 akshare
     └── cftc_面板完整数据.json
 ```
 
-> ⚠️ 注意：**面板在根目录，周报在 `report/` 子目录**。
+> ⚠️ 注意：**面板在 `web/`，周报在 `report/`，基金缓存在 `cache/`，检查点在 `data/`**。
 > 面板里的日历点击会跳转到 `report/cftc_持仓报告_YYYY-MM-DD.html`；
-> 每份周报顶部有「← 返回分析面板」按钮可跳回根目录面板。
+> 每份周报顶部有「← 返回分析面板」按钮可跳回 `web/cftc_dashboard.html`。
 > 两个文件互相之间用**相对路径**引用，整个文件夹可以整体打包/上传 GitHub。
 
 ## 一、获取持仓报告
@@ -98,10 +99,10 @@ python cftc_generate_dashboard.py
 1. 扫描 `report/` 下所有 `cftc_持仓报告_*.html`
 2. 解析每期的多头 / 空头 / 净持仓数据
 3. 按资产匹配历史价格（多源策略 + 本地缓存）
-4. 生成交互式面板到**项目根目录**：
+4. 生成交互式面板到 **`web/` 目录**：
 
 ```text
-cftc_dashboard.html
+web/cftc_dashboard.html
 ```
 
 ### 面板功能

@@ -26,7 +26,7 @@
             function syncBackLink() {
                 var back = document.querySelector('a.back-btn');
                 if (!back) return;
-                var href = (back.getAttribute('href') || '../cftc_dashboard.html').split('?')[0].split('#')[0];
+                var href = (back.getAttribute('href') || '../web/cftc_dashboard.html').split('?')[0].split('#')[0];
                 back.setAttribute('href', href + '?theme=' + encodeURIComponent(current));
             }
 
@@ -155,7 +155,7 @@ tbody tr:hover { background: #EBF0F7; }
 </style>
 </head>
 <body>
-    <div style='padding:0 0 12px 0;'><a href='../cftc_dashboard.html' style='display:inline-block;padding:6px 14px;background:#4472C4;color:#fff;border-radius:5px;text-decoration:none;font-weight:600;'>← 返回分析面板</a></div>
+    <div style='padding:0 0 12px 0;'><a href='../web/cftc_dashboard.html' style='display:inline-block;padding:6px 14px;background:#4472C4;color:#fff;border-radius:5px;text-decoration:none;font-weight:600;'>← 返回分析面板</a></div>
     <header>
         <h1>CFTC 期货持仓分析</h1>
         <div class="meta">数据截止 2026-06-23<br>生成时间 2026-09-26 17:11<br>数据来源: CFTC Socrata API + yfinance</div>
