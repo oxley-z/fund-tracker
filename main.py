@@ -2,6 +2,7 @@ import os
 import re
 import json
 import html
+import hashlib
 import time
 import random
 import argparse
@@ -3630,6 +3631,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
     nav_data_json = {}
     fund_names_json = {}
+    holding_detail_data_json = {}
     for r in results:
         fund_names_json[r['code']] = r['name']
         if 'nav_data' in r and r['nav_data']:
@@ -3637,6 +3639,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 'dates': [item['date'] for item in r['nav_data']],
                 'navs': [item['nav'] for item in r['nav_data']]
             }
+
+    nav_data_script = "window.__FUND_NAV_DATA__=" + json.dumps(
+        nav_data_json, ensure_ascii=False, separators=(",", ":")
+    ) + ";"
+    nav_data_version = hashlib.sha256(nav_data_script.encode("utf-8")).hexdigest()[:12]
 
     rows_html = ""
     for r in results:
@@ -4010,20 +4017,21 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         </div>
         """
 
+        holding_detail_data_json[r['code']] = f"""
+            <div class="holdings-wrapper">
+                <div class="holdings-container">
+                    {holdings_html}
+                    {pie_card_html}
+                </div>
+                <div class="right-chart-wrapper">
+                    {country_card_html}
+                    {chart_html}
+                </div>
+            </div>
+        """
         rows_html += f"""
         <tr class="holding-row" data-code="{r['code']}">
-            <td colspan="{col_count}" style="padding: 8px 20px; background-color: var(--hover-bg); font-size: 12px; color: var(--footer-text);">
-                <div class="holdings-wrapper">
-                    <div class="holdings-container">
-                        {holdings_html}
-                        {pie_card_html}
-                    </div>
-                    <div class="right-chart-wrapper">
-                        {country_card_html}
-                        {chart_html}
-                    </div>
-                </div>
-            </td>
+            <td colspan="{col_count}" style="padding: 8px 20px; background-color: var(--hover-bg); font-size: 12px; color: var(--footer-text);"></td>
         </tr>
         """
 
@@ -4034,6 +4042,30 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             </td>
         </tr>
     """
+
+    holding_detail_script = "window.__FUND_HOLDING_DETAILS__=" + json.dumps(
+        holding_detail_data_json, ensure_ascii=False, separators=(",", ":")
+    ) + ";"
+    holding_detail_version = hashlib.sha256(
+        holding_detail_script.encode("utf-8")
+    ).hexdigest()[:12]
+    nav_data_asset = f"fund_dashboard_data.js?v={nav_data_version}"
+    holding_detail_asset = f"fund_dashboard_details.js?v={holding_detail_version}"
+    output_path = os.path.abspath(filename)
+    output_dir = os.path.dirname(output_path)
+    nav_data_output = os.path.join(output_dir, "fund_dashboard_data.js")
+    holding_detail_output = os.path.join(output_dir, "fund_dashboard_details.js")
+
+    def _atomic_write(target, content):
+        temp_target = target + ".tmp"
+        with open(temp_target, "w", encoding="utf-8") as f:
+            f.write(content)
+        try:
+            os.replace(temp_target, target)
+        except OSError:
+            import shutil
+            shutil.copyfile(temp_target, target)
+            os.remove(temp_target)
 
     friend_link_categories = [
         {
@@ -4432,7 +4464,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>场外基金量化与资产配置看板</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script async src="web/vendor/chart.umd.js?v=4.4.3" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';"></script>
+    <script defer src="{nav_data_asset}" onerror="window.__fundNavDataLoadFailed=true;"></script>
     <style>
         :root {{
             --bg: #f8f9fa;
@@ -7031,9 +7064,53 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     </div>
 
     <script>
-        var fundNavData = {json.dumps(nav_data_json, ensure_ascii=False)};
+        var fundNavData = window.__FUND_NAV_DATA__ || {{}};
         var fundNames = {json.dumps(fund_names_json, ensure_ascii=False)};
         var fundParsedDates = {{}};
+        var holdingDetailHtml = window.__FUND_HOLDING_DETAILS__ || {{}};
+        var holdingDetailPromise = null;
+
+        document.addEventListener('DOMContentLoaded', function() {{
+            fundNavData = window.__FUND_NAV_DATA__ || fundNavData || {{}};
+            window.__FUND_NAV_DATA__ = null;
+            window.__FUND_HOLDING_DETAILS__ = null;
+            if (window.__fundNavDataLoadFailed && Object.keys(fundNavData).length === 0) {{
+                console.error('fund_dashboard_data.js 加载失败，请刷新页面。');
+            }}
+        }}, {{ once: true }});
+
+        function loadHoldingDetails() {{
+            if (Object.keys(holdingDetailHtml).length > 0) return Promise.resolve();
+            if (holdingDetailPromise) return holdingDetailPromise;
+            holdingDetailPromise = new Promise(resolve => {{
+                const script = document.createElement('script');
+                script.src = {json.dumps(holding_detail_asset)};
+                script.onload = () => {{
+                    holdingDetailHtml = window.__FUND_HOLDING_DETAILS__ || {{}};
+                    window.__FUND_HOLDING_DETAILS__ = null;
+                    resolve();
+                }};
+                script.onerror = () => {{
+                    script.remove();
+                    holdingDetailPromise = null;
+                    resolve();
+                }};
+                document.body.appendChild(script);
+            }});
+            return holdingDetailPromise;
+        }}
+
+        function renderHoldingDetail(code, cell) {{
+            if (!cell || cell.firstElementChild) return Promise.resolve();
+            if (holdingDetailHtml[code]) {{
+                cell.innerHTML = holdingDetailHtml[code];
+                return Promise.resolve();
+            }}
+            cell.innerHTML = '<div style="padding:20px;text-align:center;color:var(--footer-text);">正在加载持仓详情...</div>';
+            return loadHoldingDetails().then(() => {{
+                cell.innerHTML = holdingDetailHtml[code] || '<div style="padding:20px;text-align:center;color:var(--footer-text);">持仓详情加载失败，请稍后重试</div>';
+            }});
+        }}
 
         // ★ 内嵌面板（CFTC / 沪深宽基ETF）懒加载 + 主题联动
         const EMBED_FRAMES = {{
@@ -7698,7 +7775,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 }});
             }}
         }};
-        Chart.register(pieLabelsPlugin);
 
         const fundCrosshairPlugin = {{
             id: 'fundCrosshairPlugin',
@@ -7724,7 +7800,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 ctx.restore();
             }}
         }};
-        Chart.register(fundCrosshairPlugin);
+
+        function registerFundChartPlugins() {{
+            if (window._fundChartPluginsRegistered || typeof Chart === 'undefined') return;
+            Chart.register(pieLabelsPlugin);
+            Chart.register(fundCrosshairPlugin);
+            window._fundChartPluginsRegistered = true;
+        }}
 
         function filterNavData(data, period) {{
             if (!data || !data.dates || data.dates.length === 0) return {{ dates: [], navs: [] }};
@@ -7750,6 +7832,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         function initHolderChart(code) {{
             const canvas = document.getElementById(`holder-chart-${{code}}`);
             if (!canvas) return;
+            registerFundChartPlugins();
 
             if (holderChartInstances[code]) {{
                 if (typeof holderChartInstances[code].destroy === 'function') {{
@@ -7844,6 +7927,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         function initCountryChart(code) {{
             const canvas = document.getElementById(`country-chart-${{code}}`);
             if (!canvas) return;
+            registerFundChartPlugins();
             if (countryChartInstances[code]) {{
                 if (typeof countryChartInstances[code].destroy === 'function') {{
                     countryChartInstances[code].destroy();
@@ -7940,6 +8024,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         function initChart(code) {{
             const canvas = document.getElementById(`chart-${{code}}`);
             if (!canvas) return;
+            registerFundChartPlugins();
             if (chartInstances[code]) {{
                 if (typeof chartInstances[code].destroy === 'function') {{
                     chartInstances[code].destroy();
@@ -8144,11 +8229,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 if (hRow) {{
                     hRow.classList.toggle('show');
                     if (hRow.classList.contains('show')) {{
+                        const detailCell = hRow.cells[0];
                         hRow.style.display = '';
-                        window.requestAnimationFrame(() => {{
-                            setTimeout(() => {{ initCountryChart(code); }}, 50);
-                            setTimeout(() => {{ initHolderChart(code); }}, 150);
-                            setTimeout(() => {{ initChart(code); }}, 250);
+                        renderHoldingDetail(code, detailCell).then(() => {{
+                            if (!hRow.classList.contains('show')) return;
+                            window.requestAnimationFrame(() => {{
+                                setTimeout(() => {{ initCountryChart(code); }}, 50);
+                                setTimeout(() => {{ initHolderChart(code); }}, 150);
+                                setTimeout(() => {{ initChart(code); }}, 250);
+                            }});
                         }});
                     }} else {{
                         hRow.style.display = 'none';
@@ -8670,9 +8759,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 </body>
 </html>
 """
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(html_content)
-    return os.path.abspath(filename)
+    output_path = os.path.abspath(filename)
+    output_dir = os.path.dirname(output_path)
+    os.makedirs(output_dir, exist_ok=True)
+    _atomic_write(nav_data_output, nav_data_script)
+    _atomic_write(holding_detail_output, holding_detail_script)
+    _atomic_write(output_path, html_content)
+    return output_path
 
 def fetch_crypto_data(symbol, start_date, end_date):
     cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
