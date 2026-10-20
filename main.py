@@ -158,13 +158,13 @@ INDEX_NAMES = {
     "COMP": "纳斯达克综合指数",
 }
 
-# 【修改】原 PRECIOUS_METALS_NAMES 扩展为大宗商品（新增布伦特原油、LME铜）
+# 【修改】原 PRECIOUS_METALS_NAMES 扩展为大宗商品（新增布伦特原油、COMEX 铜）
 COMMODITY_NAMES = {
     "XAU": "伦敦金 (XAU)",
     "AUM": "沪金主连 (AUM)",
     "XAG": "伦敦银 (XAG)",
     "BRENT": "布伦特原油 (BRENT)",
-    "CAD": "LME铜 (CAD)"
+    "CAD": "COMEX 铜 (HG)"
 }
 
 CRYPTO_NAMES = {
@@ -1149,6 +1149,13 @@ def get_skew(opener) -> tuple[float, str, str]:
             return val, "Yahoo Finance (^SKEW)", "https://finance.yahoo.com/quote/SKEW/"
     except Exception: pass
 
+    # CBOE 日线历史 CSV 的末尾就是最新 SKEW，避开需要额外 cookie 的实时报价接口。
+    try:
+        points = fetch_cboe_macro_history("SKEW", (now_beijing() - timedelta(days=14)).strftime("%Y-%m-%d"))
+        if points:
+            return points[-1][1], "CBOE 官方 (SKEW)", "https://www.cboe.com/us/indices/dashboard/SKEW/"
+    except Exception: pass
+
     try:
         val = fetch_from_cboe_quote(opener, "_SKEW")
         if val > 0:
@@ -1178,14 +1185,14 @@ def get_brent_oil(opener) -> tuple[float, str, str]:
     return 0.0, "获取失败", "https://cn.investing.com/commodities/brent-oil"
 
 # ==============================================================================
-# 大宗商品相关指标获取模块 (伦敦金 / 沪金主连 / 伦敦银 / LME铜)
+# 大宗商品相关指标获取模块 (伦敦金 / 沪金主连 / 伦敦银 / COMEX 铜)
 # ==============================================================================
 def get_gold_london(opener) -> tuple[float, str, str]:
     """获取伦敦金 (XAU/USD 现货) 价格"""
     try:
         val = fetch_from_yahoo_finance(opener, "GC=F")
         if val > 0:
-            return val, "Yahoo Finance (GC=F)", "https://finance.yahoo.com/quote/GC%3DF/"
+            return val, "Yahoo Finance (GC=F)", "https://www.investing.com/currencies/xau-usd"
     except Exception: pass
 
     try:
@@ -1200,11 +1207,11 @@ def get_gold_london(opener) -> tuple[float, str, str]:
                     try:
                         v = float(parts[0])
                         if v > 0:
-                            return round(v, 2), "新浪财经 (hf_XAU)", "https://finance.sina.com.cn/money/forex/hq/XAU.shtml"
+                            return round(v, 2), "新浪财经 (hf_XAU)", "https://www.investing.com/currencies/xau-usd"
                     except ValueError:
                         pass
     except Exception: pass
-    return 0.0, "获取失败", "https://cn.investing.com/currencies/xau-usd"
+    return 0.0, "获取失败", "https://www.investing.com/currencies/xau-usd"
 
 
 def get_gold_shfe(opener) -> tuple[float, str, str]:
@@ -1247,7 +1254,7 @@ def get_silver_london(opener) -> tuple[float, str, str]:
     try:
         val = fetch_from_yahoo_finance(opener, "SI=F")
         if val > 0:
-            return val, "Yahoo Finance (SI=F)", "https://finance.yahoo.com/quote/SI%3DF/"
+            return val, "Yahoo Finance (SI=F)", "https://www.investing.com/currencies/xag-usd"
     except Exception: pass
 
     try:
@@ -1262,15 +1269,22 @@ def get_silver_london(opener) -> tuple[float, str, str]:
                     try:
                         v = float(parts[0])
                         if v > 0:
-                            return round(v, 3), "新浪财经 (hf_XAG)", "https://finance.sina.com.cn/money/forex/hq/XAG.shtml"
+                            return round(v, 3), "新浪财经 (hf_XAG)", "https://www.investing.com/currencies/xag-usd"
                     except ValueError:
                         pass
     except Exception: pass
-    return 0.0, "获取失败", "https://cn.investing.com/currencies/xag-usd"
+    return 0.0, "获取失败", "https://www.investing.com/currencies/xag-usd"
 
 
 def get_copper_lme(opener) -> tuple[float, str, str]:
-    """获取 LME铜 (CAD) 三个月期铜价格"""
+    """获取 COMEX 铜连续合约价格，统一按美元/磅展示。"""
+    try:
+        val = fetch_from_yahoo_finance(opener, "HG=F")
+        if val > 0:
+            return round(val, 2), "Yahoo Finance (HG=F)", "https://finance.yahoo.com/quote/HG%3DF/"
+    except Exception:
+        pass
+
     try:
         url = "https://hq.sinajs.cn/list=hf_CAD"
         req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
@@ -1283,16 +1297,12 @@ def get_copper_lme(opener) -> tuple[float, str, str]:
                     try:
                         v = float(parts[0])
                         if v > 0:
-                            return round(v, 2), "新浪财经 (hf_CAD)", "https://finance.sina.com.cn/futures/quotes/CAD.shtml"
+                            # 新浪 CAD 以美元/吨报价，换算为美元/磅。
+                            return round(v / 2204.62, 2), "新浪财经 (hf_CAD)", "https://finance.sina.com.cn/futures/quotes/CAD.shtml"
                     except ValueError:
                         pass
     except Exception: pass
 
-    try:
-        val = fetch_from_yahoo_finance(opener, "HG=F")
-        if val > 0:
-            return val, "Yahoo Finance (HG=F)", "https://finance.yahoo.com/quote/HG%3DF/"
-    except Exception: pass
     return 0.0, "获取失败", "https://cn.investing.com/commodities/copper"
 
 def get_btc_price(opener) -> tuple[float, str, str]:
@@ -1417,7 +1427,7 @@ def fetch_home_market_metrics(opener):
     gold_status = "数据暂缺" if gold_val <= 0 else ("极度高企" if gold_val >= 2500 else ("高位震荡" if gold_val >= 2000 else ("温和中性" if gold_val >= 1500 else "低位盘整")))
     shfe_gold_status = "数据暂缺" if shfe_gold_val <= 0 else ("极度高企" if shfe_gold_val >= 700 else ("高位震荡" if shfe_gold_val >= 600 else ("温和中性" if shfe_gold_val >= 500 else "低位盘整")))
     silver_status = "数据暂缺" if silver_val <= 0 else ("极度高企" if silver_val >= 35 else ("高位震荡" if silver_val >= 28 else ("温和中性" if silver_val >= 20 else "低位盘整")))
-    copper_status = "数据暂缺" if copper_val <= 0 else ("极度高企" if copper_val >= 10000 else ("高位震荡" if copper_val >= 8500 else ("温和中性" if copper_val >= 7000 else "需求疲软")))
+    copper_status = "数据暂缺" if copper_val <= 0 else ("极度高企" if copper_val >= 5.5 else ("高位震荡" if copper_val >= 4.5 else ("温和中性" if copper_val >= 3.5 else "需求疲软")))
     btc_status = "数据暂缺" if btc_val <= 0 else ("极度高企" if btc_val >= 100000 else ("高位震荡" if btc_val >= 70000 else ("温和中性" if btc_val >= 40000 else "低位盘整")))
 
     return {
@@ -1430,7 +1440,7 @@ def fetch_home_market_metrics(opener):
         "gold_london": {"val": gold_val, "status": gold_status, "time": now_str, "source": gold_src, "url": gold_url, "desc": "伦敦现货金价（美元/盎司），全球避险与美元信用对冲核心锚点"},
         "gold_shfe": {"val": shfe_gold_val, "status": shfe_gold_status, "time": now_str, "source": shfe_gold_src, "url": shfe_gold_url, "desc": "上海期货交易所黄金主连（元/克），国内实物金与人民币金价风向标"},
         "silver_london": {"val": silver_val, "status": silver_status, "time": now_str, "source": silver_src, "url": silver_url, "desc": "伦敦现货白银（美元/盎司），兼具贵金属避险与光伏新能源工业需求属性"},
-        "copper_lme": {"val": copper_val, "status": copper_status, "time": now_str, "source": copper_src, "url": copper_url, "desc": "LME 三个月期铜（美元/吨），'铜博士' 全球工业周期与经济景气核心温度计"},
+        "copper_lme": {"val": copper_val, "status": copper_status, "time": now_str, "source": copper_src, "url": copper_url, "desc": "COMEX 铜连续合约（美元/磅），'铜博士' 全球工业周期与经济景气核心温度计"},
         "btc": {"val": btc_val, "status": btc_status, "time": now_str, "source": btc_src, "url": btc_url, "desc": "比特币现货价格（USDT），加密市场风险偏好与全球流动性的核心风向标"}
     }
 
@@ -1440,12 +1450,55 @@ def fetch_home_market_metrics(opener):
 # ==============================================================================
 MACRO_HISTORY_CACHE = os.path.join("data", "macro_history.json")
 MACRO_HISTORY_START = "2006-01-01"
+MACRO_HISTORY_VALUE_LIMITS = {
+    "gold_london": (100.0, 20000.0),
+    "silver_london": (2.0, 80.0),
+}
+
+
+def _sanitize_macro_history(data):
+    """Remove impossible outlier points from legacy macro history data."""
+    if not isinstance(data, dict):
+        return False
+    changed = False
+    for key, (lower, upper) in MACRO_HISTORY_VALUE_LIMITS.items():
+        item = data.get(key)
+        if not isinstance(item, dict) or not isinstance(item.get("points"), list):
+            continue
+        clean_points = []
+        for point in item["points"]:
+            try:
+                value = float(point[1])
+            except (IndexError, TypeError, ValueError):
+                changed = True
+                continue
+            if lower <= value <= upper:
+                clean_points.append([str(point[0]), value])
+            else:
+                changed = True
+        if len(clean_points) != len(item["points"]):
+            item["points"] = clean_points
+    return changed
 
 
 def _read_macro_history_cache():
     try:
         with open(MACRO_HISTORY_CACHE, "r", encoding="utf-8") as f:
             data = json.load(f)
+        # 兼容旧缓存：早期把美元/磅价格误按 22.0462 放大后标成了“美分/磅”。
+        # 修正后立即落盘，确保下一次抓取合并时不会再次读取旧口径。
+        copper = data.get("copper_lme") if isinstance(data, dict) else None
+        migrated = False
+        if isinstance(copper, dict) and copper.get("points"):
+            if copper.get("unit") == "美分/磅" or float(copper["points"][-1][1]) > 20:
+                for point in copper["points"]:
+                    point[1] = round(float(point[1]) / 22.0462, 4)
+                copper["unit"] = "美元/磅"
+                migrated = True
+        if _sanitize_macro_history(data):
+            migrated = True
+        if migrated and isinstance(data, dict):
+            _write_macro_history_cache(data)
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
@@ -1453,6 +1506,7 @@ def _read_macro_history_cache():
 
 def _write_macro_history_cache(data):
     try:
+        _sanitize_macro_history(data)
         os.makedirs(os.path.dirname(MACRO_HISTORY_CACHE), exist_ok=True)
         tmp = MACRO_HISTORY_CACHE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -1482,9 +1536,22 @@ def fetch_cboe_macro_history(symbol, start_date=MACRO_HISTORY_START):
         text = resp.read().decode("utf-8-sig", errors="replace")
 
     points = {}
-    for row in csv.DictReader(io.StringIO(text)):
+    reader = csv.DictReader(io.StringIO(text))
+    value_columns = [
+        name for name in (reader.fieldnames or ())
+        if name and name.strip().upper() != "DATE"
+    ]
+    if not value_columns:
+        return []
+
+    # CBOE 的 CSV 通常用 CLOSE，个别指数（例如 SKEW）用指数名作为列名。
+    value_column = next(
+        (name for name in value_columns if name.strip().upper() == "CLOSE"),
+        value_columns[0],
+    )
+    for row in reader:
         raw_date = (row.get("DATE") or "").strip()
-        raw_close = (row.get("CLOSE") or "").strip()
+        raw_close = (row.get(value_column) or "").strip()
         if not raw_date or not raw_close:
             continue
         try:
@@ -1524,24 +1591,245 @@ def fetch_cnn_macro_history():
     return _compact_macro_points(points)
 
 
+def _fetch_eastmoney_macro_history(secid, start_date=MACRO_HISTORY_START, convert_factor=1.0):
+    """读取东方财富日 K 收盘价，用作商品和指数的历史兜底。"""
+    convert_factor = float(convert_factor)
+    start_compact = start_date.replace("-", "")
+    end_compact = now_beijing().strftime("%Y%m%d")
+    fields = urllib.parse.urlencode({
+        "secid": secid,
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f53",
+        "klt": "101",
+        "fqt": "1",
+        "beg": start_compact,
+        "end": end_compact,
+        "lmt": "1000000",
+    })
+    url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{fields}"
+    last_error = None
+    for attempt in range(5):
+        try:
+            req = urllib.request.Request(url, headers={
+                **DEFAULT_HEADERS,
+                "Referer": "https://quote.eastmoney.com/",
+                "Connection": "close",
+            })
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+            rows = (payload.get("data") or {}).get("klines") or []
+            points = {}
+            for row in rows:
+                parts = str(row).split(",")
+                if len(parts) < 2:
+                    continue
+                try:
+                    date_str = parts[0]
+                    close = float(parts[1]) * float(convert_factor)
+                except (TypeError, ValueError):
+                    continue
+                if date_str >= start_date and close > 0:
+                    points[date_str] = close
+            if points:
+                return _compact_macro_points(points)
+        except Exception as exc:
+            last_error = exc
+        time.sleep(1.2 * (attempt + 1))
+    if last_error:
+        raise last_error
+    return []
+
+
+def _fetch_danjuan_pe_history(code):
+    """读取蛋卷指数的全量 PE 历史。"""
+    url = f"https://danjuanfunds.com/djapi/index_eva/pe_history/{code}?day=all"
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Referer": "https://danjuanfunds.com/screw/valuation-table",
+        "Accept": "application/json,text/plain,*/*",
+    })
+    with get_thread_opener().open(req, timeout=25) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    rows = ((payload.get("data") or {}).get("index_eva_pe_growths") or [])
+    points = {}
+    for row in rows:
+        try:
+            ts = float(row["ts"]) / 1000.0
+            pe = float(row["pe"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if pe <= 0:
+            continue
+        date_str = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+        if date_str >= MACRO_HISTORY_START:
+            points[date_str] = pe
+    return _compact_macro_points(points)
+
+
+def _fetch_binance_macro_history(symbol="BTCUSDT"):
+    """分页读取 Binance 日线，供 BTC 卡片展开使用。"""
+    endpoint = "https://data-api.binance.vision/api/v3/klines"
+    start_dt = datetime.strptime("2017-01-01", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    cursor = int(start_dt.timestamp() * 1000)
+    end_ms = int(now_beijing().timestamp() * 1000)
+    points = {}
+    while cursor < end_ms:
+        query = urllib.parse.urlencode({
+            "symbol": symbol,
+            "interval": "1d",
+            "startTime": cursor,
+            "endTime": end_ms,
+            "limit": 1000,
+        })
+        req = urllib.request.Request(f"{endpoint}?{query}", headers=DEFAULT_HEADERS)
+        with get_thread_opener().open(req, timeout=25) as resp:
+            rows = json.loads(resp.read().decode("utf-8"))
+        if not rows:
+            break
+        for row in rows:
+            try:
+                date_str = datetime.fromtimestamp(
+                    float(row[0]) / 1000.0, timezone.utc
+                ).strftime("%Y-%m-%d")
+                close = float(row[4])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if close > 0:
+                points[date_str] = close
+        next_cursor = int(rows[-1][0]) + 86400000
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if len(rows) < 1000:
+            break
+    return _compact_macro_points(points)
+
+
+def _fetch_akshare_hist(symbol, symbol_type="foreign", start_date=MACRO_HISTORY_START):
+    """读取 AkShare 商品历史；调用前临时关闭代理环境变量。"""
+    old_proxy = {
+        key: os.environ.get(key)
+        for key in (
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+            "http_proxy", "https_proxy", "all_proxy",
+        )
+    }
+    for key in old_proxy:
+        os.environ.pop(key, None)
+    try:
+        if symbol_type == "domestic":
+            df = ak.futures_main_sina(symbol=symbol)
+        else:
+            df = ak.futures_foreign_hist(symbol=symbol)
+    finally:
+        for key, value in old_proxy.items():
+            if value is not None:
+                os.environ[key] = value
+    if df is None or df.empty:
+        return []
+    date_col = "日期" if "日期" in df.columns else ("date" if "date" in df.columns else df.columns[0])
+    close_col = "收盘价" if "收盘价" in df.columns else ("close" if "close" in df.columns else df.columns[-1])
+    points = {}
+    for _, row in df.iterrows():
+        try:
+            date_str = pd.to_datetime(row[date_col]).strftime("%Y-%m-%d")
+            close = float(row[close_col])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if date_str >= start_date and close > 0:
+            points[date_str] = close
+    return _compact_macro_points(points)
+
+
+def _merge_macro_series(cached, remote, key, title, unit, source):
+    """合并远端与本地缓存；远端失败时保留完整本地历史。"""
+    old_points = (cached.get(key) or {}).get("points") or []
+    merged = {}
+    for row in old_points:
+        try:
+            merged[str(row[0])] = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+    for row in remote or []:
+        try:
+            merged[str(row[0])] = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+    if not merged:
+        return None
+    return {
+        "title": title,
+        "unit": unit,
+        "source": source,
+        "points": _compact_macro_points(merged),
+    }
+
+
+def append_macro_history_points(history, key, points, title, unit, source):
+    """把当前指标值并入历史缓存，供下一次生成和后续历史图使用。"""
+    merged = _merge_macro_series(history, points, key, title, unit, source)
+    if merged:
+        history[key] = merged
+    return history
+
+
+def write_macro_history_cache(history):
+    """写入本轮最终历史数据；调用方负责保证至少有一个可用序列。"""
+    if history and any(
+        isinstance(item, dict) and item.get("points")
+        for item in history.values()
+    ):
+        history["generated_at"] = now_beijing().strftime("%Y-%m-%d %H:%M:%S")
+        _write_macro_history_cache(history)
+
+
 def fetch_macro_history():
-    """并行获取 VIX / VXN / CNN 历史，网络失败时回退本地缓存。"""
+    """并行获取首页全部可展开卡片的历史序列，网络失败时回退本地缓存。"""
     cached = _read_macro_history_cache()
     remote = {}
     jobs = {
         "vix": lambda: fetch_cboe_macro_history("VIX"),
         "vxn": lambda: fetch_cboe_macro_history("VXN"),
+        "skew": lambda: fetch_cboe_macro_history("SKEW"),
         "cnn": fetch_cnn_macro_history,
+        "usdcny": lambda: _fetch_eastmoney_macro_history("133.USDCNH"),
+        "gold_london": lambda: _fetch_eastmoney_macro_history("101.GC00Y"),
+        "gold_shfe": lambda: _fetch_akshare_hist("AU0", "domestic"),
+        # 这张卡片和主数值都按美元/盎司展示，历史也必须使用美元报价。
+        "silver_london": lambda: _fetch_eastmoney_macro_history("101.SI00Y"),
+        # COMEX 铜实时值和历史值都按美元/磅保存，避免混用 LME 美元/吨口径。
+        "copper_lme": lambda: _fetch_eastmoney_macro_history("101.HG00Y"),
+        "brent": lambda: _fetch_eastmoney_macro_history("102.CL00Y"),
+        "btc": _fetch_binance_macro_history,
+        "pe_ndx": lambda: _fetch_danjuan_pe_history("NDX"),
+        "pe_sp500": lambda: _fetch_danjuan_pe_history("SP500"),
+        "pe_hs300": lambda: _fetch_danjuan_pe_history("SH000300"),
+        "pe_kc50": lambda: _fetch_danjuan_pe_history("SH000688"),
+        "pe_hstech": lambda: _fetch_danjuan_pe_history("HKHSTECH"),
     }
 
-    with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
-        future_map = {ex.submit(job): key for key, job in jobs.items()}
+    # 东方财富会限制并发，先串行补这条链路，再并发其他源。
+    eastmoney_keys = (
+        "usdcny", "gold_london", "silver_london", "copper_lme", "brent",
+    )
+    for key in eastmoney_keys:
+        try:
+            points = jobs[key]()
+        except Exception as e:
+            print(f"    [warn] 宏观历史 {key} 获取失败: {e}")
+            continue
+        if points:
+            remote[key] = points
+
+    parallel_jobs = {k: v for k, v in jobs.items() if k not in eastmoney_keys}
+    with ThreadPoolExecutor(max_workers=min(10, len(parallel_jobs))) as ex:
+        future_map = {ex.submit(job): key for key, job in parallel_jobs.items()}
         for future in as_completed(future_map):
             key = future_map[future]
             try:
-                points = future.result(timeout=40)
+                points = future.result(timeout=70)
             except Exception as e:
-                print(f"    ⚠️ 宏观历史 {key} 获取失败: {e}")
+                print(f"    [warn] 宏观历史 {key} 获取失败: {e}")
                 continue
             if points:
                 remote[key] = points
@@ -1550,31 +1838,27 @@ def fetch_macro_history():
     sources = {
         "vix": ("VIX 标普500波动率", "点", "CBOE 官方历史收盘价"),
         "vxn": ("VXN 纳斯达克100波动率", "点", "CBOE 官方历史收盘价"),
+        "skew": ("SKEW 黑天鹅偏斜", "点", "CBOE 官方历史收盘价"),
         "cnn": ("CNN 恐慌贪婪指数", "分", "CNN 官方历史序列"),
+        "usdcny": ("USD/CNY 汇率", "", "东方财富 USDCNH 历史日线"),
+        "gold_london": ("伦敦金 (XAU/USD)", "美元/盎司", "东方财富 COMEX 黄金历史日线"),
+        "gold_shfe": ("沪金主连 (AU0)", "元/克", "新浪 AkShare 沪金历史日线"),
+        "silver_london": ("伦敦银 (XAG/USD)", "美元/盎司", "东方财富 COMEX 白银历史日线"),
+        "copper_lme": ("COMEX 铜", "美元/磅", "东方财富 COMEX 铜历史日线"),
+        "brent": ("布伦特原油 (BZ=F)", "美元/桶", "东方财富原油历史日线"),
+        "btc": ("比特币 (BTC/USDT)", "USDT", "Binance 日线"),
+        "pe_ndx": ("纳指100历史 PE", "倍", "蛋卷指数估值"),
+        "pe_sp500": ("标普500历史 PE", "倍", "蛋卷指数估值"),
+        "pe_hs300": ("沪深300历史 PE", "倍", "蛋卷指数估值"),
+        "pe_kc50": ("科创50历史 PE", "倍", "蛋卷指数估值"),
+        "pe_hstech": ("恒生科技历史 PE", "倍", "蛋卷指数估值"),
     }
     for key, (title, unit, source) in sources.items():
-        points = remote.get(key)
-        if key == "cnn":
-            merged = {
-                date_str: value
-                for date_str, value in (cached.get(key, {}).get("points") or [])
-            }
-            merged.update({
-                date_str: value for date_str, value in (points or [])
-            })
-            points = _compact_macro_points(merged)
-        elif not points:
-            points = cached.get(key, {}).get("points") or []
+        merged = _merge_macro_series(cached, remote.get(key), key, title, unit, source)
+        if merged:
+            result[key] = merged
 
-        if points:
-            result[key] = {
-                "title": title,
-                "unit": unit,
-                "source": source,
-                "points": points,
-            }
-
-    if remote:
+    if any(key in result for key in sources):
         _write_macro_history_cache(result)
     return result
 
@@ -3318,7 +3602,7 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         "ytd_gain": calc_gain(ytd=True)
     }
 
-def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None):
+def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None, index_valuation_history=None):
     CPO_CODES = {"022365", "540010", "002112", "011892", "021528", "009645", "011370", "011452", "016371", "001956", "016234", "016173", "006616", "018291", "020661", "017462", "001438", "008984", "180031", "004320", "027063"}
     STORAGE_CODES = {"025500", "025209", "018816", "014320"}
     SEMICONDUCTOR_CODES = {"024418", "024975", "020640", "019633", "024424", "017811", "013841", "007491", "020629", "017747", "026633", "162214", "007343", "018777"}
@@ -3333,6 +3617,23 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     COMMODITIES_LOCAL = {"XAU", "AUM", "XAG", "BRENT", "CAD"}
     CRYPTO_LOCAL = {"BTC", "ETH", "SOL", "BNB"}
     col_count = 22
+
+    # Keep report generation usable by callers that supply only a subset of
+    # metrics (for example the local HTML sync helper).
+    _missing = {"status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""}
+    metrics = dict(metrics or {})
+    for _key in ("vix", "usdcny", "vxn", "skew", "brent"):
+        _metric = dict(_missing, val=0.0)
+        _metric.update(metrics.get(_key) or {})
+        metrics[_key] = _metric
+    _fng = dict(_missing, score=0.0, rating="暂无数据")
+    _fng.update(metrics.get("fng") or {})
+    metrics["fng"] = _fng
+    for _key in ("gold_london", "gold_shfe", "silver_london", "copper_lme", "btc"):
+        _metric = dict(_missing, val=0.0)
+        _metric.update(metrics.get(_key) or {})
+        metrics[_key] = _metric
+
     # ================= QDII 监控数据分组 =================
     EMERGING_KWS = ["新兴市场", "新兴", "越南", "印度", "巴西", "东南亚"]
 
@@ -4281,32 +4582,35 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         f'style="color:var(--link-color); text-decoration:none;" '
         f'title="点击跳转至蛋卷指数估值表">（数据源：蛋卷）↗</a>'
     )
-    index_cards_html = ""
-    for item in index_valuations:
-        ticker_html = f'<span style="font-size: 13px; color: var(--footer-text); font-weight: normal; margin-left: 4px;">({item["ticker"]})</span>' if item["ticker"] else ""
-        index_cards_html += f"""
-        <div class="metric-card">
-            <div class="metric-header">
-                <span style="font-size: 18px; font-weight: 800; color: var(--text); display: flex; align-items: baseline;">
-                    {item['name'].split('（')[0]} {ticker_html}
-                </span>
-                <span class="metric-tag" style="background:rgba(0,0,0,0.05); color:{item['color']};">{item['status']}</span>
-            </div>
-            <div class="metric-body" style="margin: 12px 0 6px 0;">
-                <span class="metric-value" style="color:var(--link-color); font-size:22px;">PE: {item['pe']}</span>
-            </div>
-            <div class="metric-desc" style="border-top: none; padding-top: 0;">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px;">
-                    <span>历史分位</span>
-                    <strong style="color:var(--text);">{item['pct']}</strong>
-                </div>
-                <div style="width: 100%; height: 6px; background-color: var(--progress-track); border-radius: 3px; overflow: hidden;">
-                    <div style="width: {item['pct_raw']}%; height: 100%; background-color: {item['color']}; border-radius: 3px; transition: width 1s ease-in-out;"></div>
-                </div>
-
-            </div>
-        </div>
+    def _macro_history_panel(panel_id):
+        return f"""
+                    <div class="macro-history-panel" id="{panel_id}" data-macro-panel hidden>
+                        <div class="macro-history-head">
+                            <div class="macro-history-title-wrap">
+                                <strong class="macro-history-title" data-macro-part="title"></strong>
+                                <span class="macro-history-meta">
+                                    <span data-macro-part="meta"></span>
+                                    <a class="macro-history-source" data-macro-part="source" target="_blank" rel="noopener">官方源 ↗</a>
+                                </span>
+                            </div>
+                            <div class="macro-history-controls">
+                                <button class="macro-history-reset" data-macro-part="resetZoom" type="button" aria-label="重置缩放" title="重置缩放" hidden>↺</button>
+                                <button class="macro-history-close" data-macro-part="close" type="button" aria-label="收起历史图" title="收起历史图">×</button>
+                            </div>
+                        </div>
+                        <div class="macro-history-chart-wrap">
+                            <canvas data-macro-part="canvas" role="img" aria-label="宏观指标历史数据图"></canvas>
+                            <div class="macro-history-range-labels" data-macro-part="rangeLabels" aria-hidden="true"></div>
+                            <div class="macro-selection-box" data-macro-part="selectionBox" hidden></div>
+                            <div class="macro-history-empty" data-macro-part="empty" hidden></div>
+                        </div>
+                        <div class="macro-history-legend" data-macro-part="legend"></div>
+                    </div>
         """
+
+    core_history_panel_html = _macro_history_panel("macroHistoryPanelCore")
+    commodity_history_panel_html = _macro_history_panel("macroHistoryPanelCommodity")
+    index_history_panel_html = _macro_history_panel("macroHistoryPanelIndex")
 
     # ===== 计算指数历年回报数据的更新时间（优先取缓存文件 mtime）=====
     _index_annual_cache_file = os.path.join(CACHE_DIR, "index_annual.json")
@@ -4602,21 +4906,95 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     gold_tag_color = "#70757a" if gold_london['val'] <= 0 else ("#d93025" if gold_london['val'] >= 2500 else ("#e67e22" if gold_london['val'] >= 2000 else ("#188038" if gold_london['val'] >= 1500 else "#1a73e8")))
     gold_shfe_tag_color = "#70757a" if gold_shfe['val'] <= 0 else ("#d93025" if gold_shfe['val'] >= 700 else ("#e67e22" if gold_shfe['val'] >= 600 else ("#188038" if gold_shfe['val'] >= 500 else "#1a73e8")))
     silver_tag_color = "#70757a" if silver_london['val'] <= 0 else ("#d93025" if silver_london['val'] >= 35 else ("#e67e22" if silver_london['val'] >= 28 else ("#188038" if silver_london['val'] >= 20 else "#1a73e8")))
-    copper_tag_color = "#70757a" if copper_lme['val'] <= 0 else ("#d93025" if copper_lme['val'] >= 10000 else ("#e67e22" if copper_lme['val'] >= 8500 else ("#188038" if copper_lme['val'] >= 7000 else "#1a73e8")))
+    copper_tag_color = "#70757a" if copper_lme['val'] <= 0 else ("#d93025" if copper_lme['val'] >= 5.5 else ("#e67e22" if copper_lme['val'] >= 4.5 else ("#188038" if copper_lme['val'] >= 3.5 else "#1a73e8")))
     btc_tag_color = "#70757a" if btc['val'] <= 0 else ("#d93025" if btc['val'] >= 100000 else ("#e67e22" if btc['val'] >= 70000 else ("#188038" if btc['val'] >= 40000 else "#1a73e8")))
 
     macro_history = macro_history or {}
+    index_valuation_history = index_valuation_history or {}
+    for key, item in index_valuation_history.items():
+        if item and item.get("points"):
+            macro_history["pe_" + key] = item
+
+    for _history_key, _label in (
+        ("pe_ndx", "纳指100"),
+        ("pe_sp500", "标普500"),
+        ("pe_hs300", "沪深300"),
+        ("pe_kc50", "科创50"),
+        ("pe_hstech", "恒生科技"),
+    ):
+        macro_history.setdefault(
+            _history_key,
+            {
+                "title": f"{_label}历史 PE",
+                "unit": "倍",
+                "source": "蛋卷指数估值",
+                "points": [],
+            },
+        )
+
+    def _append_current_history_value(key, value, title, unit, source):
+        if value is None:
+            return
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return
+        if numeric <= 0:
+            return
+        append_macro_history_points(
+            macro_history,
+            key,
+            [[today_str, numeric]],
+            title,
+            unit,
+            source,
+        )
+
+    current_history_sources = {
+        "cnn": (fng.get("score"), "CNN 恐慌贪婪指数", "分", "CNN 官方历史序列"),
+        "vix": (vix.get("val"), "VIX 标普500波动率", "点", "CBOE 官方历史收盘价"),
+        "vxn": (vxn.get("val"), "VXN 纳斯达克100波动率", "点", "CBOE 官方历史收盘价"),
+        "skew": (skew.get("val"), "SKEW 黑天鹅偏斜", "点", "CBOE 官方历史收盘价"),
+        "usdcny": (usdcny.get("val"), "USD/CNY 汇率", "", "东方财富 USDCNH 历史日线"),
+        "gold_london": (gold_london.get("val"), "伦敦金 (XAU/USD)", "美元/盎司", "东方财富 COMEX 黄金历史日线"),
+        "gold_shfe": (gold_shfe.get("val"), "沪金主连 (AU0)", "元/克", "新浪 AkShare 沪金历史日线"),
+        "silver_london": (silver_london.get("val"), "伦敦银 (XAG/USD)", "美元/盎司", "东方财富 COMEX 白银历史日线"),
+        "copper_lme": (copper_lme.get("val"), "COMEX 铜", "美元/磅", "东方财富 COMEX 铜历史日线"),
+        "brent": (brent.get("val"), "布伦特原油 (BZ=F)", "美元/桶", "东方财富原油历史日线"),
+        "btc": (btc.get("val"), "比特币 (BTC/USDT)", "USDT", "Binance 日线"),
+    }
+    for _history_key, (_value, _title, _unit, _source) in current_history_sources.items():
+        _append_current_history_value(_history_key, _value, _title, _unit, _source)
+
+    index_history_key_map = {
+        "纳指100": "pe_ndx",
+        "标普500": "pe_sp500",
+        "沪深300": "pe_hs300",
+        "科创50": "pe_kc50",
+        "恒生科技": "pe_hstech",
+    }
+    for _item in index_valuations:
+        _history_key = index_history_key_map.get(_item.get("name"))
+        if _history_key:
+            _append_current_history_value(
+                _history_key,
+                _item.get("pe"),
+                f"{_item.get('name')}历史 PE",
+                "倍",
+                "蛋卷指数估值",
+            )
 
     def _macro_history_available(key):
         return bool(macro_history.get(key, {}).get("points"))
 
-    def _macro_history_attrs(key):
+    def _macro_history_attrs(key, panel_id):
         if not _macro_history_available(key):
             return ' class="metric-card"'
         return (
             ' class="metric-card metric-card-expandable"'
             f' data-macro-history="{key}" role="button" tabindex="0"'
-            ' aria-expanded="false" aria-controls="macroHistoryPanel"'
+            f' data-macro-panel="{panel_id}"'
+            f' aria-expanded="false" aria-controls="{panel_id}"'
             ' title="点击展开历史数据图"'
         )
 
@@ -4627,6 +5005,43 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             '<span class="metric-expand-hint" aria-hidden="true">'
             '历史图 <span class="chevron">▼</span></span>'
         )
+
+    index_cards_html = ""
+    for item in index_valuations:
+        ticker_html = (
+            f'<span style="font-size: 13px; color: var(--footer-text); '
+            f'font-weight: normal; margin-left: 4px;">({item["ticker"]})</span>'
+            if item["ticker"] else ""
+        )
+        history_key = index_history_key_map.get(item["name"], "")
+        card_attrs = (
+            _macro_history_attrs(history_key, "macroHistoryPanelIndex")
+            if history_key else ' class="metric-card"'
+        )
+        index_cards_html += f"""
+        <div{card_attrs}>
+            <div class="metric-header">
+                <span style="font-size: 18px; font-weight: 800; color: var(--text); display: flex; align-items: baseline;">
+                    {item['name'].split('（')[0]} {ticker_html}
+                </span>
+                {_macro_history_hint(history_key) if history_key else ''}
+                <span class="metric-tag" style="background:rgba(0,0,0,0.05); color:{item['color']};">{item['status']}</span>
+            </div>
+            <div class="metric-body" style="margin: 12px 0 6px 0;">
+                <span class="metric-value" style="color:var(--link-color); font-size:22px;">PE: {item['pe']}</span>
+            </div>
+            <div class="metric-desc" style="border-top: none; padding-top: 0;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px;">
+                    <span>历史分位</span>
+                    <strong style="color:var(--text);">{item['pct']}</strong>
+                </div>
+                <div style="width: 100%; height: 6px; background-color: var(--progress-track); border-radius: 3px; overflow: hidden;">
+                    <div style="width: {item['pct_raw']}%; height: 100%; background-color: {item['color']}; border-radius: 3px; transition: width 1s ease-in-out;"></div>
+                </div>
+
+            </div>
+        </div>
+        """
 
     macro_history_json = json.dumps(
         macro_history, ensure_ascii=False, separators=(",", ":")
@@ -4639,6 +5054,36 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
     const MACRO_HISTORY = __MACRO_HISTORY_JSON__;
     const MACRO_CONFIG = {
+        usdcny: {
+            lineColor: '#188038',
+            yStart: 5.8,
+            suggestedMax: 7.6,
+            sourceUrl: 'https://finance.sina.com.cn/money/forex/hq/USDCNY.shtml',
+            bands: [
+                { min: 0,   max: 7.15, label: '人民币偏强', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 7.15, max: 7.30, label: '区间震荡',   color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 7.30, max: 20,   label: '美元偏强',   color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' }
+            ],
+            lines: [
+                { value: 7.15, label: '7.15 偏强', color: '#188038' },
+                { value: 7.30, label: '7.30 偏强', color: '#e67e22' }
+            ]
+        },
+        skew: {
+            lineColor: '#6f42c1',
+            yStart: 90,
+            suggestedMax: 170,
+            sourceUrl: 'https://www.cboe.com/us/indices/dashboard/skew/',
+            bands: [
+                { min: 0,   max: 132, label: '常态平稳', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 132, max: 140, label: '风险积聚', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 140, max: 300, label: '尾部警戒', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 132, label: '132 积聚', color: '#e67e22' },
+                { value: 140, label: '140 预警', color: '#d93025' }
+            ]
+        },
         vix: {
             lineColor: '#1a73e8',
             yStart: 8,
@@ -4689,10 +5134,214 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 { value: 55, label: '55 中性', color: '#2f855a' },
                 { value: 75, label: '75 贪婪', color: '#188038' }
             ]
+        },
+        gold_london: {
+            lineColor: '#f39c12',
+            yStart: 800,
+            suggestedMax: 4800,
+            sourceUrl: 'https://www.investing.com/currencies/xau-usd',
+            bands: [
+                { min: 0,    max: 1500, label: '低位盘整', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 1500, max: 2000, label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 2000, max: 2500, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 2500, max: 10000,label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 1500, label: '1500 低位', color: '#1a73e8' },
+                { value: 2000, label: '2000 中性', color: '#188038' },
+                { value: 2500, label: '2500 高企', color: '#d93025' }
+            ]
+        },
+        gold_shfe: {
+            lineColor: '#e67e22',
+            yStart: 150,
+            suggestedMax: 950,
+            sourceUrl: 'https://finance.sina.com.cn/futures/quotes/AU0.shtml',
+            bands: [
+                { min: 0,   max: 500, label: '低位盘整', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 500, max: 600, label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 600, max: 700, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 700, max: 3000,label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 500, label: '500 低位', color: '#1a73e8' },
+                { value: 600, label: '600 中性', color: '#188038' },
+                { value: 700, label: '700 高企', color: '#d93025' }
+            ]
+        },
+        silver_london: {
+            lineColor: '#95a5a6',
+            yStart: 8,
+            suggestedMax: 65,
+            sourceUrl: 'https://www.investing.com/currencies/xag-usd',
+            bands: [
+                { min: 0,  max: 20, label: '低位盘整', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 20, max: 28, label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 28, max: 35, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 35, max: 200,label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 20, label: '20 低位', color: '#1a73e8' },
+                { value: 28, label: '28 中位', color: '#188038' },
+                { value: 35, label: '35 高企', color: '#d93025' }
+            ]
+        },
+        copper_lme: {
+            lineColor: '#b87333',
+            yStart: 2,
+            suggestedMax: 7,
+            sourceUrl: 'https://finance.yahoo.com/quote/HG%3DF/',
+            bands: [
+                { min: 0,   max: 3.5, label: '需求疲软', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 3.5, max: 4.5, label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 4.5, max: 5.5, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 5.5, max: 20,  label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 3.5, label: '3.5 低位', color: '#1a73e8' },
+                { value: 4.5, label: '4.5 中位', color: '#188038' },
+                { value: 5.5, label: '5.5 高企', color: '#d93025' }
+            ]
+        },
+        brent: {
+            lineColor: '#2c3e50',
+            yStart: 10,
+            suggestedMax: 130,
+            sourceUrl: 'https://finance.sina.com.cn/futures/quotes/OIL.shtml',
+            bands: [
+                { min: 0,  max: 65,  label: '需求疲软', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 65, max: 80,  label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 80, max: 95,  label: '通胀溢价', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 95, max: 300, label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 65, label: '65 低位', color: '#1a73e8' },
+                { value: 80, label: '80 中位', color: '#188038' },
+                { value: 95, label: '95 高企', color: '#d93025' }
+            ]
+        },
+        btc: {
+            lineColor: '#f7931a',
+            yStart: 0,
+            suggestedMax: 120000,
+            sourceUrl: 'https://www.binance.com/zh-CN/trade/BTC_USDT',
+            bands: [
+                { min: 0,      max: 40000,  label: '低位盘整', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 40000,  max: 70000,  label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 70000,  max: 100000, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 100000, max: 1000000,label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 40000,  label: '4万 低位', color: '#1a73e8' },
+                { value: 70000,  label: '7万 中位', color: '#188038' },
+                { value: 100000, label: '10万 高企', color: '#d93025' }
+            ]
+        },
+        pe_ndx: {
+            lineColor: '#1a73e8',
+            yStart: 10,
+            suggestedMax: 50,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,  max: 20, label: '极度低估', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 20, max: 30, label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 30, max: 40, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 40, max: 200,label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 20, label: 'PE 20', color: '#188038' },
+                { value: 30, label: 'PE 30', color: '#1a73e8' },
+                { value: 40, label: 'PE 40', color: '#d93025' }
+            ]
+        },
+        pe_sp500: {
+            lineColor: '#1a73e8',
+            yStart: 8,
+            suggestedMax: 40,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,  max: 15, label: '低估',     color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 15, max: 25, label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 25, max: 32, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 32, max: 200,label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 15, label: 'PE 15', color: '#188038' },
+                { value: 25, label: 'PE 25', color: '#1a73e8' },
+                { value: 32, label: 'PE 32', color: '#d93025' }
+            ]
+        },
+        pe_hs300: {
+            lineColor: '#1a73e8',
+            yStart: 5,
+            suggestedMax: 25,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,  max: 10, label: '低估',     color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 10, max: 15, label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 15, max: 20, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 20, max: 200,label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 10, label: 'PE 10', color: '#188038' },
+                { value: 15, label: 'PE 15', color: '#1a73e8' },
+                { value: 20, label: 'PE 20', color: '#d93025' }
+            ]
+        },
+        pe_kc50: {
+            lineColor: '#1a73e8',
+            yStart: 20,
+            suggestedMax: 150,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,   max: 40,  label: '相对低位', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 40,  max: 80,  label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 80,  max: 120, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 120, max: 500, label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 40,  label: 'PE 40',  color: '#188038' },
+                { value: 80,  label: 'PE 80',  color: '#1a73e8' },
+                { value: 120, label: 'PE 120', color: '#d93025' }
+            ]
+        },
+        pe_hstech: {
+            lineColor: '#1a73e8',
+            yStart: 10,
+            suggestedMax: 50,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,  max: 15, label: '低估',     color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 15, max: 25, label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 25, max: 35, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 35, max: 200,label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 15, label: 'PE 15', color: '#188038' },
+                { value: 25, label: 'PE 25', color: '#1a73e8' },
+                { value: 35, label: 'PE 35', color: '#d93025' }
+            ]
         }
     };
 
-    const state = { key: null, chart: null, waitAttempts: 0, zoomRange: null };
+    const state = {
+        key: null,
+        target: null,
+        panel: null,
+        chart: null,
+        waitAttempts: 0,
+        zoomRange: null
+    };
+    const PANEL_IDS = [
+        'macroHistoryPanelCore',
+        'macroHistoryPanelCommodity',
+        'macroHistoryPanelIndex'
+    ];
 
     function themeColors() {
         const dark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -4794,8 +5443,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         return band ? band.label : cfg.bands[cfg.bands.length - 1].label;
     }
 
+    function panelPart(name) {
+        if (!state.panel) return null;
+        return state.panel.querySelector('[data-macro-part="' + name + '"]');
+    }
+
     function renderLegend(cfg) {
-        const legend = document.getElementById('macroHistoryLegend');
+        const legend = panelPart('legend');
         if (!legend) return;
         legend.replaceChildren();
         cfg.bands.forEach(function(band) {
@@ -4813,7 +5467,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     }
 
     function renderRangeLabels(cfg, chart) {
-        const layer = document.getElementById('macroHistoryRangeLabels');
+        const layer = panelPart('rangeLabels');
         if (!layer || !chart || !chart.scales || !chart.scales.y) return;
         layer.replaceChildren();
         const candidates = [];
@@ -4887,17 +5541,18 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             end = Math.max(start + 1, Math.min(state.zoomRange[1], total - 1));
         }
         const count = end - start + 1;
-        document.getElementById('macroHistoryMeta').textContent =
+        const meta = panelPart('meta');
+        if (meta) meta.textContent =
             series.points[start][0] + ' ~ ' + series.points[end][0] +
             ' · ' + count.toLocaleString('zh-CN') + ' 个观测点 · ' + series.source;
-        const reset = document.getElementById('macroHistoryResetZoom');
+        const reset = panelPart('resetZoom');
         if (reset) reset.hidden = !state.zoomRange;
     }
 
-    function setupMacroSelection(canvas) {
+    function setupMacroSelection(canvas, panel) {
         if (!canvas || canvas._macroSelectionBound) return;
         canvas._macroSelectionBound = true;
-        const box = document.getElementById('macroSelectionBox');
+        const box = panel.querySelector('[data-macro-part="selectionBox"]');
         let drag = null;
 
         function pointerPosition(event) {
@@ -4995,8 +5650,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     function renderMacroHistory(key) {
         const series = MACRO_HISTORY[key];
         const cfg = MACRO_CONFIG[key];
-        const canvas = document.getElementById('macroHistoryCanvas');
-        const empty = document.getElementById('macroHistoryEmpty');
+        const panel = state.panel;
+        const canvas = panelPart('canvas');
+        const empty = panelPart('empty');
         if (!series || !cfg || !canvas || !empty) return;
 
         if (typeof Chart === 'undefined') {
@@ -5035,6 +5691,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         const colors = themeColors();
         const unit = series.unit || '';
         const rightGutter = window.innerWidth <= 640 ? 76 : 90;
+        const xTickLimit = window.innerWidth <= 480 ? 4 : (window.innerWidth <= 900 ? 6 : 10);
 
         state.chart = new Chart(canvas.getContext('2d'), {
             type: 'line',
@@ -5082,10 +5739,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     x: {
                         ticks: {
                             color: colors.text,
-                            maxTicksLimit: 10,
+                            maxTicksLimit: xTickLimit,
                             maxRotation: 0,
                             autoSkip: true,
-                            font: { size: 10 }
+                            font: { size: window.innerWidth <= 480 ? 9 : 10 }
                         },
                         grid: { display: false },
                         border: { color: colors.grid }
@@ -5106,7 +5763,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 }
             }
         });
-        setupMacroSelection(canvas);
+        setupMacroSelection(canvas, panel);
         canvas.onmouseleave = function() {
             if (state.chart) {
                 state.chart._macroCrosshair = null;
@@ -5119,7 +5776,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }, 260);
     }
 
-    function setOpenCards(key) {
+    function setOpenCards(key, panelId) {
         document.querySelectorAll('[data-macro-history]').forEach(function(card) {
             const active = card.getAttribute('data-macro-history') === key;
             card.classList.toggle('is-open', active);
@@ -5127,21 +5784,32 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         });
     }
 
-    function openMacroHistory(key) {
-        const panel = document.getElementById('macroHistoryPanel');
+    function openMacroHistory(key, panelId) {
+        const panel = document.getElementById(panelId);
         const series = MACRO_HISTORY[key];
         const cfg = MACRO_CONFIG[key];
         if (!panel || !series || !cfg) return;
 
+        PANEL_IDS.forEach(function(id) {
+            const other = document.getElementById(id);
+            if (other && other !== panel) other.hidden = true;
+        });
+        const previousPanel = state.panel;
+        if (previousPanel && previousPanel !== panel) {
+            const oldCanvas = previousPanel.querySelector('[data-macro-part="canvas"]');
+            if (oldCanvas) oldCanvas._macroSelectionBound = false;
+        }
         state.key = key;
+        state.panel = panel;
         state.waitAttempts = 0;
         state.zoomRange = null;
         panel.hidden = false;
-        setOpenCards(key);
-        document.getElementById('macroHistoryTitle').textContent = series.title;
+        setOpenCards(key, panelId);
+        const title = panel.querySelector('[data-macro-part="title"]');
+        if (title) title.textContent = series.title;
         updateMacroHistoryMeta(key);
-        const source = document.getElementById('macroHistorySource');
-        source.href = cfg.sourceUrl;
+        const source = panel.querySelector('[data-macro-part="source"]');
+        if (source) source.href = cfg.sourceUrl;
         renderLegend(cfg);
         renderMacroHistory(key);
         requestAnimationFrame(function() {
@@ -5153,9 +5821,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     }
 
     function closeMacroHistory() {
-        const panel = document.getElementById('macroHistoryPanel');
+        const panel = state.panel;
         if (panel) panel.hidden = true;
         state.key = null;
+        state.panel = null;
         state.zoomRange = null;
         destroyChart();
         setOpenCards(null);
@@ -5164,24 +5833,29 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     function initMacroHistory() {
         document.querySelectorAll('[data-macro-history]').forEach(function(card) {
             const key = card.getAttribute('data-macro-history');
+            const panelId = card.getAttribute('data-macro-panel');
             card.addEventListener('click', function(event) {
                 if (event.target.closest('a')) return;
-                if (state.key === key) closeMacroHistory();
-                else openMacroHistory(key);
+                if (state.key === key && state.panel && state.panel.id === panelId) closeMacroHistory();
+                else openMacroHistory(key, panelId);
             });
             card.addEventListener('keydown', function(event) {
                 if (event.key !== 'Enter' && event.key !== ' ') return;
                 if (event.target.closest('a')) return;
                 event.preventDefault();
-                if (state.key === key) closeMacroHistory();
-                else openMacroHistory(key);
+                if (state.key === key && state.panel && state.panel.id === panelId) closeMacroHistory();
+                else openMacroHistory(key, panelId);
             });
         });
 
-        const close = document.getElementById('macroHistoryClose');
-        if (close) close.addEventListener('click', closeMacroHistory);
-        const reset = document.getElementById('macroHistoryResetZoom');
-        if (reset) reset.addEventListener('click', resetMacroZoom);
+        PANEL_IDS.forEach(function(panelId) {
+            const panel = document.getElementById(panelId);
+            if (!panel) return;
+            const close = panel.querySelector('[data-macro-part="close"]');
+            if (close) close.addEventListener('click', closeMacroHistory);
+            const reset = panel.querySelector('[data-macro-part="resetZoom"]');
+            if (reset) reset.addEventListener('click', resetMacroZoom);
+        });
 
         document.addEventListener('keydown', function(event) {
             if (event.key === 'Escape' && state.key) closeMacroHistory();
@@ -5199,6 +5873,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             if (state.key && state.chart) {
                 const cfg = MACRO_CONFIG[state.key];
                 setTimeout(function() { renderRangeLabels(cfg, state.chart); }, 80);
+                const expectedTicks = window.innerWidth <= 480 ? 4 : (window.innerWidth <= 900 ? 6 : 10);
+                if (state.chart.options.scales.x.ticks.maxTicksLimit !== expectedTicks) {
+                    renderMacroHistory(state.key);
+                }
             }
         });
     }
@@ -7525,7 +8203,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
                 </div>
                 <div class="macro-metrics-grid">
-                    <div{_macro_history_attrs('cnn')}>
+                    <div{_macro_history_attrs('cnn', 'macroHistoryPanelCore')}>
                         <div class="metric-header">
                             <span>CNN 恐慌贪婪指数</span>
                             {_macro_history_hint('cnn')}
@@ -7545,7 +8223,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div{_macro_history_attrs('vix')}>
+                    <div{_macro_history_attrs('vix', 'macroHistoryPanelCore')}>
                         <div class="metric-header">
                             <span>VIX 恐慌指数</span>
                             {_macro_history_hint('vix')}
@@ -7562,7 +8240,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div{_macro_history_attrs('vxn')}>
+                    <div{_macro_history_attrs('vxn', 'macroHistoryPanelCore')}>
                         <div class="metric-header">
                             <span>VXN 纳指波动率</span>
                             {_macro_history_hint('vxn')}
@@ -7579,9 +8257,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
                     
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('usdcny', 'macroHistoryPanelCore')}>
                         <div class="metric-header">
                             <span>USD/CNY 汇率</span>
+                            {_macro_history_hint('usdcny')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#188038;">{usdcny['val']}</span>
@@ -7595,9 +8274,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('skew', 'macroHistoryPanelCore')}>
                         <div class="metric-header">
                             <span>SKEW 黑天鹅偏斜</span>
+                            {_macro_history_hint('skew')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#e67e22;">{skew['val']}</span>
@@ -7614,28 +8294,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <!-- 【新增】止盈三信号面板（默认折叠） -->
                     {stop_profit_html}
 
-                    <div class="macro-history-panel" id="macroHistoryPanel" hidden>
-                        <div class="macro-history-head">
-                            <div class="macro-history-title-wrap">
-                                <strong class="macro-history-title" id="macroHistoryTitle"></strong>
-                                <span class="macro-history-meta">
-                                    <span id="macroHistoryMeta"></span>
-                                    <a class="macro-history-source" id="macroHistorySource" target="_blank" rel="noopener">官方源 ↗</a>
-                                </span>
-                            </div>
-                            <div class="macro-history-controls">
-                                <button class="macro-history-reset" id="macroHistoryResetZoom" type="button" aria-label="重置缩放" title="重置缩放" hidden>↺</button>
-                                <button class="macro-history-close" id="macroHistoryClose" type="button" aria-label="收起历史图" title="收起历史图">×</button>
-                            </div>
-                        </div>
-                        <div class="macro-history-chart-wrap">
-                            <canvas id="macroHistoryCanvas" role="img" aria-label="宏观指标历史数据图"></canvas>
-                            <div class="macro-history-range-labels" id="macroHistoryRangeLabels" aria-hidden="true"></div>
-                            <div class="macro-selection-box" id="macroSelectionBox" hidden></div>
-                            <div class="macro-history-empty" id="macroHistoryEmpty" hidden></div>
-                        </div>
-                        <div class="macro-history-legend" id="macroHistoryLegend"></div>
-                    </div>
+                    {core_history_panel_html}
                 </div>
 
                 <!-- ===== 大宗商品风向标 ===== -->
@@ -7644,9 +8303,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
                 </div>
                 <div class="macro-metrics-grid">
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('gold_london', 'macroHistoryPanelCommodity')}>
                         <div class="metric-header">
                             <span>伦敦金 (XAU/USD)</span>
+                            {_macro_history_hint('gold_london')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#f39c12;">{gold_london['val']}</span>
@@ -7660,9 +8320,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('gold_shfe', 'macroHistoryPanelCommodity')}>
                         <div class="metric-header">
                             <span>沪金主连 (AUM / AU0)</span>
+                            {_macro_history_hint('gold_shfe')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#e67e22;">{gold_shfe['val']}</span>
@@ -7676,9 +8337,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('silver_london', 'macroHistoryPanelCommodity')}>
                         <div class="metric-header">
                             <span>伦敦银 (XAG/USD)</span>
+                            {_macro_history_hint('silver_london')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#95a5a6;">{silver_london['val']}</span>
@@ -7692,9 +8354,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('copper_lme', 'macroHistoryPanelCommodity')}>
                         <div class="metric-header">
-                            <span>LME铜 (CAD)</span>
+                            <span>COMEX 铜</span>
+                            {_macro_history_hint('copper_lme')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#b87333;">{copper_lme['val']}</span>
@@ -7708,9 +8371,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('brent', 'macroHistoryPanelCommodity')}>
                         <div class="metric-header">
                             <span>布伦特原油 (BZ=F)</span>
+                            {_macro_history_hint('brent')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#2c3e50;">{brent['val']}</span>
@@ -7724,9 +8388,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('btc', 'macroHistoryPanelCommodity')}>
                         <div class="metric-header">
                             <span>比特币 (BTC/USDT)</span>
+                            {_macro_history_hint('btc')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#f7931a;">{btc['val']}</span>
@@ -7740,6 +8405,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
                 </div>
+                {commodity_history_panel_html}
 
                 <!-- ===== 宽基指数估值 ===== -->
                 <div style="display: flex; justify-content: space-between; align-items: flex-end;">
@@ -7749,6 +8415,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <div class="index-metrics-grid">
                     {index_cards_html}
                 </div>
+                {index_history_panel_html}
 
                 {index_annual_html}
 
@@ -9793,7 +10460,7 @@ def fetch_precious_metals_data(symbol, start_date, end_date):
     return None
 
 # ==============================================================================
-# 【新增】大宗商品（布伦特原油 / LME铜）与货币汇率（USD/CNY、USD/JPY、DXY）抓取
+# 【新增】大宗商品（布伦特原油 / COMEX 铜）与货币汇率（USD/CNY、USD/JPY、DXY）抓取
 # ==============================================================================
 def fetch_yahoo_history(symbol, start_date, end_date):
     """从 Yahoo Finance 抓取日线历史收盘价（通用函数，供指数/大宗商品/货币使用）。
@@ -10519,8 +11186,17 @@ def main():
             print(f"⚠️ 宏观历史序列抓取失败: {e}")
             macro_history = _read_macro_history_cache()
     print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {home_metrics['fng']['score']} | VIX {home_metrics['vix']['val']} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
-    print(f"🛢️ 大宗商品指标获取成功: 布伦特原油 {home_metrics['brent']['val']} | 伦敦金 {home_metrics['gold_london']['val']} | 沪金主连 {home_metrics['gold_shfe']['val']} | 伦敦银 {home_metrics['silver_london']['val']} | LME铜 {home_metrics['copper_lme']['val']} | BTC {home_metrics.get('btc', {}).get('val', 0.0)}")
-    print(f"📈 宏观历史序列: VIX {len(macro_history.get('vix', {}).get('points', []))} 点 | VXN {len(macro_history.get('vxn', {}).get('points', []))} 点 | CNN {len(macro_history.get('cnn', {}).get('points', []))} 点")
+    print(f"🛢️ 大宗商品指标获取成功: 布伦特原油 {home_metrics['brent']['val']} | 伦敦金 {home_metrics['gold_london']['val']} | 沪金主连 {home_metrics['gold_shfe']['val']} | 伦敦银 {home_metrics['silver_london']['val']} | COMEX铜 {home_metrics['copper_lme']['val']} | BTC {home_metrics.get('btc', {}).get('val', 0.0)}")
+    macro_history_point_counts = " | ".join(
+        f"{key.upper()} {len(macro_history.get(key, {}).get('points', []))}"
+        for key in (
+            "vix", "vxn", "cnn", "usdcny", "skew",
+            "gold_london", "gold_shfe", "silver_london",
+            "copper_lme", "brent", "btc",
+            "pe_ndx", "pe_sp500", "pe_hs300", "pe_kc50", "pe_hstech",
+        )
+    )
+    print(f"📈 宏观与估值历史序列: {macro_history_point_counts}")
     fed_prob_count = len(fed_monitor.get('probabilities', []))
     fed_status = "✅" if fed_monitor.get('meeting_text') != "--" and fed_prob_count > 0 else "⚠️"
     print(f"🏛️ 美联储利率观测器 {fed_status}: 下一次会议 {fed_monitor.get('meeting_text', '--')} | 期货价格 {fed_monitor.get('futures_price', '--')} | 当前概率 {fed_prob_count} 档 | 更新时间 {fed_monitor.get('update_text', '--')}")
@@ -10769,6 +11445,8 @@ def main():
         _seen_res.add(c)
         _deduped.append(r)
     results = _deduped
+
+    write_macro_history_cache(macro_history)
 
     if results:
         abs_path = generate_html_report(
