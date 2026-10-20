@@ -11,3 +11,4 @@
 # 只忽略保存过程中的临时文件。
 /data/*.tmp
 $*
+_sync_existing.py

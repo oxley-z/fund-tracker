@@ -235,6 +235,22 @@ def is_network_error(e):
     ))
 
 
+def is_transient_api_error(payload):
+    """识别交易所临时业务错误，避免将其静默当成当日无数据。"""
+    if not isinstance(payload, dict):
+        return False
+    error_text = ' '.join(
+        str(payload.get(key, ''))
+        for key in ('error', 'message', 'errorType')
+    ).lower()
+    return any(marker in error_text for marker in (
+        'system error',
+        'try again later',
+        'exceptioninterceptor',
+        'service unavailable',
+    ))
+
+
 def fetch_sse_day(date_str):
     """获取上海证券交易所ETF数据"""
     ts  = int(time.time() * 1000)
@@ -247,7 +263,23 @@ def fetch_sse_day(date_str):
     try:
         resp  = HTTP_SESSION.get(url, headers=HEADERS, timeout=20)
         resp.raise_for_status()
-        items = resp.json().get('pageHelp', {}).get('data', [])
+        payload = resp.json()
+        if not isinstance(payload, dict):
+            return None, 'apierr'
+
+        success = payload.get('success')
+        if success is False or str(success).lower() == 'false':
+            return None, (
+                'transient' if is_transient_api_error(payload) else 'apierr'
+            )
+
+        page_help = payload.get('pageHelp')
+        if not isinstance(page_help, dict):
+            return None, (
+                'transient' if is_transient_api_error(payload) else 'apierr'
+            )
+
+        items = page_help.get('data', [])
         # 标记为上交所数据
         for item in items:
             item['exchange'] = 'SSE'
@@ -419,7 +451,9 @@ def fetch_combined_day(date_str, szse_records=None):
     if szse_status == 'ok' and szse_items:
         all_items.extend(szse_items)
 
-    if sse_status == 'neterr' or szse_status == 'neterr':
+    if sse_status == 'transient' or szse_status == 'transient':
+        return (None, 'transient')
+    elif sse_status == 'neterr' or szse_status == 'neterr':
         return (None, 'neterr')
     elif sse_status == 'apierr' or szse_status == 'apierr':
         return (None, 'apierr')
@@ -452,6 +486,7 @@ def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
         for date_str in pending_dates:
             print(f'同步 {date_str} [{mode_label}，已新增 {len(new_records)} 天]', end='  ')
             date_attempt = 0
+            skip_to_next_date = False
             while True:
                 items, status = fetch_combined_day(date_str, szse_records=szse_records)
 
@@ -466,14 +501,26 @@ def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
                         print('— (数据未发布或非交易日)')
                     else:
                         print('— (非交易日)')
+                    # 增量检查从旧到新：今天可能还没发布，但不能因此
+                    # 跳过今天之前尚未补齐的真实历史缺口。
+                    if is_recent and date_str == today_str():
+                        skip_to_next_date = True
                     break
 
-                if status == 'neterr':
+                if status in ('neterr', 'transient'):
                     date_attempt += 1
+                    reason = '网络异常' if status == 'neterr' else '接口临时异常'
                     print(f'\r同步 {date_str} [{mode_label}，已新增 {len(new_records)} 天]  '
-                          f'✗ 网络异常，重试 {date_attempt}/{MAX_NET_FAILURES}', end='  ')
+                          f'✗ {reason}，重试 {date_attempt}/{MAX_NET_FAILURES}', end='  ')
                     if date_attempt >= MAX_NET_FAILURES:
-                        stop_reason = 'network'
+                        # 当天数据尚未发布或交易所临时异常时，保留已有数据继续出图。
+                        # 其他待补日期仍按失败处理，避免掩盖真实数据缺口。
+                        if is_recent and date_str == today_str():
+                            no_data_dates.add(date_str)
+                            print('\n⏳ 今日交易所数据尚未发布')
+                            skip_to_next_date = True
+                            break
+                        stop_reason = 'network' if status == 'neterr' else 'apierr'
                         break
                     time.sleep(NET_RETRY_WAIT)
                     continue
@@ -484,6 +531,8 @@ def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
 
             if stop_reason != 'completed':
                 break
+            if skip_to_next_date:
+                continue
             time.sleep(0.8)
 
     except KeyboardInterrupt:
@@ -1582,8 +1631,7 @@ def main():
             print(f'\n❌ 增量更新失败（{reason}），未覆盖最新数据，保留仓库中的旧看板。')
             return False
         if today in no_data_dates and is_weekday(today):
-            print(f'\n⏳ {today} 的交易所数据尚未发布，保留仓库中的旧看板，稍后重试。')
-            return False
+            print(f'\n⏳ {today} 的交易所数据尚未发布，保留已有数据并重新生成看板。')
     else:
         print(f'▶  Step 1：增量更新 — {today} 数据已存在，跳过。')
         results = read_all_results()
