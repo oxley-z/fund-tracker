@@ -42,13 +42,19 @@ jobs:
 
       # ★ 沪深宽基 ETF 份额看板：基于 data/ 里的断点做增量，生成 web/dual_final_dashboard.html
       - name: Rebuild Dual ETF Dashboard
+        id: dual
+        continue-on-error: true
         env:
           BROWSER: "true"   # CI 无需真的打开浏览器
-        run: |
-          python dual_etf_dashboard.py || echo "⚠️ ETF 份额看板更新失败，本次沿用仓库中的版本"
+        run: python dual_etf_dashboard.py
+
+      - name: Warn if Dual ETF Update Failed
+        if: steps.dual.outcome == 'failure'
+        run: echo "::warning::ETF 份额看板更新失败，本次沿用仓库中的版本"
 
       # ★ 提交断点与看板，让下一次仍能从最新日期继续增量
       - name: Commit Dual ETF Data
+        if: steps.dual.outcome == 'success'
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"

@@ -29,7 +29,7 @@ import warnings
 import webbrowser
 import pandas as pd
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -68,6 +68,7 @@ SZSE_ETF_MAP = {
 
 TARGET_DAYS      = 1500
 CUTOFF_DATE      = datetime(2022, 1, 1)
+HISTORY_START_DATE = '2022-01-04'  # 2022 年首个 A 股交易日
 OUTPUT_HTML      = os.path.join('web', 'dual_final_dashboard.html')
 CHECKPOINT       = os.path.join('data', 'dual_checkpoint.json')
 os.makedirs(os.path.dirname(OUTPUT_HTML), exist_ok=True)
@@ -76,6 +77,9 @@ MAX_NET_FAILURES = 5
 NET_RETRY_WAIT   = 3
 CHECKPOINT_VERSION = 2
 SZSE_HISTORY_CHUNK_DAYS = 170
+BEIJING_TZ = timezone(timedelta(hours=8))
+HTTP_SESSION = requests.Session()
+HTTP_SESSION.trust_env = False
 
 # 请求头
 HEADERS = {
@@ -162,8 +166,15 @@ def save_checkpoint(results, note=''):
 
 
 def today_str():
-    """返回当天日期字符串 YYYY-MM-DD。"""
-    return datetime.today().strftime('%Y-%m-%d')
+    """返回北京时间当天日期字符串 YYYY-MM-DD。"""
+    return datetime.now(BEIJING_TZ).strftime('%Y-%m-%d')
+
+
+def today_beijing():
+    """返回北京时间当天零点（无时区，便于与交易日字符串比较）。"""
+    return datetime.now(BEIJING_TZ).replace(
+        hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+    )
 
 
 def get_existing_dates():
@@ -234,8 +245,7 @@ def fetch_sse_day(date_str):
         f'&STAT_DATE={date_str}&_{ts}'
     )
     try:
-        resp  = requests.get(url, headers=HEADERS, timeout=10,
-                             proxies={'http': None, 'https': None})
+        resp  = HTTP_SESSION.get(url, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         items = resp.json().get('pageHelp', {}).get('data', [])
         # 标记为上交所数据
@@ -277,8 +287,7 @@ def _szse_scale_chunk(start_str, end_str):
         'Referer': 'https://www.szse.cn/market/fund/volume/etf/index.html',
         'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*',
     }
-    resp = requests.get(url, params=params, headers=headers, timeout=45,
-                        proxies={'http': None, 'https': None})
+    resp = HTTP_SESSION.get(url, params=params, headers=headers, timeout=45)
     resp.raise_for_status()
     if not resp.content:
         return {}
@@ -301,7 +310,10 @@ def _szse_scale_chunk(start_str, end_str):
 
     result = {}
     for _, row in df.iterrows():
-        code = str(row.get(code_column, '')).strip().split('.')[0].zfill(6)
+        raw_code = str(row.get(code_column, '')).strip()
+        if re.fullmatch(r'\d+\.0+', raw_code):
+            raw_code = raw_code.split('.', 1)[0]
+        code = raw_code.zfill(6)
         if code not in SZSE_ETF_MAP:
             continue
         date_value = pd.to_datetime(row.get(date_column), errors='coerce')
@@ -409,7 +421,7 @@ def fetch_combined_day(date_str, szse_records=None):
 
     if sse_status == 'neterr' or szse_status == 'neterr':
         return (None, 'neterr')
-    elif sse_status == 'apierr' and szse_status == 'apierr':
+    elif sse_status == 'apierr' or szse_status == 'apierr':
         return (None, 'apierr')
     else:
         return (all_items, 'ok') if all_items else (None, 'nodata')
@@ -419,9 +431,9 @@ def fetch_combined_day(date_str, szse_records=None):
 def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
     """对 date_list 中尚未在 existing_dates 里的日期逐一抓取。"""
     new_records    = []
-    net_fail_count = 0
     stop_reason    = 'completed'
-    pending_dates  = [
+    no_data_dates  = set()
+    pending_dates = [
         date_str for date_str in date_list
         if date_str not in existing_dates and is_weekday(date_str)
     ]
@@ -439,39 +451,46 @@ def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
 
         for date_str in pending_dates:
             print(f'同步 {date_str} [{mode_label}，已新增 {len(new_records)} 天]', end='  ')
-            items, status = fetch_combined_day(date_str, szse_records=szse_records)
+            date_attempt = 0
+            while True:
+                items, status = fetch_combined_day(date_str, szse_records=szse_records)
 
-            if status == 'ok':
-                new_records.append({'date': date_str, 'items': items})
-                net_fail_count = 0
-                print('✓')
-
-            elif status == 'nodata':
-                net_fail_count = 0
-                if is_recent:
-                    print('— (数据未发布或非交易日)')
-                else:
-                    print('— (非交易日)')
-
-            elif status == 'neterr':
-                net_fail_count += 1
-                print(f'✗ 网络异常 ({net_fail_count}/{MAX_NET_FAILURES})')
-                if net_fail_count >= MAX_NET_FAILURES:
-                    stop_reason = 'network'
+                if status == 'ok':
+                    new_records.append({'date': date_str, 'items': items})
+                    print('✓')
                     break
-                time.sleep(NET_RETRY_WAIT)
-                continue
 
-            else:
-                print('— (API错误，跳过)')
+                if status == 'nodata':
+                    no_data_dates.add(date_str)
+                    if is_recent:
+                        print('— (数据未发布或非交易日)')
+                    else:
+                        print('— (非交易日)')
+                    break
 
-            time.sleep(0.4)
+                if status == 'neterr':
+                    date_attempt += 1
+                    print(f'\r同步 {date_str} [{mode_label}，已新增 {len(new_records)} 天]  '
+                          f'✗ 网络异常，重试 {date_attempt}/{MAX_NET_FAILURES}', end='  ')
+                    if date_attempt >= MAX_NET_FAILURES:
+                        stop_reason = 'network'
+                        break
+                    time.sleep(NET_RETRY_WAIT)
+                    continue
+
+                stop_reason = 'apierr'
+                print('✗ API错误')
+                break
+
+            if stop_reason != 'completed':
+                break
+            time.sleep(0.8)
 
     except KeyboardInterrupt:
         stop_reason = 'interrupt'
         print('\n\n⏸  Ctrl+C 捕获')
 
-    return new_records, stop_reason
+    return new_records, stop_reason, no_data_dates
 
 # ── 5. 历史下载模式 ────────────────────────────────────────────────────────────
 
@@ -484,7 +503,7 @@ def collect_history():
         start = datetime.strptime(last_date, '%Y-%m-%d') - timedelta(days=1)
         print(f'▶  历史下载（续传），从 {start.strftime("%Y-%m-%d")} 继续向前')
     else:
-        start = datetime.today()
+        start = today_beijing()
         print(f'▶  历史下载（首次），从今天起向前追溯')
 
     print(f'   目标 {TARGET_DAYS} 个交易日 | 截止 {CUTOFF_DATE.strftime("%Y-%m-%d")}')
@@ -499,7 +518,7 @@ def collect_history():
             date_list.append(d.strftime('%Y-%m-%d'))
         d -= timedelta(days=1)
 
-    new_records, stop_reason = fetch_dates(date_list, existing_dates, '历史')
+    new_records, stop_reason, _ = fetch_dates(date_list, existing_dates, '历史')
 
     # 合并
     for r in new_records:
@@ -515,9 +534,12 @@ def collect_history():
     elif stop_reason == 'network':
         save_checkpoint(results, note='断网自动保存')
         print(f'🔌 断网，已保存 {len(results)} 个交易日 → {CHECKPOINT}')
-    else:
+    elif completed:
         save_checkpoint(results, note='全量采集完成')
         print(f'✅ 历史数据采集完成，共 {len(results)} 个交易日')
+    else:
+        save_checkpoint(results, note=f'历史采集中断（{stop_reason}）')
+        print(f'⚠  历史采集中断（{stop_reason}），已保存 {len(results)} 个交易日')
 
     return results, completed
 
@@ -528,14 +550,14 @@ def incremental_update():
     latest_str = read_latest_date()
     if not latest_str:
         print('❌ 无法读取已有最新日期，请检查断点文件。')
-        return [], 0
+        return [], 0, 'network', set()
 
     latest = datetime.strptime(latest_str, '%Y-%m-%d')
-    today  = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+    today  = today_beijing()
 
     if latest >= today:
         print(f'✅ 数据已是最新（{latest_str}），无需更新。')
-        return read_all_results(), 0
+        return read_all_results(), 0, 'completed', set()
 
     # 生成待检查日期（正向）
     date_list, d = [], latest + timedelta(days=1)
@@ -546,7 +568,7 @@ def incremental_update():
 
     if not date_list:
         print('✅ 当前日期之后没有新的工作日，无需更新。')
-        return read_all_results(), 0
+        return read_all_results(), 0, 'completed', set()
 
     print(f'▶  增量更新模式')
     print(f'   已有数据最新日期 : {latest_str}')
@@ -556,7 +578,9 @@ def incremental_update():
     existing_results = read_all_results()
     existing_dates   = {r['date'] for r in existing_results}
 
-    new_records, stop_reason = fetch_dates(date_list, existing_dates, '增量', is_recent=True)
+    new_records, stop_reason, no_data_dates = fetch_dates(
+        date_list, existing_dates, '增量', is_recent=True
+    )
 
     # 合并去重
     merged_map = {r['date']: r for r in existing_results}
@@ -578,7 +602,7 @@ def incremental_update():
         else:
             print(f'\n⚠  更新中断（{stop_reason}），未获取到新数据。')
 
-    return merged_results, new_count
+    return merged_results, new_count, stop_reason, no_data_dates
 
 # ── 7. 数据整理 ────────────────────────────────────────────────────────────────
 
@@ -1530,7 +1554,7 @@ def main():
     existing_dates = get_existing_dates()
     earliest       = min(existing_dates) if existing_dates else None
     latest         = max(existing_dates) if existing_dates else None
-    history_done   = (earliest is not None and earliest <= CUTOFF_DATE.strftime('%Y-%m-%d'))
+    history_done   = (earliest is not None and earliest <= HISTORY_START_DATE)
 
     print(f'📅 当前日期        : {today}')
     print(f'📂 已有数据范围    : {earliest} ~ {latest}（{len(existing_dates)} 个交易日）' if existing_dates else '📂 暂无本地数据')
@@ -1538,15 +1562,28 @@ def main():
     print()
 
     # 增量更新
-    need_increment = (latest is None or latest < today)
-    if need_increment:
+    if latest is None:
+        print('▶  Step 1：增量更新 — 暂无本地数据，转入首次历史采集。')
+        results = []
+    elif latest < today:
         print(f'▶  Step 1：增量更新')
-        results, new_count = incremental_update()
+        results, new_count, increment_status, no_data_dates = incremental_update()
         if new_count > 0:
             print(f'   本次新增 {new_count} 个交易日。')
         existing_dates = get_existing_dates()
         earliest       = min(existing_dates) if existing_dates else None
-        history_done   = (earliest is not None and earliest <= CUTOFF_DATE.strftime('%Y-%m-%d'))
+        history_done   = (earliest is not None and earliest <= HISTORY_START_DATE)
+        if increment_status != 'completed':
+            reason = {
+                'network': '网络请求失败',
+                'apierr': '交易所 API 返回异常',
+                'interrupt': '更新被中断',
+            }.get(increment_status, increment_status)
+            print(f'\n❌ 增量更新失败（{reason}），未覆盖最新数据，保留仓库中的旧看板。')
+            return False
+        if today in no_data_dates and is_weekday(today):
+            print(f'\n⏳ {today} 的交易所数据尚未发布，保留仓库中的旧看板，稍后重试。')
+            return False
     else:
         print(f'▶  Step 1：增量更新 — {today} 数据已存在，跳过。')
         results = read_all_results()
@@ -1555,13 +1592,16 @@ def main():
     if not history_done:
         print(f'\n▶  Step 2：历史补全')
         results, completed = collect_history()
+        if not completed:
+            print('\n❌ 历史数据补全未完成，保留仓库中的旧看板。')
+            return False
     else:
         print(f'\n▶  Step 2：历史已补全至 2022-01-01，跳过。')
         completed = True
 
     if not results:
         print('\n❌ 无数据，请检查网络后重试。')
-        return
+        return False
 
     print(f'\n共 {len(results)} 个交易日，生成输出文件...\n')
 
@@ -1580,7 +1620,8 @@ def main():
         print('\n🌐 已在浏览器打开 HTML 看板。')
     else:
         print('\n📊 已生成当前数据预览。')
+    return True
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(0 if main() else 1)
