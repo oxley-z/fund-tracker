@@ -71,6 +71,22 @@ jobs:
         run: |
           python main.py --out index.html
 
+      - name: Commit Macro History Cache
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          if [ -f data/macro_history.json ]; then
+            git add data/macro_history.json
+            if git diff --staged --quiet; then
+              echo "No macro history changes to commit."
+            else
+              git commit -m "chore(macro): update macro history cache"
+              git push || (git pull --rebase origin "$GITHUB_REF_NAME" && git push)
+            fi
+          else
+            echo "Macro history cache was not generated; skipping commit."
+          fi
+
       # 部署至 GitHub Pages
       - name: Setup Pages
         uses: actions/configure-pages@v5

@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import csv
+import io
 import html
 import hashlib
 import time
@@ -1431,6 +1433,151 @@ def fetch_home_market_metrics(opener):
         "copper_lme": {"val": copper_val, "status": copper_status, "time": now_str, "source": copper_src, "url": copper_url, "desc": "LME 三个月期铜（美元/吨），'铜博士' 全球工业周期与经济景气核心温度计"},
         "btc": {"val": btc_val, "status": btc_status, "time": now_str, "source": btc_src, "url": btc_url, "desc": "比特币现货价格（USDT），加密市场风险偏好与全球流动性的核心风向标"}
     }
+
+
+# ==============================================================================
+# 核心宏观指标历史序列（卡片展开图）
+# ==============================================================================
+MACRO_HISTORY_CACHE = os.path.join("data", "macro_history.json")
+MACRO_HISTORY_START = "2006-01-01"
+
+
+def _read_macro_history_cache():
+    try:
+        with open(MACRO_HISTORY_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_macro_history_cache(data):
+    try:
+        os.makedirs(os.path.dirname(MACRO_HISTORY_CACHE), exist_ok=True)
+        tmp = MACRO_HISTORY_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, MACRO_HISTORY_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ 宏观历史缓存写入失败: {e}")
+
+
+def _compact_macro_points(point_map):
+    return [
+        [date_str, round(float(value), 2)]
+        for date_str, value in sorted(point_map.items())
+        if date_str and value is not None
+    ]
+
+
+def fetch_cboe_macro_history(symbol, start_date=MACRO_HISTORY_START):
+    """读取 CBOE 官方指数历史 CSV 的日收盘价。"""
+    url = f"https://cdn.cboe.com/api/global/us_indices/daily_prices/{symbol}_History.csv"
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Accept": "text/csv,text/plain,*/*",
+        "Referer": "https://www.cboe.com/",
+    })
+    with get_thread_opener().open(req, timeout=25) as resp:
+        text = resp.read().decode("utf-8-sig", errors="replace")
+
+    points = {}
+    for row in csv.DictReader(io.StringIO(text)):
+        raw_date = (row.get("DATE") or "").strip()
+        raw_close = (row.get("CLOSE") or "").strip()
+        if not raw_date or not raw_close:
+            continue
+        try:
+            date_str = datetime.strptime(raw_date, "%m/%d/%Y").strftime("%Y-%m-%d")
+            close = float(raw_close)
+        except (TypeError, ValueError):
+            continue
+        if date_str >= start_date and close > 0:
+            points[date_str] = close
+    return _compact_macro_points(points)
+
+
+def fetch_cnn_macro_history():
+    """读取 CNN 官方恐惧贪婪指数历史序列。"""
+    url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+        "Origin": "https://edition.cnn.com",
+        "Accept": "application/json,text/plain,*/*",
+    })
+    with get_thread_opener().open(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+
+    rows = (payload.get("fear_and_greed_historical") or {}).get("data") or []
+    points = {}
+    for row in rows:
+        try:
+            date_str = datetime.fromtimestamp(
+                float(row["x"]) / 1000.0, timezone.utc
+            ).strftime("%Y-%m-%d")
+            score = float(row["y"])
+        except (KeyError, TypeError, ValueError, OSError):
+            continue
+        if 0 <= score <= 100:
+            points[date_str] = score
+    return _compact_macro_points(points)
+
+
+def fetch_macro_history():
+    """并行获取 VIX / VXN / CNN 历史，网络失败时回退本地缓存。"""
+    cached = _read_macro_history_cache()
+    remote = {}
+    jobs = {
+        "vix": lambda: fetch_cboe_macro_history("VIX"),
+        "vxn": lambda: fetch_cboe_macro_history("VXN"),
+        "cnn": fetch_cnn_macro_history,
+    }
+
+    with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+        future_map = {ex.submit(job): key for key, job in jobs.items()}
+        for future in as_completed(future_map):
+            key = future_map[future]
+            try:
+                points = future.result(timeout=40)
+            except Exception as e:
+                print(f"    ⚠️ 宏观历史 {key} 获取失败: {e}")
+                continue
+            if points:
+                remote[key] = points
+
+    result = {"generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S")}
+    sources = {
+        "vix": ("VIX 标普500波动率", "点", "CBOE 官方历史收盘价"),
+        "vxn": ("VXN 纳斯达克100波动率", "点", "CBOE 官方历史收盘价"),
+        "cnn": ("CNN 恐慌贪婪指数", "分", "CNN 官方历史序列"),
+    }
+    for key, (title, unit, source) in sources.items():
+        points = remote.get(key)
+        if key == "cnn":
+            merged = {
+                date_str: value
+                for date_str, value in (cached.get(key, {}).get("points") or [])
+            }
+            merged.update({
+                date_str: value for date_str, value in (points or [])
+            })
+            points = _compact_macro_points(merged)
+        elif not points:
+            points = cached.get(key, {}).get("points") or []
+
+        if points:
+            result[key] = {
+                "title": title,
+                "unit": unit,
+                "source": source,
+                "points": points,
+            }
+
+    if remote:
+        _write_macro_history_cache(result)
+    return result
+
 
 def fetch_fund_country_distribution(opener, code, is_qdii=False):
     cache_file = os.path.join(COUNTRY_CACHE_DIR, f"{code}_country.json")
@@ -3171,7 +3318,7 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         "ytd_gain": calc_gain(ytd=True)
     }
 
-def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None):
+def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None):
     CPO_CODES = {"022365", "540010", "002112", "011892", "021528", "009645", "011370", "011452", "016371", "001956", "016234", "016173", "006616", "018291", "020661", "017462", "001438", "008984", "180031", "004320", "027063"}
     STORAGE_CODES = {"025500", "025209", "018816", "014320"}
     SEMICONDUCTOR_CODES = {"024418", "024975", "020640", "019633", "024424", "017811", "013841", "007491", "020629", "017747", "026633", "162214", "007343", "018777"}
@@ -4458,6 +4605,613 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     copper_tag_color = "#70757a" if copper_lme['val'] <= 0 else ("#d93025" if copper_lme['val'] >= 10000 else ("#e67e22" if copper_lme['val'] >= 8500 else ("#188038" if copper_lme['val'] >= 7000 else "#1a73e8")))
     btc_tag_color = "#70757a" if btc['val'] <= 0 else ("#d93025" if btc['val'] >= 100000 else ("#e67e22" if btc['val'] >= 70000 else ("#188038" if btc['val'] >= 40000 else "#1a73e8")))
 
+    macro_history = macro_history or {}
+
+    def _macro_history_available(key):
+        return bool(macro_history.get(key, {}).get("points"))
+
+    def _macro_history_attrs(key):
+        if not _macro_history_available(key):
+            return ' class="metric-card"'
+        return (
+            ' class="metric-card metric-card-expandable"'
+            f' data-macro-history="{key}" role="button" tabindex="0"'
+            ' aria-expanded="false" aria-controls="macroHistoryPanel"'
+            ' title="点击展开历史数据图"'
+        )
+
+    def _macro_history_hint(key):
+        if not _macro_history_available(key):
+            return ''
+        return (
+            '<span class="metric-expand-hint" aria-hidden="true">'
+            '历史图 <span class="chevron">▼</span></span>'
+        )
+
+    macro_history_json = json.dumps(
+        macro_history, ensure_ascii=False, separators=(",", ":")
+    ).replace("</", "<\\/")
+
+    macro_history_script = r"""
+<script>
+(function() {
+    'use strict';
+
+    const MACRO_HISTORY = __MACRO_HISTORY_JSON__;
+    const MACRO_CONFIG = {
+        vix: {
+            lineColor: '#1a73e8',
+            yStart: 8,
+            suggestedMax: 45,
+            sourceUrl: 'https://www.cboe.com/us/indices/dashboard/vix/',
+            bands: [
+                { min: 0,  max: 15,  label: '平稳低波',   color: 'rgba(24,128,56,0.08)',  swatch: '#188038' },
+                { min: 15, max: 20,  label: '正常震荡',   color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 20, max: 30,  label: '警惕波动',   color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 30, max: 200, label: '极度恐慌',   color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 15, label: '15 平稳', color: '#188038' },
+                { value: 20, label: '20 警惕', color: '#e67e22' },
+                { value: 30, label: '30 恐慌', color: '#d93025' }
+            ]
+        },
+        vxn: {
+            lineColor: '#0f9d58',
+            yStart: 8,
+            suggestedMax: 45,
+            sourceUrl: 'https://www.cboe.com/us/indices/dashboard/vxn/',
+            bands: [
+                { min: 0,  max: 22,  label: '波动平缓',   color: 'rgba(24,128,56,0.08)',  swatch: '#188038' },
+                { min: 22, max: 30,  label: '杀估值抛压', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 30, max: 200, label: '科技股极恐', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 22, label: '22 抛压', color: '#e67e22' },
+                { value: 30, label: '30 极恐', color: '#d93025' }
+            ]
+        },
+        cnn: {
+            lineColor: '#6f42c1',
+            yStart: 0,
+            yEnd: 100,
+            sourceUrl: 'https://edition.cnn.com/markets/fear-and-greed',
+            bands: [
+                { min: 0,  max: 25,  label: '极度恐惧', color: 'rgba(217,48,37,0.12)',  swatch: '#d93025' },
+                { min: 25, max: 45,  label: '恐惧',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 45, max: 55,  label: '中性',     color: 'rgba(128,134,139,0.10)', swatch: '#80868b' },
+                { min: 55, max: 75,  label: '贪婪',     color: 'rgba(52,168,83,0.09)',  swatch: '#34a853' },
+                { min: 75, max: 100, label: '极度贪婪', color: 'rgba(24,128,56,0.13)',  swatch: '#188038' }
+            ],
+            lines: [
+                { value: 25, label: '25 极恐', color: '#d93025' },
+                { value: 45, label: '45 恐惧', color: '#e67e22' },
+                { value: 55, label: '55 中性', color: '#2f855a' },
+                { value: 75, label: '75 贪婪', color: '#188038' }
+            ]
+        }
+    };
+
+    const state = { key: null, chart: null, waitAttempts: 0, zoomRange: null };
+
+    function themeColors() {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        return {
+            text: dark ? '#b9c0c8' : '#5f6368',
+            grid: dark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)',
+            labelBg: dark ? 'rgba(37,37,37,0.88)' : 'rgba(255,255,255,0.90)'
+        };
+    }
+
+    function drawMacroRangeLines(chart, opts) {
+        if (!opts || !opts.lines) return;
+        const area = chart.chartArea;
+        const yScale = chart.scales && chart.scales.y;
+        if (!area || !yScale) return;
+        const ctx = chart.ctx;
+
+        opts.lines.forEach(function(line) {
+            const y = yScale.getPixelForValue(line.value);
+            if (y < area.top || y > area.bottom) return;
+            ctx.save();
+            ctx.strokeStyle = line.color;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 3]);
+            ctx.lineDashOffset = 0;
+            ctx.beginPath();
+            ctx.moveTo(area.left, y);
+            ctx.lineTo(chart.width - 54, y);
+            ctx.stroke();
+            ctx.restore();
+        });
+    }
+
+    function ensureRangePlugin() {
+        if (window.__macroRangePluginRegistered || typeof Chart === 'undefined') return;
+        Chart.register({
+            id: 'macroRanges',
+            beforeDatasetsDraw(chart, args, opts) {
+                if (!opts || !opts.bands) return;
+                const area = chart.chartArea;
+                const yScale = chart.scales && chart.scales.y;
+                if (!area || !yScale) return;
+                const ctx = chart.ctx;
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(area.left, area.top, area.width, area.height);
+                ctx.clip();
+                opts.bands.forEach(function(band) {
+                    const yA = yScale.getPixelForValue(band.max);
+                    const yB = yScale.getPixelForValue(band.min);
+                    const top = Math.max(area.top, Math.min(yA, yB));
+                    const bottom = Math.min(area.bottom, Math.max(yA, yB));
+                    if (bottom <= top) return;
+                    ctx.fillStyle = band.color;
+                    ctx.fillRect(area.left, top, area.width, bottom - top);
+                });
+                ctx.restore();
+            },
+            afterDatasetsDraw(chart, args, opts) {
+                drawMacroRangeLines(chart, opts);
+            }
+        });
+        Chart.register({
+            id: 'macroCrosshairPlugin',
+            afterDraw(chart) {
+                const crosshair = chart._macroCrosshair;
+                if (!crosshair) return;
+                const area = chart.chartArea;
+                const ctx = chart.ctx;
+                if (!area || crosshair.x < area.left || crosshair.x > area.right ||
+                    crosshair.y < area.top || crosshair.y > area.bottom) return;
+
+                if (!window._crosshairLineColor) {
+                    window._crosshairLineColor =
+                        getComputedStyle(document.documentElement)
+                            .getPropertyValue('--footer-text').trim() || '#70757a';
+                }
+                ctx.save();
+                ctx.beginPath();
+                ctx.setLineDash([4, 4]);
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = window._crosshairLineColor;
+                ctx.moveTo(crosshair.x, area.top);
+                ctx.lineTo(crosshair.x, area.bottom);
+                ctx.moveTo(area.left, crosshair.y);
+                ctx.lineTo(area.right, crosshair.y);
+                ctx.stroke();
+                ctx.restore();
+            }
+        });
+        window.__macroRangePluginRegistered = true;
+    }
+
+    function classifyValue(cfg, value) {
+        const band = cfg.bands.find(function(item) {
+            return value >= item.min && value < item.max;
+        });
+        return band ? band.label : cfg.bands[cfg.bands.length - 1].label;
+    }
+
+    function renderLegend(cfg) {
+        const legend = document.getElementById('macroHistoryLegend');
+        if (!legend) return;
+        legend.replaceChildren();
+        cfg.bands.forEach(function(band) {
+            const item = document.createElement('span');
+            item.className = 'macro-history-legend-item';
+            const swatch = document.createElement('span');
+            swatch.className = 'macro-history-legend-swatch';
+            swatch.style.background = band.swatch;
+            const text = document.createElement('span');
+            const upper = band.max >= 200 ? '∞' : band.max;
+            text.textContent = band.min + '–' + upper + ' ' + band.label;
+            item.append(swatch, text);
+            legend.appendChild(item);
+        });
+    }
+
+    function renderRangeLabels(cfg, chart) {
+        const layer = document.getElementById('macroHistoryRangeLabels');
+        if (!layer || !chart || !chart.scales || !chart.scales.y) return;
+        layer.replaceChildren();
+        const candidates = [];
+        cfg.lines.forEach(function(line) {
+            const y = chart.scales.y.getPixelForValue(line.value);
+            if (!Number.isFinite(y) || y < chart.chartArea.top || y > chart.chartArea.bottom) return;
+            candidates.push({ line: line, y: y });
+        });
+        candidates.sort(function(a, b) { return a.y - b.y; });
+
+        const gap = 18;
+        const minY = chart.chartArea.top + gap / 2;
+        const maxY = chart.chartArea.bottom - gap / 2;
+        for (let i = 1; i < candidates.length; i++) {
+            candidates[i].y = Math.max(candidates[i].y, candidates[i - 1].y + gap);
+        }
+        if (candidates.length && candidates[candidates.length - 1].y > maxY) {
+            const shift = candidates[candidates.length - 1].y - maxY;
+            candidates.forEach(function(item) { item.y -= shift; });
+        }
+        if (candidates.length && candidates[0].y < minY) {
+            const shift = minY - candidates[0].y;
+            candidates.forEach(function(item) { item.y += shift; });
+        }
+
+        candidates.forEach(function(item) {
+            const tag = document.createElement('span');
+            tag.className = 'macro-range-tag';
+            tag.style.top = item.y + 'px';
+            tag.style.color = item.line.color;
+            tag.textContent = item.line.label;
+            tag.dataset.value = String(item.line.value);
+            layer.appendChild(tag);
+        });
+    }
+
+    function destroyChart() {
+        if (state.chart) {
+            try { state.chart.destroy(); } catch (e) {}
+            state.chart = null;
+        }
+    }
+
+    function handleMacroHover(event, activeElements, chart) {
+        const rect = chart.canvas.getBoundingClientRect();
+        const x = event.native ? event.native.offsetX : (event.x - rect.left);
+        const y = event.native ? event.native.offsetY : (event.y - rect.top);
+        if (x >= chart.chartArea.left && x <= chart.chartArea.right &&
+            y >= chart.chartArea.top && y <= chart.chartArea.bottom) {
+            chart._macroCrosshair = { x: x, y: y };
+        } else {
+            chart._macroCrosshair = null;
+        }
+        if (!chart._macroRafPending) {
+            chart._macroRafPending = true;
+            requestAnimationFrame(function() {
+                chart._macroRafPending = false;
+                chart.draw();
+            });
+        }
+    }
+
+    function updateMacroHistoryMeta(key) {
+        const series = MACRO_HISTORY[key];
+        if (!series || !series.points || !series.points.length) return;
+        const total = series.points.length;
+        let start = 0;
+        let end = total - 1;
+        if (state.zoomRange) {
+            start = Math.max(0, Math.min(state.zoomRange[0], total - 2));
+            end = Math.max(start + 1, Math.min(state.zoomRange[1], total - 1));
+        }
+        const count = end - start + 1;
+        document.getElementById('macroHistoryMeta').textContent =
+            series.points[start][0] + ' ~ ' + series.points[end][0] +
+            ' · ' + count.toLocaleString('zh-CN') + ' 个观测点 · ' + series.source;
+        const reset = document.getElementById('macroHistoryResetZoom');
+        if (reset) reset.hidden = !state.zoomRange;
+    }
+
+    function setupMacroSelection(canvas) {
+        if (!canvas || canvas._macroSelectionBound) return;
+        canvas._macroSelectionBound = true;
+        const box = document.getElementById('macroSelectionBox');
+        let drag = null;
+
+        function pointerPosition(event) {
+            const rect = canvas.getBoundingClientRect();
+            return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        }
+
+        function drawSelection(chart, x) {
+            if (!box) return;
+            const area = chart.chartArea;
+            const left = Math.max(area.left, Math.min(drag.startX, x));
+            const right = Math.min(area.right, Math.max(drag.startX, x));
+            box.style.left = left + 'px';
+            box.style.top = area.top + 'px';
+            box.style.width = Math.max(0, right - left) + 'px';
+            box.style.height = (area.bottom - area.top) + 'px';
+            box.hidden = false;
+            drag.currentX = x;
+        }
+
+        function finishSelection() {
+            const chart = state.chart;
+            if (!drag || !chart || !box) {
+                drag = null;
+                return;
+            }
+            const area = chart.chartArea;
+            const startX = Math.max(area.left, Math.min(drag.startX, area.right));
+            const endX = Math.max(area.left, Math.min(drag.currentX, area.right));
+            box.hidden = true;
+            canvas.style.cursor = '';
+            if (Math.abs(endX - startX) < 12 || !chart.data.labels.length) {
+                drag = null;
+                return;
+            }
+
+            const ratioA = (Math.min(startX, endX) - area.left) / Math.max(1, area.right - area.left);
+            const ratioB = (Math.max(startX, endX) - area.left) / Math.max(1, area.right - area.left);
+            const currentStart = state.zoomRange ? state.zoomRange[0] : 0;
+            const currentCount = chart.data.labels.length;
+            const localStart = Math.round(ratioA * Math.max(0, currentCount - 1));
+            const localEnd = Math.round(ratioB * Math.max(0, currentCount - 1));
+            if (localEnd - localStart < 1) {
+                drag = null;
+                return;
+            }
+            state.zoomRange = [currentStart + localStart, currentStart + localEnd];
+            drag = null;
+            updateMacroHistoryMeta(state.key);
+            renderMacroHistory(state.key);
+        }
+
+        canvas.addEventListener('pointerdown', function(event) {
+            const chart = state.chart;
+            if (!chart || event.button !== 0) return;
+            const point = pointerPosition(event);
+            const area = chart.chartArea;
+            if (point.x < area.left || point.x > area.right ||
+                point.y < area.top || point.y > area.bottom) return;
+            drag = { startX: point.x, currentX: point.x };
+            canvas.style.cursor = 'ew-resize';
+            drawSelection(chart, point.x);
+            if (canvas.setPointerCapture) {
+                try { canvas.setPointerCapture(event.pointerId); } catch (e) {}
+            }
+            event.preventDefault();
+        });
+
+        canvas.addEventListener('pointermove', function(event) {
+            if (!drag || !state.chart) return;
+            const point = pointerPosition(event);
+            drawSelection(
+                state.chart,
+                Math.max(state.chart.chartArea.left,
+                    Math.min(point.x, state.chart.chartArea.right))
+            );
+            event.preventDefault();
+        });
+
+        canvas.addEventListener('pointerup', finishSelection);
+        canvas.addEventListener('pointercancel', function() {
+            drag = null;
+            if (box) box.hidden = true;
+            canvas.style.cursor = '';
+        });
+    }
+
+    function resetMacroZoom() {
+        if (!state.key) return;
+        state.zoomRange = null;
+        updateMacroHistoryMeta(state.key);
+        renderMacroHistory(state.key);
+    }
+
+    function renderMacroHistory(key) {
+        const series = MACRO_HISTORY[key];
+        const cfg = MACRO_CONFIG[key];
+        const canvas = document.getElementById('macroHistoryCanvas');
+        const empty = document.getElementById('macroHistoryEmpty');
+        if (!series || !cfg || !canvas || !empty) return;
+
+        if (typeof Chart === 'undefined') {
+            state.waitAttempts += 1;
+            empty.textContent = state.waitAttempts > 25
+                ? '图表组件加载失败，请刷新页面重试'
+                : '图表组件加载中…';
+            empty.hidden = false;
+            if (state.waitAttempts <= 25) {
+                setTimeout(function() { renderMacroHistory(key); }, 200);
+            }
+            return;
+        }
+
+        const points = series.points || [];
+        if (!points.length) {
+            empty.textContent = '历史数据暂不可用';
+            empty.hidden = false;
+            return;
+        }
+
+        ensureRangePlugin();
+        destroyChart();
+        empty.hidden = true;
+
+        const total = points.length;
+        let start = 0;
+        let end = total - 1;
+        if (state.zoomRange) {
+            start = Math.max(0, Math.min(state.zoomRange[0], total - 2));
+            end = Math.max(start + 1, Math.min(state.zoomRange[1], total - 1));
+        }
+        const visiblePoints = points.slice(start, end + 1);
+        const labels = visiblePoints.map(function(point) { return point[0]; });
+        const values = visiblePoints.map(function(point) { return Number(point[1]); });
+        const colors = themeColors();
+        const unit = series.unit || '';
+        const rightGutter = window.innerWidth <= 640 ? 76 : 90;
+
+        state.chart = new Chart(canvas.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: series.title,
+                    data: values,
+                    borderColor: cfg.lineColor,
+                    backgroundColor: 'transparent',
+                    borderWidth: 1.6,
+                    pointRadius: 0,
+                    pointHitRadius: 7,
+                    tension: 0.08,
+                    fill: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 220 },
+                interaction: { mode: 'index', intersect: false },
+                onHover: handleMacroHover,
+                layout: { padding: { right: rightGutter } },
+                plugins: {
+                    legend: { display: false },
+                    macroRanges: {
+                        bands: cfg.bands,
+                        lines: cfg.lines,
+                        labelBg: colors.labelBg
+                    },
+                    tooltip: {
+                        displayColors: false,
+                        callbacks: {
+                            title: function(items) { return items.length ? items[0].label : ''; },
+                            label: function(context) {
+                                const value = Number(context.raw);
+                                return series.title + ': ' + value.toFixed(2) + unit +
+                                    ' · ' + classifyValue(cfg, value);
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: {
+                            color: colors.text,
+                            maxTicksLimit: 10,
+                            maxRotation: 0,
+                            autoSkip: true,
+                            font: { size: 10 }
+                        },
+                        grid: { display: false },
+                        border: { color: colors.grid }
+                    },
+                    y: {
+                        suggestedMin: cfg.yStart,
+                        suggestedMax: cfg.suggestedMax,
+                        min: cfg.yEnd === 100 ? 0 : undefined,
+                        max: cfg.yEnd === 100 ? 100 : undefined,
+                        ticks: {
+                            color: colors.text,
+                            font: { size: 10 },
+                            callback: function(value) { return Number(value).toFixed(0); }
+                        },
+                        grid: { color: colors.grid },
+                        border: { color: colors.grid }
+                    }
+                }
+            }
+        });
+        setupMacroSelection(canvas);
+        canvas.onmouseleave = function() {
+            if (state.chart) {
+                state.chart._macroCrosshair = null;
+                state.chart.draw();
+            }
+        };
+        renderRangeLabels(cfg, state.chart);
+        setTimeout(function() {
+            if (state.key === key) renderRangeLabels(cfg, state.chart);
+        }, 260);
+    }
+
+    function setOpenCards(key) {
+        document.querySelectorAll('[data-macro-history]').forEach(function(card) {
+            const active = card.getAttribute('data-macro-history') === key;
+            card.classList.toggle('is-open', active);
+            card.setAttribute('aria-expanded', active ? 'true' : 'false');
+        });
+    }
+
+    function openMacroHistory(key) {
+        const panel = document.getElementById('macroHistoryPanel');
+        const series = MACRO_HISTORY[key];
+        const cfg = MACRO_CONFIG[key];
+        if (!panel || !series || !cfg) return;
+
+        state.key = key;
+        state.waitAttempts = 0;
+        state.zoomRange = null;
+        panel.hidden = false;
+        setOpenCards(key);
+        document.getElementById('macroHistoryTitle').textContent = series.title;
+        updateMacroHistoryMeta(key);
+        const source = document.getElementById('macroHistorySource');
+        source.href = cfg.sourceUrl;
+        renderLegend(cfg);
+        renderMacroHistory(key);
+        requestAnimationFrame(function() {
+            const behavior = window.matchMedia &&
+                window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                ? 'auto' : 'smooth';
+            panel.scrollIntoView({ behavior: behavior, block: 'nearest' });
+        });
+    }
+
+    function closeMacroHistory() {
+        const panel = document.getElementById('macroHistoryPanel');
+        if (panel) panel.hidden = true;
+        state.key = null;
+        state.zoomRange = null;
+        destroyChart();
+        setOpenCards(null);
+    }
+
+    function initMacroHistory() {
+        document.querySelectorAll('[data-macro-history]').forEach(function(card) {
+            const key = card.getAttribute('data-macro-history');
+            card.addEventListener('click', function(event) {
+                if (event.target.closest('a')) return;
+                if (state.key === key) closeMacroHistory();
+                else openMacroHistory(key);
+            });
+            card.addEventListener('keydown', function(event) {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                if (event.target.closest('a')) return;
+                event.preventDefault();
+                if (state.key === key) closeMacroHistory();
+                else openMacroHistory(key);
+            });
+        });
+
+        const close = document.getElementById('macroHistoryClose');
+        if (close) close.addEventListener('click', closeMacroHistory);
+        const reset = document.getElementById('macroHistoryResetZoom');
+        if (reset) reset.addEventListener('click', resetMacroZoom);
+
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && state.key) closeMacroHistory();
+        });
+
+        if (window.MutationObserver) {
+            new MutationObserver(function() {
+                if (state.key) renderMacroHistory(state.key);
+            }).observe(document.documentElement, {
+                attributes: true,
+                attributeFilter: ['data-theme']
+            });
+        }
+        window.addEventListener('resize', function() {
+            if (state.key && state.chart) {
+                const cfg = MACRO_CONFIG[state.key];
+                setTimeout(function() { renderRangeLabels(cfg, state.chart); }, 80);
+            }
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initMacroHistory);
+    } else {
+        initMacroHistory();
+    }
+})();
+</script>
+""".replace("__MACRO_HISTORY_JSON__", macro_history_json)
+
     html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -4883,6 +5637,170 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             border-radius: 1px;
         }}
         [data-theme="dark"] .fng-bar-pointer {{ background: #fff; }}
+
+        .metric-card-expandable {{
+            cursor: pointer;
+            transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+        }}
+        .metric-card-expandable:hover {{
+            border-color: var(--link-color);
+            box-shadow: 0 5px 14px rgba(0, 0, 0, 0.08);
+            transform: translateY(-1px);
+        }}
+        .metric-card-expandable:focus-visible {{
+            outline: 2px solid var(--link-color);
+            outline-offset: 2px;
+        }}
+        .metric-card-expandable.is-open {{
+            border-color: var(--link-color);
+            box-shadow: inset 0 0 0 1px var(--link-color);
+        }}
+        .metric-expand-hint {{
+            color: var(--link-color);
+            font-size: 10px;
+            font-weight: 700;
+            white-space: nowrap;
+        }}
+        .metric-expand-hint .chevron {{
+            display: inline-block;
+            transition: transform 0.18s ease;
+        }}
+        .metric-card-expandable.is-open .metric-expand-hint .chevron {{
+            transform: rotate(180deg);
+        }}
+
+        .macro-history-panel {{
+            grid-column: 1 / -1;
+            min-width: 0;
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px 16px 12px;
+            box-shadow: var(--card-shadow);
+        }}
+        .macro-history-panel[hidden] {{ display: none; }}
+        .macro-history-head {{
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 10px;
+        }}
+        .macro-history-title-wrap {{
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }}
+        .macro-history-title {{
+            color: var(--header-text);
+            font-size: 14px;
+            font-weight: 700;
+        }}
+        .macro-history-meta {{
+            color: var(--footer-text);
+            font-size: 11px;
+            line-height: 1.45;
+        }}
+        .macro-history-source {{
+            color: var(--link-color);
+            text-decoration: none;
+            margin-left: 6px;
+            white-space: nowrap;
+        }}
+        .macro-history-source:hover {{ text-decoration: underline; }}
+        .macro-history-controls {{
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .macro-history-close,
+        .macro-history-reset {{
+            flex: 0 0 auto;
+            width: 28px;
+            height: 28px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--hover-bg);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+        }}
+        .macro-history-close:hover,
+        .macro-history-reset:hover {{
+            border-color: var(--link-color);
+            color: var(--link-color);
+        }}
+        .macro-history-reset[hidden] {{ display: none; }}
+        .macro-history-chart-wrap {{
+            position: relative;
+            width: 100%;
+            height: clamp(300px, 40vh, 440px);
+            min-height: 300px;
+        }}
+        .macro-history-chart-wrap canvas {{
+            width: 100% !important;
+            height: 100% !important;
+            cursor: crosshair;
+            touch-action: pan-y;
+        }}
+        .macro-selection-box {{
+            position: absolute;
+            pointer-events: none;
+            background: rgba(26, 115, 232, 0.13);
+            border-left: 1px solid rgba(26, 115, 232, 0.75);
+            border-right: 1px solid rgba(26, 115, 232, 0.75);
+        }}
+        .macro-history-range-labels {{
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }}
+        .macro-range-tag {{
+            position: absolute;
+            right: 8px;
+            transform: translateY(-50%);
+            padding: 2px 7px;
+            border: 1px solid currentColor;
+            border-radius: 4px;
+            background: var(--table-bg);
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1.35;
+            white-space: nowrap;
+        }}
+        .macro-history-legend {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 15px;
+            margin-top: 8px;
+            color: var(--footer-text);
+            font-size: 11px;
+        }}
+        .macro-history-legend-item {{
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }}
+        .macro-history-legend-swatch {{
+            width: 9px;
+            height: 9px;
+            border-radius: 2px;
+            flex: 0 0 auto;
+        }}
+        .macro-history-empty {{
+            padding: 38px 12px;
+            text-align: center;
+            color: var(--footer-text);
+            font-size: 12px;
+        }}
+        @media (max-width: 768px) {{
+            .macro-history-panel {{ padding: 12px 10px 10px; }}
+            .macro-history-chart-wrap {{ height: 300px; min-height: 300px; }}
+            .macro-history-head {{ gap: 8px; }}
+        }}
 
         /* Fed Monitor specific styles */
         .fed-card {{
@@ -6607,9 +7525,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
                 </div>
                 <div class="macro-metrics-grid">
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('cnn')}>
                         <div class="metric-header">
                             <span>CNN 恐慌贪婪指数</span>
+                            {_macro_history_hint('cnn')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#1a73e8;">{fng['score']}</span>
@@ -6626,9 +7545,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('vix')}>
                         <div class="metric-header">
                             <span>VIX 恐慌指数</span>
+                            {_macro_history_hint('vix')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#d93025;">{vix['val']}</span>
@@ -6642,9 +7562,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
-                    <div class="metric-card">
+                    <div{_macro_history_attrs('vxn')}>
                         <div class="metric-header">
                             <span>VXN 纳指波动率</span>
+                            {_macro_history_hint('vxn')}
                         </div>
                         <div class="metric-body">
                             <span class="metric-value" style="color:#34a853;">{vxn['val']}</span>
@@ -6692,6 +7613,29 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
                     <!-- 【新增】止盈三信号面板（默认折叠） -->
                     {stop_profit_html}
+
+                    <div class="macro-history-panel" id="macroHistoryPanel" hidden>
+                        <div class="macro-history-head">
+                            <div class="macro-history-title-wrap">
+                                <strong class="macro-history-title" id="macroHistoryTitle"></strong>
+                                <span class="macro-history-meta">
+                                    <span id="macroHistoryMeta"></span>
+                                    <a class="macro-history-source" id="macroHistorySource" target="_blank" rel="noopener">官方源 ↗</a>
+                                </span>
+                            </div>
+                            <div class="macro-history-controls">
+                                <button class="macro-history-reset" id="macroHistoryResetZoom" type="button" aria-label="重置缩放" title="重置缩放" hidden>↺</button>
+                                <button class="macro-history-close" id="macroHistoryClose" type="button" aria-label="收起历史图" title="收起历史图">×</button>
+                            </div>
+                        </div>
+                        <div class="macro-history-chart-wrap">
+                            <canvas id="macroHistoryCanvas" role="img" aria-label="宏观指标历史数据图"></canvas>
+                            <div class="macro-history-range-labels" id="macroHistoryRangeLabels" aria-hidden="true"></div>
+                            <div class="macro-selection-box" id="macroSelectionBox" hidden></div>
+                            <div class="macro-history-empty" id="macroHistoryEmpty" hidden></div>
+                        </div>
+                        <div class="macro-history-legend" id="macroHistoryLegend"></div>
+                    </div>
                 </div>
 
                 <!-- ===== 大宗商品风向标 ===== -->
@@ -8062,6 +9006,17 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         fill: true,
                         tension: 0.1,
                         yAxisID: 'y'
+                    }}, {{
+                        label: '_right_pct_scale',
+                        data: filtered.navs,
+                        borderColor: 'transparent',
+                        backgroundColor: 'transparent',
+                        borderWidth: 0,
+                        pointRadius: 0,
+                        pointHoverRadius: 0,
+                        fill: false,
+                        tension: 0.1,
+                        yAxisID: 'y1'
                     }}]
                 }},
                 options: {{
@@ -8096,6 +9051,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             mode: 'index',
                             intersect: false,
                             displayColors: false,
+                            filter: item => item.datasetIndex === 0,
                             callbacks: {{
                                 title: function(items) {{
                                     return items.length ? `时间: ${{items[0].label}}` : '';
@@ -8161,17 +9117,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             chartInstances[code] = chart;
 
-            function syncYAxes(chartObj) {{
-                if (!chartObj) return;
-                const yScale = chartObj.scales.y;
-                const y1Scale = chartObj.scales.y1;
-                if (yScale && y1Scale) {{
-                    y1Scale.options.min = yScale.min;
-                    y1Scale.options.max = yScale.max;
-                }}
-            }}
-            syncYAxes(chart);
-
             if (container && !container._eventsBound) {{
                 const btns = container.querySelectorAll('.period-btn');
                 btns.forEach(btn => {{
@@ -8185,6 +9130,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             const curChart = chartInstances[code];
                             curChart.data.labels = fData.dates;
                             curChart.data.datasets[0].data = fData.navs;
+                            curChart.data.datasets[1].data = fData.navs;
                             const newBaseNav = fData.navs.length > 0 ? fData.navs[0] : 1.0;
                             curChart.options.plugins.tooltip.callbacks.label = function(context) {{
                                 const nav = Number(context.parsed.y);
@@ -8202,7 +9148,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                                 return `${{pct >= 0 ? '+' : ''}}${{pct.toFixed(2)}}%`;
                             }};
                             curChart.update();
-                            syncYAxes(curChart);
                         }}
                     }});
                 }});
@@ -8756,6 +9701,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }})();
 
     </script>
+    {macro_history_script}
 </body>
 </html>
 """
@@ -9512,11 +10458,12 @@ def main():
     print("⏳ 正在并行抓取：核心宏观指标 / 指数估值 / 指数年度数据 / 美联储利率观测器...")
 
     # 每个并行任务用自己独立的 opener（RequestsOpener.session 非线程安全）
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         fut_metrics    = ex.submit(lambda: fetch_home_market_metrics(get_direct_opener()))
         fut_valuations = ex.submit(lambda: fetch_index_valuations(get_direct_opener()))
         fut_annual     = ex.submit(fetch_index_annual_data)
         fut_fed        = ex.submit(lambda: fetch_fed_rate_monitor(get_direct_opener()))
+        fut_macro_history = ex.submit(fetch_macro_history)
 
         # 各自的默认值，用于优雅降级
         DEFAULT_METRICS = {
@@ -9565,8 +10512,15 @@ def main():
                 "futures_price": "--", "probabilities": [], "table_rows": [],
                 "update_text": "--", "source_name": "CME FedWatch",
             }
+
+        try:
+            macro_history = fut_macro_history.result(timeout=60)
+        except Exception as e:
+            print(f"⚠️ 宏观历史序列抓取失败: {e}")
+            macro_history = _read_macro_history_cache()
     print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {home_metrics['fng']['score']} | VIX {home_metrics['vix']['val']} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
     print(f"🛢️ 大宗商品指标获取成功: 布伦特原油 {home_metrics['brent']['val']} | 伦敦金 {home_metrics['gold_london']['val']} | 沪金主连 {home_metrics['gold_shfe']['val']} | 伦敦银 {home_metrics['silver_london']['val']} | LME铜 {home_metrics['copper_lme']['val']} | BTC {home_metrics.get('btc', {}).get('val', 0.0)}")
+    print(f"📈 宏观历史序列: VIX {len(macro_history.get('vix', {}).get('points', []))} 点 | VXN {len(macro_history.get('vxn', {}).get('points', []))} 点 | CNN {len(macro_history.get('cnn', {}).get('points', []))} 点")
     fed_prob_count = len(fed_monitor.get('probabilities', []))
     fed_status = "✅" if fed_monitor.get('meeting_text') != "--" and fed_prob_count > 0 else "⚠️"
     print(f"🏛️ 美联储利率观测器 {fed_status}: 下一次会议 {fed_monitor.get('meeting_text', '--')} | 期货价格 {fed_monitor.get('futures_price', '--')} | 当前概率 {fed_prob_count} 档 | 更新时间 {fed_monitor.get('update_text', '--')}")
@@ -9823,7 +10777,8 @@ def main():
             fed_monitor=fed_monitor,
             is_debug_mode=is_debug,
             filename=args.out,
-            index_annual_data=index_annual_data
+            index_annual_data=index_annual_data,
+            macro_history=macro_history
         )
         print(f"\n🎉 升级版网页构建成功！文件路径: {abs_path}")
         try:
