@@ -436,7 +436,7 @@ def fetch_index_valuations(opener):
     for target in TARGET_INDICES:
         matched = None
         aliases = NAME_MAP.get(target, [target])
-        
+
         for alias in aliases:
             for k, v in eva_dict.items():
                 if alias in k:
@@ -451,10 +451,10 @@ def fetch_index_valuations(opener):
                     if alias in row:
                         tds = re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)
                         clean_tds = [re.sub(r'<[^>]+>', '', td).strip() for td in tds]
-                        
+
                         pe_val = None
                         pct_val = None
-                        
+
                         for t in clean_tds:
                             if '%' in t:
                                 if pct_val is None:
@@ -468,7 +468,7 @@ def fetch_index_valuations(opener):
                                         pe_val = float(t)
                                     except ValueError:
                                         pass
-                                        
+
                         if pe_val is not None and pct_val is not None:
                             matched = {
                                 'pe': pe_val,
@@ -485,7 +485,7 @@ def fetch_index_valuations(opener):
             pe_val = f"{pe:.2f}" if pe else "--"
             pct_val = f"{pct * 100:.2f}%" if pct is not None else "--"
             pct_raw = pct * 100 if pct is not None else 0
-            
+
             if pct is None:
                 status, color = "⚪ 暂无数据", "#70757a"
             else:
@@ -495,7 +495,7 @@ def fetch_index_valuations(opener):
                 elif p <= 60: status, color = "🟡 适中", "#fbbc04"
                 elif p <= 80: status, color = "🟠 偏高", "#e67e22"
                 else: status, color = "🔴 高估", "#d93025"
-                
+
             results.append({
                 "name": target, "ticker": ticker, "pe": pe_val, "pct": pct_val, "pct_raw": pct_raw, "status": status, "color": color
             })
@@ -503,7 +503,7 @@ def fetch_index_valuations(opener):
             results.append({
                 "name": target, "ticker": ticker, "pe": "--", "pct": "--", "pct_raw": 0, "status": "⚪ 暂无数据", "color": "#70757a"
             })
-            
+
     return results
 
 def fetch_sina_us_kline(symbol_code, start_date_str="2000-01-01"):
@@ -1865,7 +1865,7 @@ def fetch_macro_history():
 
 def fetch_fund_country_distribution(opener, code, is_qdii=False):
     cache_file = os.path.join(COUNTRY_CACHE_DIR, f"{code}_country.json")
-    
+
     if os.path.exists(cache_file):
         try:
             with open(cache_file, 'r', encoding='utf-8') as f:
@@ -1886,10 +1886,10 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
             })
             with opener.open(req_rep, timeout=10) as resp:
                 data_rep = json.loads(resp.read().decode("utf-8"))
-            
+
             report_items = data_rep.get("Data") or []
             candidates = []
-            
+
             for it in report_items:
                 title = it.get("TITLE", "")
                 pub_date = it.get("PUBLISHDATEDesc", "")
@@ -1899,7 +1899,7 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
 
             if candidates:
                 candidates.sort(key=lambda x: x["date"], reverse=True)
-                
+
                 for cand in candidates[:2]:              # ★ 原 3
                     ann_url = f"https://np-cnotice-fund.eastmoney.com/api/content/ann?client_source=web_fund&show_all=1&art_code={cand['id']}"
                     req_ann = urllib.request.Request(ann_url, headers={
@@ -1967,7 +1967,7 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
                             unique_dict = {it["country"]: it for it in parsed_items}
                             c_list = list(unique_dict.values())
                             c_list.sort(key=lambda x: x["ratio"], reverse=True)
-                            
+
                             report_date_label = cand["date"][:10] if cand.get("date") else "--"
                             title_year_match = re.search(r'(\d{4})年半年度|(\d{4})年年度|(\d{4})年中期', cand["title"])
                             if title_year_match:
@@ -2083,7 +2083,7 @@ def fetch_fund_holder_structure(opener, code):
         except Exception: pass
 
     query_code = MAIN_CODE_MAP.get(code, code)
-    
+
     url = f"https://fundmobapi.eastmoney.com/FundMapi/FundHolderRatio.ashx?FCODE={query_code}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
     headers = {"User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"}
     try:
@@ -2098,7 +2098,7 @@ def fetch_fund_holder_structure(opener, code):
                 indiv_text = str(latest.get("GRHBL", "0")).replace('%', '')
                 inst_val = float(inst_text) if inst_text.replace('.', '', 1).isdigit() else 0.0
                 indiv_val = float(indiv_text) if indiv_text.replace('.', '', 1).isdigit() else 0.0
-                
+
                 if inst_val > 0 or indiv_val > 0:
                     result = {"date": date_str, "inst": round(inst_val, 2), "indiv": round(indiv_val, 2)}
                     with open(cache_file, 'w', encoding='utf-8') as f:
@@ -2134,7 +2134,7 @@ def fetch_fund_holder_structure(opener, code):
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 return result
     except Exception: pass
-    
+
     return None
 
 def fetch_holdings(opener, code):
@@ -2732,7 +2732,7 @@ def fetch_fund_detail_meta(opener, code):
 # ============================================================
 # ===== 赎回费率提取：三级强化兜底机制 =====
     query_code = MAIN_CODE_MAP.get(code, code)
-    
+
     # 步骤 1：优先直接请求东方财富底层专用异步费率数据接口（最全、最干净、不漏掉老基金和 LOF）
     urls_to_try = [
         f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjfl&code={code}",
@@ -2769,9 +2769,9 @@ def fetch_fund_detail_meta(opener, code):
                 })
                 with opener.open(req_api, timeout=6) as resp:
                     j_data = json.loads(resp.read().decode("utf-8"))
-                
+
                 datas = j_data.get("Datas") or {}
-                
+
                 # 1) 如果有详细阶梯列表
                 sh_list = datas.get("SHFLLIST") or datas.get("REDEEMRATELIST") or []
                 if isinstance(sh_list, list) and sh_list:
@@ -3582,7 +3582,7 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         elif days: target_dt = latest_dt - timedelta(days=days)
         elif months: target_dt = add_months(latest_dt, -months)
         else: return None
-            
+
         target_date_str = target_dt.strftime('%Y-%m-%d')
         base_nav = None
         for item in data_all:
@@ -3930,7 +3930,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     # ================= 【新增】止盈三信号逻辑计算 =================
     vix_val = metrics['vix']['val']
     fng_val = metrics['fng']['score']
-    
+
     qqq_pe_val = 0.0
     for item in index_valuations:
         if item['name'] == '纳指100':
@@ -4308,13 +4308,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             inst_r = holder_data["inst"]
             indiv_r = holder_data["indiv"]
             h_date = holder_data.get("date", "--")
-            
+
             holders_arr = [
                 {"name": "机构持有", "ratio": inst_r},
                 {"name": "个人持有", "ratio": indiv_r}
             ]
             holders_json_str = json.dumps(holders_arr, ensure_ascii=False)
-            
+
             pie_card_html = f"""
             <div class="quarter-card holder-card" style="grid-column: span 1;">
                 <div class="quarter-label"><span class="quarter-title">持有人结构</span></div>
@@ -4546,7 +4546,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             ]
         },
     ]
-    
+
     friend_cards_html = ""
     for cat in friend_link_categories:
         cards_list = []
@@ -5941,12 +5941,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             --link-color: #4a9eff;
             --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
         }}
-        body {{ 
-            font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif; 
+        body {{
+            font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
             background-color: var(--bg);
             color: var(--text);
-            margin: 0; 
-            padding: 0; 
+            margin: 0;
+            padding: 0;
             height: 100vh;
             overflow: hidden;
             display: flex;
@@ -5954,7 +5954,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             box-sizing: border-box;
             transition: background-color 0.3s, color 0.3s;
         }}
-        
+
         .main-navbar {{
             background: var(--table-bg);
             border-bottom: 1px solid var(--border);
@@ -6143,7 +6143,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             width: 100%;
             box-sizing: border-box;
         }}
-        
+
         .macro-metrics-grid {{
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -6626,7 +6626,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             flex: 0 0 100%;
             order: -1;
         }}
-        
+
         .category-nav {{ display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
         .category-title {{ font-size: 11px; font-weight: 700; color: var(--footer-text); margin-right: 4px; }}
         .cat-btn {{
@@ -6728,18 +6728,18 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
         .global-dca-filter-card button:hover {{ opacity: 0.9; }}
 
-        .table-container {{ 
-            width: 100%; 
-            flex: 1 1 0; 
-            min-height: 0; 
-            overflow-y: auto; 
-            overflow-x: auto; 
+        .table-container {{
+            width: 100%;
+            flex: 1 1 0;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: auto;
             -webkit-overflow-scrolling: touch;
-            box-sizing: border-box; 
+            box-sizing: border-box;
             background: var(--table-bg);
-            border-radius: 10px; 
-            box-shadow: 0 4px 15px rgba(0,0,0,0.06); 
-            padding: 8px; 
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+            padding: 8px;
             border: 1px solid var(--border);
             margin-bottom: 6px;
         }}
@@ -6765,7 +6765,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         th:nth-child(1) {{ text-align: center; }}
         th:nth-child(2), th:nth-child(3), th:nth-child(4), th:nth-child(5), th:nth-child(6), th:nth-child(7) {{ text-align: left; }}
         tr:hover {{ background-color: var(--hover-bg); }}
-        
+
         .resizer {{
             position: absolute;
             right: 0;
@@ -6828,30 +6828,30 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
 
         /* --- 进度条样式 --- */
-        .progress-container {{ 
-            background-color: var(--progress-track); 
-            border-radius: 6px; 
-            overflow: hidden; 
-            height: 20px; 
-            width: 100%; 
-            position: relative; 
+        .progress-container {{
+            background-color: var(--progress-track);
+            border-radius: 6px;
+            overflow: hidden;
+            height: 20px;
+            width: 100%;
+            position: relative;
             display: block;
         }}
-        .progress-bar {{ 
-            height: 100%; 
-            border-radius: 6px; 
-            min-width: 42px; 
-            display: flex; 
-            align-items: center; 
-            justify-content: flex-end; 
-            padding-right: 6px; 
-            box-sizing: border-box; 
+        .progress-bar {{
+            height: 100%;
+            border-radius: 6px;
+            min-width: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 6px;
+            box-sizing: border-box;
             transition: width .2s ease;
         }}
-        .progress-bar span {{ 
-            color: #fff; 
-            font-size: 11px; 
-            font-weight: 600; 
+        .progress-bar span {{
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
             text-shadow: 0 1px 1px rgba(0,0,0,.25);
             white-space: nowrap;
         }}
@@ -6901,7 +6901,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .change-new {{ color: #1a73e8; }}
         .stock-total {{ margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); font-weight: 600; }}
         .stock-total .stock-ratio {{ color: #e67e22; }}
-        
+
         .holder-card {{ display: flex; flex-direction: column; justify-content: space-between; }}
         .holder-pie-wrapper {{ flex: 1; display: flex; align-items: center; justify-content: center; position: relative; min-height: 140px; max-height: 180px; padding: 4px 0; }}
         .holder-date-sub {{ font-size: 10px; color: var(--footer-text); text-align: center; border-top: 1px dashed var(--border); padding-top: 6px; margin-top: 4px; }}
@@ -7046,9 +7046,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .chart-controls button {{ background: var(--btn-bg); border: 1px solid var(--border); border-radius: 12px; padding: 2px 8px; font-size: 10px; cursor: pointer; color: var(--btn-text); }}
         .chart-controls button.active {{ background: var(--btn-active-bg); color: var(--btn-active-text); }}
         .chart-line-panel canvas {{ width: 100% !important; height: auto !important; max-height: 200px; flex: 1; }}
-        
+
         .footer-note {{ font-size: 11px; color: var(--footer-text); background: var(--footer-bg); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }}
-        
+
         /* ★ 基金年度收益统计栏 */
         .fund-annual-stats-footer {{
             display: flex;
@@ -7190,7 +7190,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             margin-top: 2px;
         }}
         .dca-run-btn:hover {{ opacity: 0.9; }}
-        
+
         .dca-results-grid {{
             display: grid;
             grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -7603,11 +7603,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             .nav-brand {{ font-size: 15px; }}
             .views-container {{ padding: 8px 10px; height: auto; overflow: visible; }}
             .view-pane {{ height: auto; overflow: visible; }}
-            
+
             .home-container {{ padding: 10px 16px; gap: 10px; }}
             .macro-metrics-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
             .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
-            
+
             .qdii-container {{ padding: 12px 4%; gap: 16px; }}
             .qdii-cards-grid {{ grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }}
             .qdii-nav {{ font-size: 18px; }}
@@ -8197,7 +8197,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         <!-- 视图 1：首页 -->
         <section id="homeView" class="view-pane active">
             <div class="home-container">
-                
+
                 <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 12px;">
                     <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🌐 核心宏观风向标</h3>
                     <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
@@ -8256,7 +8256,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             🔗 来源: CBOE 官方 (_VXN) ↗
                         </a>
                     </div>
-                    
+
                     <div{_macro_history_attrs('usdcny', 'macroHistoryPanelCore')}>
                         <div class="metric-header">
                             <span>USD/CNY 汇率</span>
@@ -8481,7 +8481,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         <button class="cat-btn macro-filter" data-macro="other" data-sub="commodities">大宗商品</button>
                         <button class="cat-btn macro-filter" data-macro="other" data-sub="crypto">加密货币</button>
                         <button class="cat-btn macro-filter" data-macro="other" data-sub="index">主流指数</button>
-                        
+
                         <span class="category-title" style="margin-left: 8px;">视图:</span>
                         <button class="cat-btn view-mode-btn active" data-view-mode="simple" title="简洁模式：精简列 + 仅折线图">⚡ 默认</button>
                         <button class="cat-btn view-mode-btn" data-view-mode="default" title="详细模式：完整列 + 持仓/持有人/国家/图表">📋 详细</button>
@@ -8973,13 +8973,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             const allDates = raw.dates;
             const allNavs = raw.navs;
-            
+
             let parsedDates = fundParsedDates[code];
             if (!parsedDates || parsedDates.length !== allDates.length) {{
                 parsedDates = allDates.map(d => new Date(d));
                 fundParsedDates[code] = parsedDates;
             }}
-            
+
             const latestDate = parsedDates[parsedDates.length - 1];
             let startDate = new Date(latestDate);
 
@@ -9014,7 +9014,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             filtered.forEach(item => {{
                 let shouldBuy = false;
-                const dayOfWeek = item.dt.getDay(); 
+                const dayOfWeek = item.dt.getDay();
                 const dayOfMonth = item.dt.getDate();
 
                 if (freq === 'daily') {{
@@ -9073,7 +9073,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             const freq = document.getElementById(freqSelectId).value;
             const daySelect = document.getElementById(daySelectId);
             const label = labelId ? document.getElementById(labelId) : null;
-            
+
             daySelect.innerHTML = '';
             if (freq === 'daily') {{
                 if (label) label.parentElement.style.display = 'none';
@@ -9123,7 +9123,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 const code = row.getAttribute('data-code');
                 const res = computeDCA(code, freq, targetDay, 1000, range);
                 const dcaCell = row.querySelector('.dca-col');
-                
+
                 if (dcaCell) {{
                     if (res && res.returnRate !== undefined) {{
                         const rate = res.returnRate;
@@ -9141,7 +9141,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }});
 
             if (currentSortCol === 21) {{
-                isAscending = !isAscending; 
+                isAscending = !isAscending;
                 sortTable(21);
             }}
         }}
@@ -9187,7 +9187,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
                 document.getElementById('resTotalInvest').innerHTML = `${{res.investCount}} 期 / <strong>${{res.totalInvest.toLocaleString()}}</strong> 元`;
                 document.getElementById('resTotalAsset').innerHTML = `<strong>${{res.finalAsset.toFixed(2)}}</strong> 元`;
-                
+
                 const profitElem = document.getElementById('resProfit');
                 profitElem.textContent = `${{res.profit >= 0 ? '+' : ''}}${{res.profit.toFixed(2)}}`;
                 profitElem.style.color = res.profit >= 0 ? '#d93025' : '#188038';
@@ -9228,7 +9228,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             const searchInput = document.getElementById('searchInput');
             const emptyRow = document.getElementById('empty-row');
             const allRows = document.querySelectorAll('#fundTable tbody tr:not(#empty-row)');
-            
+
             let currentMacro = 'all';
             let currentSub = 'all';
             let currentBuyStatus = 'all';
@@ -9451,7 +9451,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     delete holderChartInstances[code];
                 }} else return;
             }}
-            
+
             let holders = [];
             try {{
                 holders = JSON.parse(canvas.getAttribute('data-holders')) || [];
@@ -9460,7 +9460,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             const labels = holders.map(h => h.name);
             const dataValues = holders.map(h => h.ratio);
-            
+
             const colorPalette = ['#1a73e8', '#ff9800'];
 
             const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -9553,9 +9553,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             const labels = countries.map(c => c.country);
             const dataValues = countries.map(c => c.ratio);
-            
+
             const colorPalette = [
-                '#1a73e8', '#34a853', '#ea4335', '#fbbc04', 
+                '#1a73e8', '#34a853', '#ea4335', '#fbbc04',
                 '#9c27b0', '#00acc1', '#ff7043', '#5c6bc0',
                 '#26a69a', '#8d6e63', '#78909c'
             ];
@@ -9644,7 +9644,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
             const data = fundNavData[code];
             if (!data || !data.dates || data.dates.length === 0) return;
-            
+
             const container = document.getElementById(`chart-container-${{code}}`);
             let currentPeriod = 'month';
             if (container) {{
@@ -9837,7 +9837,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 if (!target || e.target.tagName === 'A' || e.target.closest('.star-btn')) return;
                 const code = target.dataset.code;
                 const hRow = document.querySelector(`.holding-row[data-code="${{code}}"]`);
-                
+
                 if (hRow) {{
                     hRow.classList.toggle('show');
                     if (hRow.classList.contains('show')) {{
@@ -9899,10 +9899,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }});
             const empty = document.getElementById('empty-row');
             if (empty) fragment.appendChild(empty);
-            
+
             tbody.innerHTML = '';
             tbody.appendChild(fragment);
-            
+
             const headers = table.querySelectorAll("th");
             headers.forEach((th, idx) => {{
                 const icon = th.querySelector(".sort-icon");
@@ -10953,6 +10953,42 @@ def fetch_index_data(symbol, start_date, end_date):
         return data
     return None
 
+def remove_nav_split_jumps(records):
+    """Normalize discrete stock-split gaps in unadjusted daily NAV records."""
+    if not records:
+        return []
+
+    split_factors = (2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 15.0)
+    adjusted = []
+    adjustment_factor = 1.0
+
+    for item in sorted(records, key=lambda row: row["date"]):
+        try:
+            nav = float(item["nav"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if nav <= 0:
+            continue
+
+        adjusted_nav = nav * adjustment_factor
+        if adjusted:
+            prev_nav = adjusted[-1]["nav"]
+            ratio = prev_nav / adjusted_nav
+            split = next(
+                (
+                    factor
+                    for factor in split_factors
+                    if abs(ratio / factor - 1.0) <= 0.06
+                ),
+                None,
+            )
+            if split is not None:
+                adjustment_factor *= split
+                adjusted_nav = nav * adjustment_factor
+
+        adjusted.append({"date": item["date"], "nav": adjusted_nav})
+    return adjusted
+
 def fetch_us_etf_data(symbol, start_date, end_date):
     """抓取美股 ETF 历史行情（合并自 fetch_us_etfs_data.py）。
 
@@ -10966,6 +11002,10 @@ def fetch_us_etf_data(symbol, start_date, end_date):
     """
     cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
 
+    def _with_adjusted_splits(records):
+        """Return raw quote records with detected split gaps normalized."""
+        return remove_nav_split_jumps(records)
+
     # ---- 缓存读取：只要最早日期 <= 请求起点 且 最晚日期 >= 请求终点 即可复用 ----
     if os.path.exists(cache_file):
         try:
@@ -10975,7 +11015,7 @@ def fetch_us_etf_data(symbol, start_date, end_date):
             c_end = cache.get('end_date', '')
             c_data = cache.get('data', [])
             if c_start and c_end and c_start <= start_date and c_end >= end_date and c_data:
-                return c_data
+                return _with_adjusted_splits(c_data)
         except Exception:
             pass
 
@@ -11016,6 +11056,7 @@ def fetch_us_etf_data(symbol, start_date, end_date):
                 data = None
 
     if data:
+        data = _with_adjusted_splits(data)
         try:
             with open(cache_file, 'w', encoding='utf-8') as f:
                 # ★ 缓存的 start_date 记录为数据实际最早日期，便于后续命中判断
@@ -11038,12 +11079,14 @@ def compute_annual_returns_from_nav(nav_data):
     规则（与 fetch_fund_annual_returns 保持一致）：
       - 首个年份：用该年第一个交易日的 nav 作为基准
       - 其余年份：用上一年最后一个交易日的 nav 作为基准
+      - 行情源未复权的拆股断点，先折算到同一价格口径
     返回：{"2021": 27.35, "2022": -18.62, ...}，失败返回 {}
     """
     if not nav_data:
         return {}
 
     from collections import defaultdict as _dd
+
     year_map = _dd(list)
     for r in nav_data:
         try:
@@ -11053,6 +11096,13 @@ def compute_annual_returns_from_nav(nav_data):
                 year_map[yr].append({"date": r["date"], "nav": nav})
         except Exception:
             continue
+
+    all_records = remove_nav_split_jumps([
+        item for year in year_map.values() for item in year
+    ])
+    year_map = _dd(list)
+    for item in all_records:
+        year_map[item["date"].split("-")[0]].append(item)
 
     sorted_years = sorted(year_map.keys())
     returns = {}
