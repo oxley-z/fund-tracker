@@ -20,6 +20,7 @@
 """
 
 import requests
+import base64
 import json
 import time
 import os
@@ -30,6 +31,7 @@ import webbrowser
 import pandas as pd
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -80,6 +82,7 @@ SZSE_HISTORY_CHUNK_DAYS = 170
 BEIJING_TZ = timezone(timedelta(hours=8))
 HTTP_SESSION = requests.Session()
 HTTP_SESSION.trust_env = False
+OFFICIAL_EXCHANGE_HOSTS = {'query.sse.com.cn', 'www.szse.cn'}
 
 # 请求头
 HEADERS = {
@@ -251,8 +254,76 @@ def is_transient_api_error(payload):
     ))
 
 
+def get_exchange_proxies(url):
+    """
+    交易所官方接口只在中国大陆稳定开放。
+    CI 可通过 EXCHANGE_PROXY 指定大陆出口，本地默认仍直连。
+    """
+    proxy_url = read_exchange_proxy()
+    hostname = urlsplit(url).hostname or ''
+    if not proxy_url or hostname not in OFFICIAL_EXCHANGE_HOSTS:
+        return None
+    try:
+        parsed = urlsplit(proxy_url)
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in ('http', 'https', 'socks5', 'socks5h'):
+        raise ValueError('EXCHANGE_PROXY 仅支持 http/https/socks5/socks5h')
+    if not parsed.hostname:
+        raise ValueError('EXCHANGE_PROXY 缺少主机名')
+    return {'http': proxy_url, 'https': proxy_url}
+
+
+def read_exchange_proxy():
+    """读取大陆代理；兼容明文 URL 和 Base64 两种配置。"""
+    encoded = os.environ.get('EXCHANGE_PROXY_B64', '').strip()
+    if encoded:
+        if urlsplit(encoded).scheme.lower() in ('http', 'https', 'socks5', 'socks5h'):
+            return encoded
+        padded = encoded + '=' * (-len(encoded) % 4)
+        try:
+            decoded = base64.b64decode(padded, validate=True).decode('utf-8').strip()
+        except (ValueError, UnicodeDecodeError) as e:
+            raise ValueError('EXCHANGE_PROXY_B64 不是有效的 Base64 文本') from e
+        if urlsplit(decoded).scheme.lower() in ('http', 'https', 'socks5', 'socks5h'):
+            return decoded
+        raise ValueError('EXCHANGE_PROXY_B64 解码后不是有效的代理 URL')
+    return os.environ.get('EXCHANGE_PROXY', '').strip()
+
+
+def proxy_display_name(proxy_url):
+    """返回不含用户凭据的代理地址，供日志使用。"""
+    try:
+        parsed = urlsplit(proxy_url)
+        host = parsed.hostname or ''
+        if ':' in host:
+            host = f'[{host}]'
+        return f'{parsed.scheme}://{host}' + (f':{parsed.port}' if parsed.port else '')
+    except ValueError:
+        return '<invalid proxy>'
+
+
+def exchange_request(method, url, **kwargs):
+    """访问交易所官方接口；配置 EXCHANGE_PROXY 时经大陆代理请求。"""
+    request_kwargs = dict(kwargs)
+    proxy_url = read_exchange_proxy()
+    proxies = get_exchange_proxies(url)
+    if proxies:
+        request_kwargs['proxies'] = proxies
+    try:
+        response = HTTP_SESSION.request(method, url, **request_kwargs)
+        response.raise_for_status()
+        return response
+    except requests.RequestException as e:
+        proxy_note = ''
+        if proxies:
+            proxy_note = f'（经 EXCHANGE_PROXY={proxy_display_name(proxy_url)}）'
+        raise RuntimeError(f'交易所请求失败{proxy_note}: {e}') from e
+
+
 def fetch_sse_day(date_str):
     """获取上海证券交易所ETF数据"""
+    proxy_url = read_exchange_proxy()
     ts  = int(time.time() * 1000)
     url = (
         'https://query.sse.com.cn/commonQuery.do'
@@ -261,14 +332,15 @@ def fetch_sse_day(date_str):
         f'&STAT_DATE={date_str}&_{ts}'
     )
     try:
-        resp  = HTTP_SESSION.get(url, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
+        resp = exchange_request('GET', url, headers=HEADERS, timeout=20)
         payload = resp.json()
         if not isinstance(payload, dict):
             return None, 'apierr'
 
         success = payload.get('success')
         if success is False or str(success).lower() == 'false':
+            if proxy_url and is_transient_api_error(payload):
+                print('\n   [交易所] 大陆代理返回临时业务错误')
             return None, (
                 'transient' if is_transient_api_error(payload) else 'apierr'
             )
@@ -319,8 +391,9 @@ def _szse_scale_chunk(start_str, end_str):
         'Referer': 'https://www.szse.cn/market/fund/volume/etf/index.html',
         'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*',
     }
-    resp = HTTP_SESSION.get(url, params=params, headers=headers, timeout=45)
-    resp.raise_for_status()
+    resp = exchange_request(
+        'GET', url, params=params, headers=headers, timeout=45
+    )
     if not resp.content:
         return {}
     with warnings.catch_warnings():
@@ -1593,6 +1666,9 @@ def main():
     print('  沪深两市宽基 ETF 份额监控')
     print('=' * 60)
 
+    proxy_url = read_exchange_proxy()
+    if os.environ.get('CI') and not proxy_url:
+        print('⚠  未配置 EXCHANGE_PROXY：GitHub 海外运行环境可能无法连接交易所。')
     # v1 断点混入了周末数据和不可靠的深交所备用字段，先做一次性修复。
     if read_checkpoint_version() < CHECKPOINT_VERSION:
         old_results = read_all_results()

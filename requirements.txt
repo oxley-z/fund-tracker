@@ -1,6 +1,7 @@
 pandas
 numpy
 requests
+requests[socks]
 beautifulsoup4
 akshare
 yfinance
