@@ -1180,7 +1180,7 @@ def get_brent_oil(opener) -> tuple[float, str, str]:
             if match:
                 parts = match.group(1).split(",")
                 if len(parts) > 0 and float(parts[0]) > 0:
-                    return round(float(parts[0]), 2), "新浪期货 (hf_OIL)", "https://finance.sina.com.cn/futures/quotes/OIL.shtml"
+                    return round(float(parts[0]), 2), "新浪财经 (hf_OIL)", "https://finance.sina.com.cn/futures/quotes/OIL.shtml"
     except Exception: pass
     return 0.0, "获取失败", "https://cn.investing.com/commodities/brent-oil"
 
@@ -1207,7 +1207,7 @@ def get_gold_london(opener) -> tuple[float, str, str]:
                     try:
                         v = float(parts[0])
                         if v > 0:
-                            return round(v, 2), "新浪财经 (hf_XAU)", "https://www.investing.com/currencies/xau-usd"
+                            return round(v, 2), "英为财经 (XAU/USD)", "https://www.investing.com/currencies/xau-usd"
                     except ValueError:
                         pass
     except Exception: pass
@@ -1223,7 +1223,7 @@ def get_gold_shfe(opener) -> tuple[float, str, str]:
             try:
                 v = float(df.iloc[-1][close_col])
                 if v > 0:
-                    return round(v, 2), "AkShare (futures_main_sina AU0)", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
+                    return round(v, 2), "新浪财经 (AU0)", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
             except Exception:
                 pass
     except Exception:
@@ -1242,7 +1242,7 @@ def get_gold_shfe(opener) -> tuple[float, str, str]:
                         try:
                             v = float(parts[idx])
                             if v > 0:
-                                return round(v, 2), "新浪期货 (nf_AU0)", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
+                                return round(v, 2), "新浪财经 (nf_AU0)", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
                         except ValueError:
                             pass
     except Exception: pass
@@ -1269,7 +1269,7 @@ def get_silver_london(opener) -> tuple[float, str, str]:
                     try:
                         v = float(parts[0])
                         if v > 0:
-                            return round(v, 3), "新浪财经 (hf_XAG)", "https://www.investing.com/currencies/xag-usd"
+                            return round(v, 3), "英为财经 (XAG/USD)", "https://www.investing.com/currencies/xag-usd"
                     except ValueError:
                         pass
     except Exception: pass
