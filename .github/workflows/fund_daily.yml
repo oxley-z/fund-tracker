@@ -46,17 +46,19 @@ jobs:
         continue-on-error: true
         env:
           BROWSER: "true"   # CI 无需真的打开浏览器
+          EXCHANGE_PROXY: ${{ secrets.EXCHANGE_PROXY }}
           EXCHANGE_PROXY_B64: ${{ secrets.EXCHANGE_PROXY_B64 }}
         run: python dual_etf_dashboard.py
 
       - name: Warn if Dual ETF Update Failed
         if: steps.dual.outcome == 'failure'
         env:
+          EXCHANGE_PROXY: ${{ secrets.EXCHANGE_PROXY }}
           EXCHANGE_PROXY_B64: ${{ secrets.EXCHANGE_PROXY_B64 }}
         run: |
           echo "::warning::ETF 份额看板更新失败，本次沿用仓库中的版本"
-          if [ -z "$EXCHANGE_PROXY_B64" ]; then
-            echo "::warning::未配置大陆代理。GitHub 海外出口可能无法访问上交所/深交所，请优先配置 EXCHANGE_PROXY_B64。"
+          if [ -z "$EXCHANGE_PROXY_B64" ] && [ -z "$EXCHANGE_PROXY" ]; then
+            echo "::warning::未配置大陆代理。请在仓库 Actions Secrets 中配置 EXCHANGE_PROXY_B64。"
           fi
 
       # ★ 提交断点与看板，让下一次仍能从最新日期继续增量

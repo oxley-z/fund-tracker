@@ -254,41 +254,68 @@ def is_transient_api_error(payload):
     ))
 
 
+PROXY_SCHEMES = ('http', 'https', 'socks5', 'socks5h')
+
+
+def normalize_proxy_url(value, source_name):
+    """清理 Secret 值并校验代理 URL，返回可交给 requests 的地址。"""
+    proxy_url = str(value or '').strip()
+    if len(proxy_url) >= 2 and proxy_url[0] == proxy_url[-1] and proxy_url[0] in ('"', "'"):
+        proxy_url = proxy_url[1:-1].strip()
+    if not proxy_url:
+        raise ValueError(f'{source_name} 为空')
+
+    try:
+        parsed = urlsplit(proxy_url)
+        port = parsed.port
+    except ValueError as e:
+        raise ValueError(f'{source_name} 不是有效的代理 URL: {e}') from e
+    if parsed.scheme.lower() not in PROXY_SCHEMES:
+        raise ValueError(
+            f'{source_name} 必须以 http://、https://、socks5:// 或 socks5h:// 开头'
+        )
+    if not parsed.hostname:
+        raise ValueError(f'{source_name} 缺少主机名')
+    if parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+        raise ValueError(f'{source_name} 只能填写代理地址，不应包含路径、查询参数或片段')
+    if port is not None and not 1 <= port <= 65535:
+        raise ValueError(f'{source_name} 的端口必须在 1-65535 之间')
+    return proxy_url
+
+
+def read_exchange_proxy():
+    """优先读取 EXCHANGE_PROXY_B64，并兼容明文 EXCHANGE_PROXY。"""
+    encoded = str(os.environ.get('EXCHANGE_PROXY_B64', '') or '').strip()
+    if not encoded:
+        plain = os.environ.get('EXCHANGE_PROXY', '')
+        if plain.strip():
+            return normalize_proxy_url(plain, 'EXCHANGE_PROXY')
+        return ''
+    if encoded[0] in ('"', "'") and len(encoded) >= 2 and encoded[-1] == encoded[0]:
+        encoded = encoded[1:-1].strip()
+    encoded = encoded.strip('"\' \t\r\n')
+    if urlsplit(encoded).scheme.lower() in PROXY_SCHEMES:
+        return normalize_proxy_url(encoded, 'EXCHANGE_PROXY_B64')
+
+    encoded = ''.join(encoded.split())
+    padded = encoded + '=' * (-len(encoded) % 4)
+    try:
+        decoded = base64.b64decode(padded, validate=True).decode('utf-8').strip()
+    except (ValueError, UnicodeDecodeError) as e:
+        raise ValueError('EXCHANGE_PROXY_B64 不是有效的 Base64 文本') from e
+    return normalize_proxy_url(decoded, 'EXCHANGE_PROXY_B64 解码值')
+
+
 def get_exchange_proxies(url):
     """
     交易所官方接口只在中国大陆稳定开放。
-    CI 可通过 EXCHANGE_PROXY 指定大陆出口，本地默认仍直连。
+    CI 可通过 EXCHANGE_PROXY_B64 指定大陆出口，本地默认仍直连。
     """
     proxy_url = read_exchange_proxy()
     hostname = urlsplit(url).hostname or ''
     if not proxy_url or hostname not in OFFICIAL_EXCHANGE_HOSTS:
         return None
-    try:
-        parsed = urlsplit(proxy_url)
-    except ValueError:
-        return None
-    if parsed.scheme.lower() not in ('http', 'https', 'socks5', 'socks5h'):
-        raise ValueError('EXCHANGE_PROXY 仅支持 http/https/socks5/socks5h')
-    if not parsed.hostname:
-        raise ValueError('EXCHANGE_PROXY 缺少主机名')
     return {'http': proxy_url, 'https': proxy_url}
-
-
-def read_exchange_proxy():
-    """读取大陆代理；兼容明文 URL 和 Base64 两种配置。"""
-    encoded = os.environ.get('EXCHANGE_PROXY_B64', '').strip()
-    if encoded:
-        if urlsplit(encoded).scheme.lower() in ('http', 'https', 'socks5', 'socks5h'):
-            return encoded
-        padded = encoded + '=' * (-len(encoded) % 4)
-        try:
-            decoded = base64.b64decode(padded, validate=True).decode('utf-8').strip()
-        except (ValueError, UnicodeDecodeError) as e:
-            raise ValueError('EXCHANGE_PROXY_B64 不是有效的 Base64 文本') from e
-        if urlsplit(decoded).scheme.lower() in ('http', 'https', 'socks5', 'socks5h'):
-            return decoded
-        raise ValueError('EXCHANGE_PROXY_B64 解码后不是有效的代理 URL')
-    return os.environ.get('EXCHANGE_PROXY', '').strip()
 
 
 def proxy_display_name(proxy_url):
@@ -304,7 +331,7 @@ def proxy_display_name(proxy_url):
 
 
 def exchange_request(method, url, **kwargs):
-    """访问交易所官方接口；配置 EXCHANGE_PROXY 时经大陆代理请求。"""
+    """访问交易所官方接口；配置 EXCHANGE_PROXY_B64 时经大陆代理请求。"""
     request_kwargs = dict(kwargs)
     proxy_url = read_exchange_proxy()
     proxies = get_exchange_proxies(url)
@@ -317,7 +344,7 @@ def exchange_request(method, url, **kwargs):
     except requests.RequestException as e:
         proxy_note = ''
         if proxies:
-            proxy_note = f'（经 EXCHANGE_PROXY={proxy_display_name(proxy_url)}）'
+            proxy_note = f'（经 EXCHANGE_PROXY_B64={proxy_display_name(proxy_url)}）'
         raise RuntimeError(f'交易所请求失败{proxy_note}: {e}') from e
 
 
@@ -1666,9 +1693,15 @@ def main():
     print('  沪深两市宽基 ETF 份额监控')
     print('=' * 60)
 
-    proxy_url = read_exchange_proxy()
-    if os.environ.get('CI') and not proxy_url:
-        print('⚠  未配置 EXCHANGE_PROXY：GitHub 海外运行环境可能无法连接交易所。')
+    try:
+        proxy_url = read_exchange_proxy()
+    except ValueError as e:
+        print(f'❌ 代理配置错误：{e}')
+        return False
+    if proxy_url:
+        print(f'🌐 大陆代理已启用: {proxy_display_name(proxy_url)}')
+    elif os.environ.get('CI'):
+        print('⚠  未配置大陆代理：请在 GitHub Actions Secrets 中创建 EXCHANGE_PROXY_B64。')
     # v1 断点混入了周末数据和不可靠的深交所备用字段，先做一次性修复。
     if read_checkpoint_version() < CHECKPOINT_VERSION:
         old_results = read_all_results()
