@@ -29,6 +29,7 @@ import sys
 import warnings
 import webbrowser
 import pandas as pd
+import akshare as ak
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
@@ -255,6 +256,12 @@ def is_transient_api_error(payload):
 
 
 PROXY_SCHEMES = ('http', 'https', 'socks5', 'socks5h')
+LAST_NETWORK_ERRORS = {}
+
+
+def remember_network_error(source, error):
+    """记录最近一次网络异常摘要，供重试结束后的日志定位问题。"""
+    LAST_NETWORK_ERRORS[source] = str(error).replace('\n', ' ')[:500]
 
 
 def normalize_proxy_url(value, source_name):
@@ -345,6 +352,7 @@ def exchange_request(method, url, **kwargs):
         proxy_note = ''
         if proxies:
             proxy_note = f'（经 EXCHANGE_PROXY_B64={proxy_display_name(proxy_url)}）'
+        print(f'   [请求失败] {method} {url}{proxy_note}: {e}')
         raise RuntimeError(f'交易所请求失败{proxy_note}: {e}') from e
 
 
@@ -360,7 +368,15 @@ def fetch_sse_day(date_str):
     )
     try:
         resp = exchange_request('GET', url, headers=HEADERS, timeout=20)
-        payload = resp.json()
+        try:
+            payload = resp.json()
+        except ValueError as e:
+            print(
+                f'   [上交所] {date_str} 返回非 JSON '
+                f'(HTTP {resp.status_code}, Content-Type={resp.headers.get("Content-Type", "")}, '
+                f'{len(resp.content)} bytes)'
+            )
+            return None, 'apierr'
         if not isinstance(payload, dict):
             return None, 'apierr'
 
@@ -384,6 +400,7 @@ def fetch_sse_day(date_str):
             item['exchange'] = 'SSE'
         return (items, 'ok') if items else (None, 'nodata')
     except Exception as e:
+        remember_network_error('上交所', e)
         return (None, 'neterr') if is_network_error(e) else (None, 'apierr')
 
 
@@ -394,6 +411,8 @@ def fetch_szse_day(date_str):
     try:
         records = fetch_szse_range(date_str, date_str)
     except Exception as e:
+        print(f'   [深交所] {date_str} 获取失败: {str(e)[:300]}')
+        remember_network_error('深交所', e)
         return (None, 'neterr') if is_network_error(e) else (None, 'apierr')
     if records is None:
         return None, 'neterr'
@@ -536,14 +555,33 @@ def refresh_szse_history(results):
     return merged
 
 
-def fetch_combined_day(date_str, szse_records=None):
+def fetch_combined_day(date_str, szse_records=None, snapshot_items=None):
     """获取双交易所合并数据"""
+    LAST_NETWORK_ERRORS.clear()
     sse_items, sse_status = fetch_sse_day(date_str)
     if szse_records is None:
         szse_items, szse_status = fetch_szse_day(date_str)
     else:
         szse_items = szse_records.get(date_str, [])
         szse_status = 'ok' if szse_items else 'nodata'
+
+    if snapshot_items:
+        if sse_status in ('neterr', 'transient', 'apierr', 'nodata'):
+            fallback_sse = [
+                dict(item) for item in snapshot_items
+                if item.get('exchange') == 'SSE'
+            ]
+            if fallback_sse:
+                sse_items, sse_status = fallback_sse, 'ok'
+                print('\n   [上交所] 官方数据缺失，改用新浪份额快照')
+        if szse_status in ('neterr', 'transient', 'apierr', 'nodata'):
+            fallback_szse = [
+                dict(item) for item in snapshot_items
+                if item.get('exchange') == 'SZSE'
+            ]
+            if fallback_szse:
+                szse_items, szse_status = fallback_szse, 'ok'
+                print('   [深交所] 官方数据缺失，改用新浪份额快照')
 
     all_items = []
     if sse_status == 'ok' and sse_items:
@@ -560,6 +598,49 @@ def fetch_combined_day(date_str, szse_records=None):
     else:
         return (all_items, 'ok') if all_items else (None, 'nodata')
 
+
+def fetch_sina_snapshot():
+    """
+    获取新浪基金当前总份额快照。
+
+    该接口可用于补充每日最新份额，但不能提供完整历史。
+    """
+    try:
+        frame = ak.fund_scale_open_sina(symbol='股票型基金')
+    except Exception as e:
+        print(f'   [新浪快照] 获取失败: {str(e)[:200]}')
+        return None
+    required = {'基金代码', '最近总份额', '更新日期'}
+    if not required.issubset(frame.columns):
+        print(f'   [新浪快照] 字段异常: {list(frame.columns)}')
+        return None
+
+    tracked = set(SSE_ETF_MAP) | set(SZSE_ETF_MAP)
+    records = {}
+    for _, row in frame.iterrows():
+        code = str(row.get('基金代码', '')).strip()
+        if code not in tracked:
+            continue
+        raw_date = row.get('更新日期')
+        date_value = pd.to_datetime(raw_date, errors='coerce')
+        share_value = parse_val(
+            str(row.get('最近总份额', '')).replace(',', '')
+        )
+        if pd.isna(date_value) or share_value is None:
+            continue
+        date_key = date_value.strftime('%Y-%m-%d')
+        item = {
+            'SEC_CODE': code,
+            'TOT_VOL': share_value,
+            'exchange': 'SSE' if code in SSE_ETF_MAP else 'SZSE',
+        }
+        bucket = records.setdefault(date_key, {})
+        bucket[code] = item
+
+    return {
+        date_key: list(items.values()) for date_key, items in records.items()
+    }
+
 # ── 4. 通用抓取循环 ─────────────────────────────────────────────────────────
 
 def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
@@ -573,9 +654,13 @@ def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
     ]
 
     try:
-        # 深交所支持区间下载。长区间先批量取数，避免逐日请求。
+        # 官方接口的单边异常可由新浪份额快照局部补齐；正常时仍用官方数据。
+        # 历史补全不使用快照，保证历史口径完整可追溯。
+        snapshot_records = {}
         szse_records = None
-        if len(pending_dates) > 3:
+        if is_recent:
+            snapshot_records = fetch_sina_snapshot() or {}
+        elif len(pending_dates) > 3:
             try:
                 szse_records = fetch_szse_range(min(pending_dates), max(pending_dates))
             except KeyboardInterrupt:
@@ -588,7 +673,11 @@ def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
             date_attempt = 0
             skip_to_next_date = False
             while True:
-                items, status = fetch_combined_day(date_str, szse_records=szse_records)
+                items, status = fetch_combined_day(
+                    date_str,
+                    szse_records=szse_records,
+                    snapshot_items=snapshot_records.get(date_str),
+                )
 
                 if status == 'ok':
                     new_records.append({'date': date_str, 'items': items})
@@ -603,7 +692,7 @@ def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
                         print('— (非交易日)')
                     # 增量检查从旧到新：今天可能还没发布，但不能因此
                     # 跳过今天之前尚未补齐的真实历史缺口。
-                    if is_recent and date_str == today_str():
+                    if is_recent and date_str == today_beijing().strftime('%Y-%m-%d'):
                         skip_to_next_date = True
                     break
 
@@ -613,13 +702,17 @@ def fetch_dates(date_list, existing_dates, mode_label, is_recent=False):
                     print(f'\r同步 {date_str} [{mode_label}，已新增 {len(new_records)} 天]  '
                           f'✗ {reason}，重试 {date_attempt}/{MAX_NET_FAILURES}', end='  ')
                     if date_attempt >= MAX_NET_FAILURES:
-                        # 当天数据尚未发布或交易所临时异常时，保留已有数据继续出图。
-                        # 其他待补日期仍按失败处理，避免掩盖真实数据缺口。
-                        if is_recent and date_str == today_str():
-                            no_data_dates.add(date_str)
-                            print('\n⏳ 今日交易所数据尚未发布')
-                            skip_to_next_date = True
-                            break
+                        try:
+                            active_proxy = read_exchange_proxy()
+                            proxy_state = (
+                                f'经 {proxy_display_name(active_proxy)}'
+                                if active_proxy else '未配置代理，当前为直连'
+                            )
+                        except ValueError as e:
+                            proxy_state = f'代理配置无效: {e}'
+                        print(f'\n   [网络诊断] {proxy_state}')
+                        for source, error in LAST_NETWORK_ERRORS.items():
+                            print(f'   [{source}] {error}')
                         stop_reason = 'network' if status == 'neterr' else 'apierr'
                         break
                     time.sleep(NET_RETRY_WAIT)
@@ -1697,11 +1790,12 @@ def main():
         proxy_url = read_exchange_proxy()
     except ValueError as e:
         print(f'❌ 代理配置错误：{e}')
-        return False
+        print('⚠  将忽略无效代理，优先使用新浪份额快照。')
+        proxy_url = ''
     if proxy_url:
         print(f'🌐 大陆代理已启用: {proxy_display_name(proxy_url)}')
-    elif os.environ.get('CI'):
-        print('⚠  未配置大陆代理：请在 GitHub Actions Secrets 中创建 EXCHANGE_PROXY_B64。')
+    else:
+        print('🌐 未配置大陆代理，将优先使用新浪份额快照。')
     # v1 断点混入了周末数据和不可靠的深交所备用字段，先做一次性修复。
     if read_checkpoint_version() < CHECKPOINT_VERSION:
         old_results = read_all_results()
@@ -1738,6 +1832,8 @@ def main():
                 'interrupt': '更新被中断',
             }.get(increment_status, increment_status)
             print(f'\n❌ 增量更新失败（{reason}），未覆盖最新数据，保留仓库中的旧看板。')
+            if proxy_url:
+                print(f'   本次请求经过代理 {proxy_display_name(proxy_url)}。')
             return False
         if today in no_data_dates and is_weekday(today):
             print(f'\n⏳ {today} 的交易所数据尚未发布，保留已有数据并重新生成看板。')
