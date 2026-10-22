@@ -4,6 +4,7 @@ import json
 import csv
 import io
 import html
+import socket
 import hashlib
 import time
 import random
@@ -137,12 +138,11 @@ MAIN_CODE_MAP = {
     "017145": "017144",
     "016702": "016701",
     "019156": "019155",
-    "019454": "019449",
-    "019455": "019449",
-    "018738": "017641",
+    "019455": "019454",     # 华泰柏瑞中韩半导体ETF联接C → A(019454)
+    "018738": "050025",     # 博时标普500ETF联接E → A(050025)
     "021662": "457001",
     "018147": "539002",
-    "021842": "005698",
+    "021842": "006373",     # 国富全球科技互联C → A(006373)
 }
 
 # 指数历年回报的完整目标清单（用于缓存完整性校验）
@@ -1863,36 +1863,270 @@ def fetch_macro_history():
     return result
 
 
+# ==============================================================================
+# 国家（地区）分布：公告表格解析工具
+# 说明：年报/中报正文开头有目录，目录条目与正文章节标题完全同名，
+#       因此不能简单 find() 首个命中位置，必须跳过目录条目再定位正文表格。
+# ==============================================================================
+COUNTRY_CACHE_VERSION = 2
+
+_COUNTRY_TABLE_HEADER_RE = re.compile(r"国家\s*[（(]\s*地区\s*[）)]")
+# 目录条目特征：标题后紧跟点线/省略号（可带页码）
+_COUNTRY_TOC_LEADER_RE = re.compile(r"[\s]*(?:[.．·…]{2,}|[·…])")
+# 数据行：金额（两位小数） + 占净值比例
+_COUNTRY_ROW_RE = re.compile(r"([\d,]+\.\d{2})\s+(\d+(?:\.\d+)?)\s*%?")
+# 数据行前的国家/地区名（取紧邻金额之前的连续中文）
+_COUNTRY_NAME_RE = re.compile(r"([\u4e00-\u9fa5]{2,10})\s*$")
+
+_COUNTRY_ALIAS = {
+    "香港": "中国香港", "台湾": "中国台湾", "澳门": "中国澳门",
+    "内地": "中国内地", "大陆": "中国大陆",
+}
+_COUNTRY_NAME_BLACKLIST = {
+    "合计", "小计", "其中", "金额单位", "公允价值", "占基金资产净值比例",
+    "国家", "地区", "人民币元", "期末", "报告期末",
+}
+_COUNTRY_MEMO = {}          # query_code -> 国家分布结果（单次运行内复用）
+
+# 公告中「期末在各个国家（地区）证券市场…投资分布」章节标题的各种写法
+_COUNTRY_SECTION_TITLES = [
+    "期末在各个国家（地区）证券市场的权益投资分布",
+    "期末在各个国家（地区）证券市场的股票及存托凭证投资分布",
+    "报告期末在各个国家（地区）证券市场的股票及存托凭证投资分布",
+    "期末在各个国家(地区)证券市场的权益投资分布",
+    "期末在各个国家(地区)证券市场的股票及存托凭证投资分布",
+    "报告期末在各个国家(地区)证券市场的股票及存托凭证投资分布",
+]
+
+
+def _install_ipv4_first():
+    """让 DNS 解析结果优先返回 IPv4。
+
+    背景：部分网络环境下域名会同时解析出 IPv6/IPv4，且 IPv6 链路不通。
+    socket.create_connection 只要有一条地址 TCP 连上就不再尝试后续地址，
+    而公告接口（np-cnotice-fund.eastmoney.com）恰恰是"连上后 TLS 被重置"，
+    于是永远拿不到数据。这里只做排序（IPv4 提前），不丢弃 IPv6 结果。
+    """
+    if getattr(socket, "_wb_ipv4_first", False):
+        return
+    _orig = socket.getaddrinfo
+
+    def _gai(host, port, family=0, type=0, proto=0, flags=0):
+        res = _orig(host, port, family, type, proto, flags)
+        if family in (0, socket.AF_UNSPEC) and len(res) > 1:
+            res = sorted(res, key=lambda x: 0 if x[0] == socket.AF_INET else 1)
+        return res
+
+    socket.getaddrinfo = _gai
+    socket._wb_ipv4_first = True
+
+
+try:
+    _install_ipv4_first()
+except Exception:
+    pass
+
+
+def _html_to_plain(s):
+    """HTML 片段转纯文本（保留换行，压缩空格）"""
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    s = (s.replace("&nbsp;", " ").replace("&amp;", "&")
+          .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"'))
+    return re.sub(r"[ \t\r\u3000]+", " ", s)
+
+
+def _locate_country_section(content, patterns):
+    """定位正文中『期末在各个国家（地区）证券市场…投资分布』表格的起点，跳过目录条目。
+
+    判定正文：标题之后必须同时出现表头「国家（地区）」与「公允价值」
+              （目录里紧邻的「7.4 期末按公允价值…」条目只含后者，可据此排除）；
+    判定目录：标题之后紧跟点线/省略号（如 ……45 / ......45）。
+    """
+    for p in patterns:
+        for m in re.finditer(re.escape(p), content):
+            tail = _html_to_plain(content[m.end(): m.end() + 2000])[:400]
+            if _COUNTRY_TOC_LEADER_RE.match(tail):
+                continue          # 目录条目（标题后跟点线+页码）
+            if "公允价值" not in tail:
+                continue          # 不是带表格的正文段落
+            if not _COUNTRY_TABLE_HEADER_RE.search(tail):
+                continue          # 缺少表头「国家（地区）」，说明是目录或引用
+            return m.start()
+    return -1
+
+
+def _parse_country_table(sec_text):
+    """从章节纯文本中解析国家（地区）分布表，返回 (rows, total_ratio)。
+
+    兼容两种排版：
+      1) 每个单元格独立成行：美国\\n6,447,592,935.14\\n71.95
+      2) 单元格以空格分隔：美国 6,447,592,935.14 71.95
+    以「金额+比例」数字对为锚点，向左回溯最近的中文名，避免误抓其它表格。
+    """
+    hdr = _COUNTRY_TABLE_HEADER_RE.search(sec_text)
+    body = sec_text[hdr.end():] if hdr else sec_text
+
+    total_ratio = None
+    mt = re.search(r"合计\s*([\d,]+\.\d{2})\s+(\d+(?:\.\d+)?)", body)
+    if mt:
+        total_ratio = float(mt.group(2))
+
+    # 只保留表格区域：到「合计 / 注： / 下一章节」为止
+    cut = len(body)
+    for stop_re in (r"合计", r"注\s*[：:]", r"期末按行业", r"报告期末按行业"):
+        m_stop = re.search(stop_re, body)
+        if m_stop:
+            cut = min(cut, m_stop.start())
+    body = body[:cut]
+
+    rows = []
+    seen = set()
+    for m in _COUNTRY_ROW_RE.finditer(body):
+        prefix = body[max(0, m.start() - 30): m.start()]
+        nm = _COUNTRY_NAME_RE.search(prefix)
+        if not nm:
+            continue
+        name = nm.group(1).strip()
+        if name in _COUNTRY_NAME_BLACKLIST:
+            continue
+        name = _COUNTRY_ALIAS.get(name, name)
+        ratio = float(m.group(2))
+        if not (0 < ratio <= 100) or name in seen:
+            continue
+        seen.add(name)
+        rows.append({"country": name, "ratio": round(ratio, 2)})
+
+    rows.sort(key=lambda x: x["ratio"], reverse=True)
+    return rows, total_ratio
+
+
+def _fetch_text_with_retry(opener, req, timeout=10, attempts=3, backoff=0.6):
+    """带重试的请求。
+
+    公告接口偶发 ConnectionReset（限流/反爬），单次失败不代表没有数据，
+    这里重试若干次；仍失败则抛出最后一次异常由调用方决定降级。
+    """
+    last_err = None
+    for i in range(max(1, attempts)):
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="ignore")
+        except Exception as e:
+            last_err = e
+            if i < attempts - 1:
+                time.sleep(backoff * (i + 1))
+    raise last_err
+
+
+def _download_bytes(opener, url, timeout=30):
+    """下载二进制内容（优先用 curl：pdf.dfcfw.com 对 Python 客户端有 TLS 指纹挑战）"""
+    try:
+        import shutil
+        import subprocess
+        if shutil.which("curl"):
+            proc = subprocess.run(
+                ["curl", "-s", "-L", "-m", str(timeout), "-A", DEFAULT_HEADERS["User-Agent"], url],
+                capture_output=True,
+            )
+            data = proc.stdout or b""
+            if proc.returncode == 0 and bytes(data[:4]) == b"%PDF":
+                return data
+    except Exception:
+        pass
+
+    try:
+        req = urllib.request.Request(url, headers={
+            **DEFAULT_HEADERS,
+            "Referer": "https://fund.eastmoney.com/",
+        })
+        with opener.open(req, timeout=timeout) as resp:
+            data = resp.read() or b""
+        return data if bytes(data[:4]) == b"%PDF" else None
+    except Exception:
+        return None
+
+
+def _fetch_country_from_pdf(opener, art_id):
+    """兜底：公告正文接口不可用时，直接下载公告 PDF 抽取文本解析（需要 pypdf）。
+
+    pdf.dfcfw.com 的可用性通常好于正文接口，用于覆盖接口被限流的基金。
+    """
+    try:
+        import pypdf
+    except Exception:
+        return None
+
+    data = _download_bytes(opener, f"https://pdf.dfcfw.com/pdf/H2_{art_id}_1.pdf")
+    if not data:
+        return None
+
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        texts = []
+        for page in reader.pages:
+            try:
+                texts.append(page.extract_text() or "")
+            except Exception:
+                texts.append("")
+        for i, txt in enumerate(texts):
+            if "国家" not in txt:
+                continue
+            # 表格可能跨页断开，拼上后一页再解析
+            merged = txt + "\n" + (texts[i + 1] if i + 1 < len(texts) else "")
+            pos = _locate_country_section(merged, _COUNTRY_SECTION_TITLES)
+            if pos < 0:
+                continue
+            rows, total = _parse_country_table(merged[pos: pos + 4000])
+            if rows:
+                return rows, total
+    except Exception:
+        return None
+    return None
+
+
 def fetch_fund_country_distribution(opener, code, is_qdii=False):
     cache_file = os.path.join(COUNTRY_CACHE_DIR, f"{code}_country.json")
+    stale_cache = None          # 旧版缓存：新数据抓取失败时兜底，避免看板直接空掉
 
     if os.path.exists(cache_file):
         try:
             with open(cache_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                if isinstance(data, dict) and data.get("countries") and data.get("date") not in ["--", "", None]:
-                    return data
+            # 版本校验：旧版解析逻辑（目录误命中/漏「中国」）写入的缓存自动失效重抓
+            if (isinstance(data, dict) and data.get("_v") == COUNTRY_CACHE_VERSION
+                    and data.get("countries") and data.get("date") not in ["--", "", None]):
+                return data
+            if isinstance(data, dict) and data.get("countries"):
+                stale_cache = data
         except Exception:
             pass
 
     query_code = MAIN_CODE_MAP.get(code, code)
 
     if is_qdii:
+        # 同一主代码的分级份额（如 019449/019454/019455）公告完全一致，本次运行内复用，减少接口压力
+        if code != query_code and query_code in _COUNTRY_MEMO:
+            result = dict(_COUNTRY_MEMO[query_code])
+            try:
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return result
         try:
             rep_url = f"https://api.fund.eastmoney.com/f10/JJGG?fundcode={query_code}&pageIndex=1&pageSize=60&type=3"
             req_rep = urllib.request.Request(rep_url, headers={
                 **DEFAULT_HEADERS,
                 "Referer": f"https://fund.eastmoney.com/{query_code}.html"
             })
-            with opener.open(req_rep, timeout=10) as resp:
-                data_rep = json.loads(resp.read().decode("utf-8"))
+            data_rep = json.loads(_fetch_text_with_retry(opener, req_rep, timeout=12, attempts=3))
 
             report_items = data_rep.get("Data") or []
             candidates = []
 
             for it in report_items:
                 title = it.get("TITLE", "")
-                pub_date = it.get("PUBLISHDATEDesc", "")
+                pub_date = it.get("PUBLISHDATEDESC", "") or it.get("PUBLISHDATEDesc", "")
                 r_id = it.get("ID", "")
                 if ("中期报告" in title or "年度报告" in title or "季度报告" in title) and ("摘要" not in title):
                     candidates.append({"title": title, "date": pub_date, "id": r_id})
@@ -1901,86 +2135,58 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
                 candidates.sort(key=lambda x: x["date"], reverse=True)
 
                 for cand in candidates[:2]:              # ★ 原 3
-                    ann_url = f"https://np-cnotice-fund.eastmoney.com/api/content/ann?client_source=web_fund&show_all=1&art_code={cand['id']}"
-                    req_ann = urllib.request.Request(ann_url, headers={
-                        **DEFAULT_HEADERS,
-                        "Referer": "https://fund.eastmoney.com/"
-                    })
-                    with opener.open(req_ann, timeout=8) as resp:   # ★ 原 15
-                        data_ann = json.loads(resp.read().decode("utf-8"))
+                    # ① 优先取公告正文接口；② 接口失败/无内容时用公告 PDF 兜底
+                    content = ""
+                    try:
+                        ann_url = f"https://np-cnotice-fund.eastmoney.com/api/content/ann?client_source=web_fund&show_all=1&art_code={cand['id']}"
+                        req_ann = urllib.request.Request(ann_url, headers={
+                            **DEFAULT_HEADERS,
+                            "Referer": "https://fund.eastmoney.com/"
+                        })
+                        data_ann = json.loads(_fetch_text_with_retry(opener, req_ann, timeout=15, attempts=3))
+                        content = (data_ann.get("data") or {}).get("notice_content", "")
+                    except Exception:
+                        content = ""
 
-                    content = (data_ann.get("data") or {}).get("notice_content", "")
-                    if not content:
-                        continue
+                    c_list, total_ratio = [], None
+                    if content:
+                        # ★ 修复：跳过目录条目，定位正文表格起点（原 find() 会命中目录）
+                        start_pos = _locate_country_section(content, _COUNTRY_SECTION_TITLES)
+                        if start_pos >= 0:
+                            # 取章节标题后的纯文本（覆盖表格足够，且不会串到后续章节）
+                            sec = _html_to_plain(content[start_pos: start_pos + 12000])[:4000]
+                            c_list, total_ratio = _parse_country_table(sec)
 
-                    patterns = [
-                        "期末在各个国家（地区）证券市场的权益投资分布",
-                        "期末在各个国家（地区）证券市场的股票及存托凭证投资分布",
-                        "报告期末在各个国家（地区）证券市场的股票及存托凭证投资分布",
-                        "期末在各个国家(地区)证券市场的权益投资分布",
-                        "期末在各个国家(地区)证券市场的股票及存托凭证投资分布",
-                        "报告期末在各个国家(地区)证券市场的股票及存托凭证投资分布",
-                    ]
-                    start_pos = -1
-                    for p in patterns:
-                        pos = content.find(p)
-                        if pos >= 0:
-                            start_pos = pos
-                            break
+                    if not c_list:
+                        pdf_res = _fetch_country_from_pdf(opener, cand["id"])
+                        if pdf_res:
+                            c_list, total_ratio = pdf_res
 
-                    if start_pos >= 0:
-                        sec = content[start_pos:]
-                        stop_patterns = [
-                            "期末按行业分类的权益投资组合",
-                            "期末按行业分类的股票及存托凭证投资组合",
-                            "报告期末按行业分类的股票及存托凭证投资组合",
-                            "期末按行业分类",
-                            "报告期末按行业分类",
-                        ]
-                        end_pos = len(sec)
-                        for sp in stop_patterns:
-                            sp_pos = sec.find(sp)
-                            if sp_pos > 100:
-                                end_pos = min(end_pos, sp_pos)
-                        sec = sec[:end_pos]
+                    if c_list:
+                        report_date_label = cand["date"][:10] if cand.get("date") else "--"
+                        title_year_match = re.search(r'(\d{4})年半年度|(\d{4})年年度|(\d{4})年中期', cand["title"])
+                        if title_year_match:
+                            yr = title_year_match.group(1) or title_year_match.group(2) or title_year_match.group(3)
+                            if "半年度" in cand["title"] or "中期" in cand["title"]:
+                                report_date_label = f"{yr}-06-30"
+                            elif "年度" in cand["title"]:
+                                report_date_label = f"{yr}-12-31"
 
-                        sec = re.sub(r"<[^>]+>", " ", sec)
-                        sec = sec.replace("&nbsp;", " ").replace("&amp;", "&")
-                        sec = re.sub(r"[ \t\r]+", " ", sec)
+                        # 一致性校验：各国家占比之和应接近「合计」占比
+                        sum_ratio = round(sum(it["ratio"] for it in c_list), 2)
+                        if total_ratio is not None and abs(sum_ratio - total_ratio) > 1.0:
+                            print(f"  [WARN] {code} 国家分布解析可能不完整：明细合计 {sum_ratio}% vs 公告合计 {total_ratio}%")
 
-                        candidate_countries = [
-                            "中国内地", "中国香港", "中国台湾", "中国大陆", "美国", "日本", "韩国", "新加坡",
-                            "荷兰", "英国", "法国", "德国", "瑞士", "加拿大", "澳大利亚", "新西兰", "印度",
-                            "巴西", "以色列", "丹麦", "瑞典", "芬兰", "意大利", "西班牙", "爱尔兰", "比利时",
-                            "卢森堡", "挪威", "奥地利", "葡萄牙", "马来西亚", "泰国", "印度尼西亚", "越南", "菲律宾", "墨西哥"
-                        ]
-
-                        parsed_items = []
-                        for c_name in candidate_countries:
-                            m = re.search(rf"{re.escape(c_name)}\s*([\d,]+\.\d+)\s*(\d+(?:\.\d+)?)", sec)
-                            if m:
-                                r_val = float(m.group(2))
-                                if r_val > 0:
-                                    parsed_items.append({"country": c_name, "ratio": round(r_val, 2)})
-
-                        if parsed_items:
-                            unique_dict = {it["country"]: it for it in parsed_items}
-                            c_list = list(unique_dict.values())
-                            c_list.sort(key=lambda x: x["ratio"], reverse=True)
-
-                            report_date_label = cand["date"][:10] if cand.get("date") else "--"
-                            title_year_match = re.search(r'(\d{4})年半年度|(\d{4})年年度|(\d{4})年中期', cand["title"])
-                            if title_year_match:
-                                yr = title_year_match.group(1) or title_year_match.group(2) or title_year_match.group(3)
-                                if "半年度" in cand["title"] or "中期" in cand["title"]:
-                                    report_date_label = f"{yr}-06-30"
-                                elif "年度" in cand["title"]:
-                                    report_date_label = f"{yr}-12-31"
-
-                            result = {"date": report_date_label, "countries": c_list}
-                            with open(cache_file, 'w', encoding='utf-8') as f:
-                                json.dump(result, f, ensure_ascii=False, indent=2)
-                            return result
+                        result = {
+                            "date": report_date_label,
+                            "countries": c_list,
+                            "total": total_ratio,
+                            "_v": COUNTRY_CACHE_VERSION,
+                        }
+                        _COUNTRY_MEMO[query_code] = result
+                        with open(cache_file, 'w', encoding='utf-8') as f:
+                            json.dump(result, f, ensure_ascii=False, indent=2)
+                        return result
         except Exception:
             pass
 
@@ -2016,7 +2222,7 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
                                 c_list.append({"country": c_name, "ratio": round(val, 2)})
 
                 if c_list:
-                    result = {"date": pub_date, "countries": c_list}
+                    result = {"date": pub_date, "countries": c_list, "_v": COUNTRY_CACHE_VERSION}
                     with open(cache_file, 'w', encoding='utf-8') as f:
                         json.dump(result, f, ensure_ascii=False, indent=2)
                     return result
@@ -2050,7 +2256,7 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
                         if val > 0:
                             c_list.append({"country": c_name, "ratio": round(val, 2)})
             if c_list:
-                result = {"date": pub_date, "countries": c_list}
+                result = {"date": pub_date, "countries": c_list, "_v": COUNTRY_CACHE_VERSION}
                 with open(cache_file, 'w', encoding='utf-8') as f:
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 return result
@@ -2063,11 +2269,16 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
         if code in SPX_PASSIVE_CODES or code in NDX_PASSIVE_CODES:
             fallback = {
                 "date": "指数成份分布",
-                "countries": [{"country": "美国", "ratio": 95.0}, {"country": "现金及其他", "ratio": 5.0}]
+                "countries": [{"country": "美国", "ratio": 95.0}, {"country": "现金及其他", "ratio": 5.0}],
+                "_v": COUNTRY_CACHE_VERSION,
             }
             with open(cache_file, 'w', encoding='utf-8') as f:
                 json.dump(fallback, f, ensure_ascii=False, indent=2)
             return fallback
+
+    # 全部来源失败：保留上次成功抓取的数据，避免看板直接变成"暂无配置数据"
+    if stale_cache:
+        return stale_cache
 
     return {"date": "--", "countries": []}
 

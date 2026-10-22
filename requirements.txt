@@ -6,3 +6,4 @@ beautifulsoup4
 akshare
 yfinance
 openpyxl
+pypdf
