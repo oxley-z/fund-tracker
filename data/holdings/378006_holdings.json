@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 9.87
+      },
+      {
+        "name": "三星电子",
+        "ratio": 8.84
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 6.58
+      },
+      {
+        "name": "腾讯控股",
+        "ratio": 2.68
+      },
+      {
+        "name": "印度瑞来斯实业",
+        "ratio": 1.6
+      },
+      {
+        "name": "PETROBRAS-PETROLEO BRAS-PR",
+        "ratio": 1.51
+      },
+      {
+        "name": "联想集团",
+        "ratio": 1.31
+      },
+      {
+        "name": "OTP BANK PLC",
+        "ratio": 1.23
+      },
+      {
+        "name": "阿里巴巴-W",
+        "ratio": 1.23
+      },
+      {
+        "name": "ITAU UNIBANCO HOLDING S-PREF",
+        "ratio": 1.05
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 10.21
+      },
+      {
+        "name": "三星电子",
+        "ratio": 9.7
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 9.01
+      },
+      {
+        "name": "腾讯控股",
+        "ratio": 4.03
+      },
+      {
+        "name": "PETROBRAS-PETROLEO BRAS-PR",
+        "ratio": 1.74
+      },
+      {
+        "name": "印度瑞来斯实业",
+        "ratio": 1.69
+      },
+      {
+        "name": "EUROBANK SA",
+        "ratio": 1.59
+      },
+      {
+        "name": "OTP BANK PLC",
+        "ratio": 1.51
+      },
+      {
+        "name": "联想集团",
+        "ratio": 1.33
+      },
+      {
+        "name": "KB金融集团",
+        "ratio": 1.23
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 10.3
+      },
+      {
+        "name": "三星电子",
+        "ratio": 7.55
+      },
+      {
+        "name": "腾讯控股",
+        "ratio": 6.59
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 4.4
+      },
+      {
+        "name": "阿里巴巴-W",
+        "ratio": 2.9
+      },
+      {
+        "name": "印度国家银行",
+        "ratio": 2.23
+      },
+      {
+        "name": "印度瑞来斯实业",
+        "ratio": 1.8
+      },
+      {
+        "name": "ITAU UNIBANCO HOLDING S-PREF",
+        "ratio": 1.68
+      },
+      {
+        "name": "HDFC银行",
+        "ratio": 1.6
+      },
+      {
+        "name": "工商银行",
+        "ratio": 1.57
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 9.81
+      },
+      {
+        "name": "腾讯控股",
+        "ratio": 7.88
+      },
+      {
+        "name": "三星电子",
+        "ratio": 5.71
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 4.0
+      },
+      {
+        "name": "阿里巴巴-W",
+        "ratio": 3.55
+      },
+      {
+        "name": "HDFC银行",
+        "ratio": 2.02
+      },
+      {
+        "name": "网易",
+        "ratio": 1.86
+      },
+      {
+        "name": "ITAU UNIBANCO HOLDING S-PREF",
+        "ratio": 1.55
+      },
+      {
+        "name": "印度工业信贷投资银行",
+        "ratio": 1.49
+      },
+      {
+        "name": "OTP BANK PLC",
+        "ratio": 1.24
+      }
+    ]
+  }
+]

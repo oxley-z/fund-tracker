@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "超威半导体",
+        "ratio": 5.95
+      },
+      {
+        "name": "美光科技",
+        "ratio": 5.55
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 5.35
+      },
+      {
+        "name": "KIOXIA",
+        "ratio": 4.93
+      },
+      {
+        "name": "英特尔",
+        "ratio": 4.88
+      },
+      {
+        "name": "台积电",
+        "ratio": 4.85
+      },
+      {
+        "name": "英伟达",
+        "ratio": 4.56
+      },
+      {
+        "name": "三星电子",
+        "ratio": 4.11
+      },
+      {
+        "name": "微软",
+        "ratio": 4.01
+      },
+      {
+        "name": "苹果",
+        "ratio": 3.84
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "闪迪",
+        "ratio": 9.52
+      },
+      {
+        "name": "KIOXIA",
+        "ratio": 8.81
+      },
+      {
+        "name": "美光科技",
+        "ratio": 8.5
+      },
+      {
+        "name": "英特尔",
+        "ratio": 7.82
+      },
+      {
+        "name": "西部数据",
+        "ratio": 7.58
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 7.53
+      },
+      {
+        "name": "Coherent Corp",
+        "ratio": 3.95
+      },
+      {
+        "name": "泰瑞达",
+        "ratio": 3.95
+      },
+      {
+        "name": "三星电子",
+        "ratio": 3.83
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 3.77
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 8.22
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 6.4
+      },
+      {
+        "name": "台积电",
+        "ratio": 6.04
+      },
+      {
+        "name": "西部数据",
+        "ratio": 5.19
+      },
+      {
+        "name": "Coherent Corp",
+        "ratio": 5.17
+      },
+      {
+        "name": "美光科技",
+        "ratio": 5.13
+      },
+      {
+        "name": "英特尔",
+        "ratio": 4.34
+      },
+      {
+        "name": "KIOXIA",
+        "ratio": 3.71
+      },
+      {
+        "name": "奈飞",
+        "ratio": 3.55
+      },
+      {
+        "name": "阿斯麦",
+        "ratio": 3.25
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 8.11
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 7.87
+      },
+      {
+        "name": "台积电",
+        "ratio": 7.45
+      },
+      {
+        "name": "博通",
+        "ratio": 7.31
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 6.23
+      },
+      {
+        "name": "美光科技",
+        "ratio": 6.03
+      },
+      {
+        "name": "微软",
+        "ratio": 3.95
+      },
+      {
+        "name": "亚马逊",
+        "ratio": 3.69
+      },
+      {
+        "name": "苹果",
+        "ratio": 3.29
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 2.95
+      }
+    ]
+  }
+]

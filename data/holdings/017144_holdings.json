@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "迈威尔科技",
+        "ratio": 9.03
+      },
+      {
+        "name": "法拉利",
+        "ratio": 8.75
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 8.24
+      },
+      {
+        "name": "Rivian Automotive Inc-A",
+        "ratio": 7.55
+      },
+      {
+        "name": "蔚来",
+        "ratio": 7.54
+      },
+      {
+        "name": "小马智行",
+        "ratio": 7.28
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 7.0
+      },
+      {
+        "name": "闪迪",
+        "ratio": 6.79
+      },
+      {
+        "name": "美光科技",
+        "ratio": 6.64
+      },
+      {
+        "name": "博通",
+        "ratio": 5.2
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "迈威尔科技",
+        "ratio": 9.83
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 9.61
+      },
+      {
+        "name": "蔚来",
+        "ratio": 9.17
+      },
+      {
+        "name": "Rivian Automotive Inc-A",
+        "ratio": 8.94
+      },
+      {
+        "name": "法拉利",
+        "ratio": 8.44
+      },
+      {
+        "name": "小马智行",
+        "ratio": 7.34
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 6.3
+      },
+      {
+        "name": "美光科技",
+        "ratio": 5.99
+      },
+      {
+        "name": "宁德时代",
+        "ratio": 5.61
+      },
+      {
+        "name": "博通",
+        "ratio": 4.91
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "蔚来",
+        "ratio": 10.17
+      },
+      {
+        "name": "Carvana Co-A",
+        "ratio": 9.74
+      },
+      {
+        "name": "Rivian Automotive Inc-A",
+        "ratio": 9.65
+      },
+      {
+        "name": "博通",
+        "ratio": 9.64
+      },
+      {
+        "name": "法拉利",
+        "ratio": 9.58
+      },
+      {
+        "name": "英伟达",
+        "ratio": 9.46
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 9.33
+      },
+      {
+        "name": "小马智行",
+        "ratio": 6.9
+      },
+      {
+        "name": "宁德时代",
+        "ratio": 6.39
+      },
+      {
+        "name": "迈威尔科技",
+        "ratio": 4.81
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 9.78
+      },
+      {
+        "name": "Rivian Automotive Inc-A",
+        "ratio": 9.69
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 9.53
+      },
+      {
+        "name": "法拉利",
+        "ratio": 9.05
+      },
+      {
+        "name": "蔚来",
+        "ratio": 8.93
+      },
+      {
+        "name": "博通",
+        "ratio": 8.33
+      },
+      {
+        "name": "Carvana Co-A",
+        "ratio": 8.27
+      },
+      {
+        "name": "小马智行",
+        "ratio": 6.53
+      },
+      {
+        "name": "迈威尔科技",
+        "ratio": 5.85
+      },
+      {
+        "name": "小鹏汽车-W",
+        "ratio": 5.33
+      }
+    ]
+  }
+]

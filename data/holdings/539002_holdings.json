@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 9.77
+      },
+      {
+        "name": "英伟达",
+        "ratio": 9.45
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 8.92
+      },
+      {
+        "name": "三星电子",
+        "ratio": 8.49
+      },
+      {
+        "name": "闪迪",
+        "ratio": 7.67
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 4.44
+      },
+      {
+        "name": "美光科技",
+        "ratio": 4.21
+      },
+      {
+        "name": "西部数据",
+        "ratio": 4.11
+      },
+      {
+        "name": "阿斯麦",
+        "ratio": 3.57
+      },
+      {
+        "name": "日月光半导体",
+        "ratio": 3.37
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 9.68
+      },
+      {
+        "name": "英伟达",
+        "ratio": 9.38
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 8.94
+      },
+      {
+        "name": "三星电子",
+        "ratio": 7.8
+      },
+      {
+        "name": "闪迪",
+        "ratio": 7.16
+      },
+      {
+        "name": "博通",
+        "ratio": 4.18
+      },
+      {
+        "name": "西部数据",
+        "ratio": 4.18
+      },
+      {
+        "name": "美光科技",
+        "ratio": 3.99
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 3.56
+      },
+      {
+        "name": "康宁",
+        "ratio": 3.35
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 10.26
+      },
+      {
+        "name": "英伟达",
+        "ratio": 10.14
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 8.65
+      },
+      {
+        "name": "博通",
+        "ratio": 8.52
+      },
+      {
+        "name": "三星电子",
+        "ratio": 6.76
+      },
+      {
+        "name": "闪迪",
+        "ratio": 4.91
+      },
+      {
+        "name": "康宁",
+        "ratio": 4.29
+      },
+      {
+        "name": "西部数据",
+        "ratio": 3.73
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 3.58
+      },
+      {
+        "name": "Monolithic Power Systems Inc",
+        "ratio": 3.49
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 9.86
+      },
+      {
+        "name": "SK hynix",
+        "ratio": 9.79
+      },
+      {
+        "name": "台积电",
+        "ratio": 9.07
+      },
+      {
+        "name": "博通",
+        "ratio": 7.98
+      },
+      {
+        "name": "SamsungElectronics",
+        "ratio": 5.44
+      },
+      {
+        "name": "康宁",
+        "ratio": 4.45
+      },
+      {
+        "name": "Monolithic Power Systems Inc",
+        "ratio": 3.89
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 3.79
+      },
+      {
+        "name": "Credo Technology Group Holding Ltd",
+        "ratio": 2.38
+      },
+      {
+        "name": "鸿海精密工业",
+        "ratio": 2.35
+      }
+    ]
+  }
+]

@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英特尔",
+        "ratio": 8.42
+      },
+      {
+        "name": "美光科技",
+        "ratio": 7.88
+      },
+      {
+        "name": "英伟达",
+        "ratio": 7.44
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 7.2
+      },
+      {
+        "name": "台积电",
+        "ratio": 5.91
+      },
+      {
+        "name": "Onto Innovation Inc",
+        "ratio": 5.81
+      },
+      {
+        "name": "迈威尔科技",
+        "ratio": 4.39
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 4.37
+      },
+      {
+        "name": "Coherent Corp",
+        "ratio": 3.62
+      },
+      {
+        "name": "希捷科技",
+        "ratio": 3.1
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "美光科技",
+        "ratio": 8.16
+      },
+      {
+        "name": "闪迪",
+        "ratio": 6.53
+      },
+      {
+        "name": "Onto Innovation Inc",
+        "ratio": 5.55
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 5.3
+      },
+      {
+        "name": "英特尔",
+        "ratio": 4.94
+      },
+      {
+        "name": "KIOXIA",
+        "ratio": 4.59
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 4.43
+      },
+      {
+        "name": "台积电",
+        "ratio": 4.3
+      },
+      {
+        "name": "意法半导体",
+        "ratio": 4.28
+      },
+      {
+        "name": "Astera Labs Inc",
+        "ratio": 3.47
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "Coherent Corp",
+        "ratio": 7.54
+      },
+      {
+        "name": "闪迪",
+        "ratio": 7.13
+      },
+      {
+        "name": "美光科技",
+        "ratio": 6.58
+      },
+      {
+        "name": "Onto Innovation Inc",
+        "ratio": 5.85
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 5.79
+      },
+      {
+        "name": "康宁",
+        "ratio": 5.12
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 4.76
+      },
+      {
+        "name": "英伟达",
+        "ratio": 4.11
+      },
+      {
+        "name": "英特尔",
+        "ratio": 3.45
+      },
+      {
+        "name": "应用光电",
+        "ratio": 3.02
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 8.24
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 8.02
+      },
+      {
+        "name": "博通",
+        "ratio": 6.82
+      },
+      {
+        "name": "美光科技",
+        "ratio": 6.06
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 5.7
+      },
+      {
+        "name": "苹果",
+        "ratio": 5.31
+      },
+      {
+        "name": "Coherent Corp",
+        "ratio": 5.04
+      },
+      {
+        "name": "微软",
+        "ratio": 4.89
+      },
+      {
+        "name": "亚马逊",
+        "ratio": 4.64
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 4.07
+      }
+    ]
+  }
+]

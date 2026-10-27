@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "Moderna Inc",
+        "ratio": 0.28
+      },
+      {
+        "name": "Everpure Inc-A",
+        "ratio": 0.26
+      },
+      {
+        "name": "Illumina Inc",
+        "ratio": 0.26
+      },
+      {
+        "name": "CrowdStrike Holdings Inc-A",
+        "ratio": 0.25
+      },
+      {
+        "name": "Revvity Inc",
+        "ratio": 0.24
+      },
+      {
+        "name": "Datadog Inc-A",
+        "ratio": 0.24
+      },
+      {
+        "name": "派拓网络",
+        "ratio": 0.23
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 0.23
+      },
+      {
+        "name": "梅特勒-托利多",
+        "ratio": 0.23
+      },
+      {
+        "name": "铿腾电子",
+        "ratio": 0.23
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "Moderna Inc",
+        "ratio": 0.28
+      },
+      {
+        "name": "康宁",
+        "ratio": 0.28
+      },
+      {
+        "name": "应用材料",
+        "ratio": 0.27
+      },
+      {
+        "name": "科磊",
+        "ratio": 0.26
+      },
+      {
+        "name": "泰瑞达",
+        "ratio": 0.25
+      },
+      {
+        "name": "闪迪",
+        "ratio": 0.25
+      },
+      {
+        "name": "拉姆研究",
+        "ratio": 0.25
+      },
+      {
+        "name": "Bio-Techne Corp",
+        "ratio": 0.25
+      },
+      {
+        "name": "GE Vernova Inc",
+        "ratio": 0.24
+      },
+      {
+        "name": "联合航空",
+        "ratio": 0.24
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "阿帕奇石油",
+        "ratio": 0.24
+      },
+      {
+        "name": "陶氏",
+        "ratio": 0.23
+      },
+      {
+        "name": "利安德巴塞尔工业",
+        "ratio": 0.23
+      },
+      {
+        "name": "西方石油",
+        "ratio": 0.22
+      },
+      {
+        "name": "Ciena科技",
+        "ratio": 0.22
+      },
+      {
+        "name": "戴尔科技",
+        "ratio": 0.21
+      },
+      {
+        "name": "康菲石油",
+        "ratio": 0.21
+      },
+      {
+        "name": "达美航空",
+        "ratio": 0.21
+      },
+      {
+        "name": "Diamondback Energy Inc",
+        "ratio": 0.21
+      },
+      {
+        "name": "EOG能源",
+        "ratio": 0.21
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "嘉年华邮轮",
+        "ratio": 0.22
+      },
+      {
+        "name": "挪威邮轮",
+        "ratio": 0.22
+      },
+      {
+        "name": "自由港麦克莫兰",
+        "ratio": 0.21
+      },
+      {
+        "name": "lululemon athletica inc",
+        "ratio": 0.21
+      },
+      {
+        "name": "默沙东",
+        "ratio": 0.21
+      },
+      {
+        "name": "卡姆登物业信托",
+        "ratio": 0.21
+      },
+      {
+        "name": "太平洋煤气电力",
+        "ratio": 0.21
+      },
+      {
+        "name": "纳斯达克",
+        "ratio": 0.21
+      },
+      {
+        "name": "波音",
+        "ratio": 0.21
+      },
+      {
+        "name": "穆迪",
+        "ratio": 0.21
+      }
+    ]
+  }
+]

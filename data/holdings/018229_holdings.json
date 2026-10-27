@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "Bloom Energy Corp-A",
+        "ratio": 4.3
+      },
+      {
+        "name": "南亚新材",
+        "ratio": 3.8
+      },
+      {
+        "name": "英特尔",
+        "ratio": 3.59
+      },
+      {
+        "name": "Tower半导体",
+        "ratio": 3.0
+      },
+      {
+        "name": "苹果",
+        "ratio": 2.6
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 2.46
+      },
+      {
+        "name": "英伟达",
+        "ratio": 2.22
+      },
+      {
+        "name": "Astera Labs Inc",
+        "ratio": 2.16
+      },
+      {
+        "name": "派拓网络",
+        "ratio": 2.14
+      },
+      {
+        "name": "CrowdStrike Holdings Inc-A",
+        "ratio": 2.12
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "KIOXIA",
+        "ratio": 3.12
+      },
+      {
+        "name": "中科飞测",
+        "ratio": 3.07
+      },
+      {
+        "name": "应用材料",
+        "ratio": 2.9
+      },
+      {
+        "name": "拉姆研究",
+        "ratio": 2.85
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 2.72
+      },
+      {
+        "name": "英特尔",
+        "ratio": 2.61
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 2.56
+      },
+      {
+        "name": "三星电子",
+        "ratio": 2.49
+      },
+      {
+        "name": "康宁",
+        "ratio": 2.49
+      },
+      {
+        "name": "阿斯麦",
+        "ratio": 2.34
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "MINIMAX-W",
+        "ratio": 6.85
+      },
+      {
+        "name": "长飞光纤光缆",
+        "ratio": 6.31
+      },
+      {
+        "name": "南亚新材",
+        "ratio": 5.5
+      },
+      {
+        "name": "康宁",
+        "ratio": 4.46
+      },
+      {
+        "name": "新易盛",
+        "ratio": 3.69
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 3.58
+      },
+      {
+        "name": "台积电",
+        "ratio": 3.18
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 3.02
+      },
+      {
+        "name": "东山精密",
+        "ratio": 2.94
+      },
+      {
+        "name": "英伟达",
+        "ratio": 2.24
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 5.45
+      },
+      {
+        "name": "博通",
+        "ratio": 5.06
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 3.07
+      },
+      {
+        "name": "台积电",
+        "ratio": 2.5
+      },
+      {
+        "name": "信维通信",
+        "ratio": 2.27
+      },
+      {
+        "name": "Meta Platforms Inc-A",
+        "ratio": 2.0
+      },
+      {
+        "name": "拼多多",
+        "ratio": 1.99
+      },
+      {
+        "name": "GE Vernova Inc",
+        "ratio": 1.95
+      },
+      {
+        "name": "紫金黄金国际",
+        "ratio": 1.71
+      },
+      {
+        "name": "MakeMyTrip Ltd",
+        "ratio": 1.65
+      }
+    ]
+  }
+]

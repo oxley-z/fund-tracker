@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "迈威尔科技",
+        "ratio": 7.2
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 4.97
+      },
+      {
+        "name": "康宁",
+        "ratio": 4.85
+      },
+      {
+        "name": "Coherent Corp",
+        "ratio": 4.68
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 4.58
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 3.72
+      },
+      {
+        "name": "Tower半导体",
+        "ratio": 3.48
+      },
+      {
+        "name": "泰瑞达",
+        "ratio": 3.45
+      },
+      {
+        "name": "英伟达",
+        "ratio": 3.28
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 3.05
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "康宁",
+        "ratio": 5.0
+      },
+      {
+        "name": "迈威尔科技",
+        "ratio": 4.15
+      },
+      {
+        "name": "美光科技",
+        "ratio": 3.98
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 3.31
+      },
+      {
+        "name": "泰瑞达",
+        "ratio": 2.24
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 2.2
+      },
+      {
+        "name": "应用材料",
+        "ratio": 2.19
+      },
+      {
+        "name": "Coherent Corp",
+        "ratio": 2.03
+      },
+      {
+        "name": "意法半导体",
+        "ratio": 1.97
+      },
+      {
+        "name": "华虹宏力",
+        "ratio": 1.95
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 4.64
+      },
+      {
+        "name": "台积电",
+        "ratio": 4.37
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 4.15
+      },
+      {
+        "name": "泰瑞达",
+        "ratio": 3.83
+      },
+      {
+        "name": "科磊",
+        "ratio": 3.64
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 3.57
+      },
+      {
+        "name": "博通",
+        "ratio": 3.43
+      },
+      {
+        "name": "Coherent Corp",
+        "ratio": 3.34
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 3.31
+      },
+      {
+        "name": "拉姆研究",
+        "ratio": 3.27
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 6.87
+      },
+      {
+        "name": "博通",
+        "ratio": 6.49
+      },
+      {
+        "name": "台积电",
+        "ratio": 6.44
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 6.27
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 5.39
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 3.4
+      },
+      {
+        "name": "华友钴业",
+        "ratio": 3.34
+      },
+      {
+        "name": "拉姆研究",
+        "ratio": 3.26
+      },
+      {
+        "name": "中矿资源",
+        "ratio": 3.09
+      },
+      {
+        "name": "宁德时代",
+        "ratio": 3.05
+      }
+    ]
+  }
+]

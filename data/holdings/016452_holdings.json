@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 7.6
+      },
+      {
+        "name": "苹果",
+        "ratio": 6.71
+      },
+      {
+        "name": "微软",
+        "ratio": 5.26
+      },
+      {
+        "name": "美光科技",
+        "ratio": 4.58
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 3.81
+      },
+      {
+        "name": "亚马逊",
+        "ratio": 3.71
+      },
+      {
+        "name": "Meta Platforms Inc-A",
+        "ratio": 2.98
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 2.79
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 2.6
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 2.57
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 6.76
+      },
+      {
+        "name": "苹果",
+        "ratio": 5.93
+      },
+      {
+        "name": "美光科技",
+        "ratio": 5.02
+      },
+      {
+        "name": "微软",
+        "ratio": 3.87
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 3.65
+      },
+      {
+        "name": "亚马逊",
+        "ratio": 3.58
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 2.93
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 2.9
+      },
+      {
+        "name": "英特尔",
+        "ratio": 2.7
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 2.69
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 7.67
+      },
+      {
+        "name": "苹果",
+        "ratio": 6.74
+      },
+      {
+        "name": "微软",
+        "ratio": 4.97
+      },
+      {
+        "name": "亚马逊",
+        "ratio": 4.04
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 3.36
+      },
+      {
+        "name": "Meta Platforms Inc-A",
+        "ratio": 3.05
+      },
+      {
+        "name": "沃尔玛",
+        "ratio": 3.03
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 3.03
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 2.82
+      },
+      {
+        "name": "博通",
+        "ratio": 2.65
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 8.02
+      },
+      {
+        "name": "苹果",
+        "ratio": 7.11
+      },
+      {
+        "name": "微软",
+        "ratio": 6.36
+      },
+      {
+        "name": "亚马逊",
+        "ratio": 4.37
+      },
+      {
+        "name": "特斯拉",
+        "ratio": 3.52
+      },
+      {
+        "name": "Meta Platforms Inc-A",
+        "ratio": 3.43
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 3.22
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 3.0
+      },
+      {
+        "name": "博通",
+        "ratio": 2.89
+      },
+      {
+        "name": "Palantir Technologies Inc-A",
+        "ratio": 1.98
+      }
+    ]
+  }
+]

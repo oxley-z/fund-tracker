@@ -1,0 +1,47 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "苹果",
+        "ratio": 1.37
+      },
+      {
+        "name": "英伟达",
+        "ratio": 1.35
+      },
+      {
+        "name": "微软",
+        "ratio": 1.28
+      },
+      {
+        "name": "Meta Platforms Inc-A",
+        "ratio": 0.7
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 0.68
+      },
+      {
+        "name": "谷歌-C",
+        "ratio": 0.63
+      },
+      {
+        "name": "博通",
+        "ratio": 0.56
+      },
+      {
+        "name": "美光科技",
+        "ratio": 0.53
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 0.44
+      },
+      {
+        "name": "英特尔",
+        "ratio": 0.28
+      }
+    ]
+  }
+]

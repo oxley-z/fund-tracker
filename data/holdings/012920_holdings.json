@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 8.28
+      },
+      {
+        "name": "英伟达",
+        "ratio": 7.05
+      },
+      {
+        "name": "英特尔",
+        "ratio": 5.54
+      },
+      {
+        "name": "中际旭创",
+        "ratio": 4.16
+      },
+      {
+        "name": "Bloom Energy Corp-A",
+        "ratio": 4.03
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 3.94
+      },
+      {
+        "name": "新易盛",
+        "ratio": 3.4
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 3.23
+      },
+      {
+        "name": "阿斯麦",
+        "ratio": 2.76
+      },
+      {
+        "name": "沪电股份",
+        "ratio": 2.41
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "拉姆研究",
+        "ratio": 6.41
+      },
+      {
+        "name": "KIOXIA",
+        "ratio": 5.89
+      },
+      {
+        "name": "台积电",
+        "ratio": 5.54
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 4.96
+      },
+      {
+        "name": "新易盛",
+        "ratio": 4.68
+      },
+      {
+        "name": "中际旭创",
+        "ratio": 4.61
+      },
+      {
+        "name": "闪迪",
+        "ratio": 4.46
+      },
+      {
+        "name": "英特尔",
+        "ratio": 4.26
+      },
+      {
+        "name": "源杰科技",
+        "ratio": 3.34
+      },
+      {
+        "name": "阿斯麦",
+        "ratio": 3.33
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 8.88
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 8.68
+      },
+      {
+        "name": "新易盛",
+        "ratio": 6.02
+      },
+      {
+        "name": "康宁",
+        "ratio": 4.67
+      },
+      {
+        "name": "AXT Inc",
+        "ratio": 4.67
+      },
+      {
+        "name": "中际旭创",
+        "ratio": 4.67
+      },
+      {
+        "name": "源杰科技",
+        "ratio": 4.49
+      },
+      {
+        "name": "Tower半导体",
+        "ratio": 3.72
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 3.36
+      },
+      {
+        "name": "东山精密",
+        "ratio": 2.67
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 7.07
+      },
+      {
+        "name": "新易盛",
+        "ratio": 6.43
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 6.26
+      },
+      {
+        "name": "中际旭创",
+        "ratio": 5.87
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 5.09
+      },
+      {
+        "name": "美光科技",
+        "ratio": 5.02
+      },
+      {
+        "name": "博通",
+        "ratio": 4.89
+      },
+      {
+        "name": "Tower半导体",
+        "ratio": 4.56
+      },
+      {
+        "name": "Coherent Corp",
+        "ratio": 3.13
+      },
+      {
+        "name": "腾讯控股",
+        "ratio": 2.45
+      }
+    ]
+  }
+]

@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "SK海力士",
+        "ratio": 6.92
+      },
+      {
+        "name": "三星电子",
+        "ratio": 6.85
+      },
+      {
+        "name": "台积电",
+        "ratio": 6.18
+      },
+      {
+        "name": "Samsung Electro-Mechanics",
+        "ratio": 4.05
+      },
+      {
+        "name": "台达电",
+        "ratio": 3.9
+      },
+      {
+        "name": "阿斯麦",
+        "ratio": 2.93
+      },
+      {
+        "name": "台积电",
+        "ratio": 2.69
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 2.67
+      },
+      {
+        "name": "欣兴",
+        "ratio": 2.63
+      },
+      {
+        "name": "联发科",
+        "ratio": 2.49
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "SK海力士",
+        "ratio": 7.95
+      },
+      {
+        "name": "三星电子",
+        "ratio": 6.47
+      },
+      {
+        "name": "台积电",
+        "ratio": 5.3
+      },
+      {
+        "name": "台积电",
+        "ratio": 3.63
+      },
+      {
+        "name": "阿斯麦",
+        "ratio": 3.43
+      },
+      {
+        "name": "台达电",
+        "ratio": 3.35
+      },
+      {
+        "name": "联发科",
+        "ratio": 3.08
+      },
+      {
+        "name": "村田制作所",
+        "ratio": 3.0
+      },
+      {
+        "name": "阿里巴巴-W",
+        "ratio": 2.75
+      },
+      {
+        "name": "Samsung Electro-Mechanics",
+        "ratio": 2.72
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "台积电",
+        "ratio": 5.48
+      },
+      {
+        "name": "三星电子",
+        "ratio": 5.28
+      },
+      {
+        "name": "阿里巴巴-W",
+        "ratio": 5.03
+      },
+      {
+        "name": "台积电",
+        "ratio": 4.89
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 4.32
+      },
+      {
+        "name": "欢聚",
+        "ratio": 3.0
+      },
+      {
+        "name": "联发科",
+        "ratio": 2.94
+      },
+      {
+        "name": "台达电",
+        "ratio": 2.86
+      },
+      {
+        "name": "智邦",
+        "ratio": 2.79
+      },
+      {
+        "name": "Ibiden Co Ltd",
+        "ratio": 2.73
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "三星电子",
+        "ratio": 6.42
+      },
+      {
+        "name": "台积电",
+        "ratio": 5.98
+      },
+      {
+        "name": "SK海力士",
+        "ratio": 5.41
+      },
+      {
+        "name": "阿里巴巴-W",
+        "ratio": 5.32
+      },
+      {
+        "name": "威胜控股",
+        "ratio": 4.07
+      },
+      {
+        "name": "Ibiden Co Ltd",
+        "ratio": 3.93
+      },
+      {
+        "name": "智邦",
+        "ratio": 3.36
+      },
+      {
+        "name": "欣兴",
+        "ratio": 2.56
+      },
+      {
+        "name": "欢聚",
+        "ratio": 2.37
+      },
+      {
+        "name": "台达电",
+        "ratio": 2.36
+      }
+    ]
+  }
+]

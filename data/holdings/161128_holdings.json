@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 19.34
+      },
+      {
+        "name": "苹果",
+        "ratio": 17.01
+      },
+      {
+        "name": "微软",
+        "ratio": 13.33
+      },
+      {
+        "name": "博通",
+        "ratio": 5.84
+      },
+      {
+        "name": "美光科技",
+        "ratio": 4.21
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 3.49
+      },
+      {
+        "name": "英特尔",
+        "ratio": 2.09
+      },
+      {
+        "name": "Palantir Technologies Inc-A",
+        "ratio": 1.51
+      },
+      {
+        "name": "思科",
+        "ratio": 1.48
+      },
+      {
+        "name": "拉姆研究",
+        "ratio": 1.44
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 18.05
+      },
+      {
+        "name": "苹果",
+        "ratio": 15.83
+      },
+      {
+        "name": "微软",
+        "ratio": 10.32
+      },
+      {
+        "name": "博通",
+        "ratio": 6.66
+      },
+      {
+        "name": "美光科技",
+        "ratio": 4.85
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 3.53
+      },
+      {
+        "name": "英特尔",
+        "ratio": 2.46
+      },
+      {
+        "name": "应用材料",
+        "ratio": 2.14
+      },
+      {
+        "name": "拉姆研究",
+        "ratio": 2.02
+      },
+      {
+        "name": "思科",
+        "ratio": 1.73
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 20.16
+      },
+      {
+        "name": "苹果",
+        "ratio": 17.73
+      },
+      {
+        "name": "微软",
+        "ratio": 13.08
+      },
+      {
+        "name": "博通",
+        "ratio": 6.98
+      },
+      {
+        "name": "美光科技",
+        "ratio": 1.81
+      },
+      {
+        "name": "Palantir Technologies Inc-A",
+        "ratio": 1.59
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 1.58
+      },
+      {
+        "name": "思科",
+        "ratio": 1.46
+      },
+      {
+        "name": "应用材料",
+        "ratio": 1.29
+      },
+      {
+        "name": "拉姆研究",
+        "ratio": 1.27
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "英伟达",
+        "ratio": 19.61
+      },
+      {
+        "name": "苹果",
+        "ratio": 17.38
+      },
+      {
+        "name": "微软",
+        "ratio": 15.55
+      },
+      {
+        "name": "博通",
+        "ratio": 7.07
+      },
+      {
+        "name": "Palantir Technologies Inc-A",
+        "ratio": 1.76
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 1.51
+      },
+      {
+        "name": "甲骨文",
+        "ratio": 1.42
+      },
+      {
+        "name": "美光科技",
+        "ratio": 1.39
+      },
+      {
+        "name": "思科",
+        "ratio": 1.31
+      },
+      {
+        "name": "IBM国际商业机器",
+        "ratio": 1.2
+      }
+    ]
+  }
+]

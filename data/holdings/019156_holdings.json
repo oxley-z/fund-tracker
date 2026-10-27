@@ -1,0 +1,182 @@
+[
+  {
+    "date": "2026年3季度股票投资明细",
+    "holdings": [
+      {
+        "name": "Tower半导体",
+        "ratio": 4.41
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 3.47
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 3.37
+      },
+      {
+        "name": "英特尔",
+        "ratio": 3.0
+      },
+      {
+        "name": "英伟达",
+        "ratio": 2.95
+      },
+      {
+        "name": "超威半导体",
+        "ratio": 2.73
+      },
+      {
+        "name": "紫金矿业",
+        "ratio": 2.37
+      },
+      {
+        "name": "金鹰商贸集团",
+        "ratio": 2.36
+      },
+      {
+        "name": "中际旭创",
+        "ratio": 2.31
+      },
+      {
+        "name": "药明康德",
+        "ratio": 2.18
+      }
+    ]
+  },
+  {
+    "date": "2026年2季度股票投资明细",
+    "holdings": [
+      {
+        "name": "美光科技",
+        "ratio": 6.39
+      },
+      {
+        "name": "康宁",
+        "ratio": 4.95
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 4.54
+      },
+      {
+        "name": "长飞光纤光缆",
+        "ratio": 4.32
+      },
+      {
+        "name": "闪迪",
+        "ratio": 3.69
+      },
+      {
+        "name": "Tower半导体",
+        "ratio": 3.15
+      },
+      {
+        "name": "AXT Inc",
+        "ratio": 2.7
+      },
+      {
+        "name": "英特尔",
+        "ratio": 2.66
+      },
+      {
+        "name": "蓝思科技",
+        "ratio": 2.28
+      },
+      {
+        "name": "新易盛",
+        "ratio": 2.07
+      }
+    ]
+  },
+  {
+    "date": "2026年1季度股票投资明细",
+    "holdings": [
+      {
+        "name": "MINIMAX-W",
+        "ratio": 6.27
+      },
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 5.67
+      },
+      {
+        "name": "长飞光纤光缆",
+        "ratio": 4.57
+      },
+      {
+        "name": "AXT Inc",
+        "ratio": 3.51
+      },
+      {
+        "name": "Tower半导体",
+        "ratio": 3.49
+      },
+      {
+        "name": "烽火通信",
+        "ratio": 3.48
+      },
+      {
+        "name": "长川科技",
+        "ratio": 3.25
+      },
+      {
+        "name": "康宁",
+        "ratio": 3.16
+      },
+      {
+        "name": "美光科技",
+        "ratio": 3.08
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 2.68
+      }
+    ]
+  },
+  {
+    "date": "2025年4季度股票投资明细",
+    "holdings": [
+      {
+        "name": "Lumentum Holdings Inc",
+        "ratio": 5.58
+      },
+      {
+        "name": "阿里巴巴-W",
+        "ratio": 5.51
+      },
+      {
+        "name": "谷歌-A",
+        "ratio": 5.42
+      },
+      {
+        "name": "博通",
+        "ratio": 5.28
+      },
+      {
+        "name": "Tower半导体",
+        "ratio": 4.89
+      },
+      {
+        "name": "美光科技",
+        "ratio": 4.83
+      },
+      {
+        "name": "腾讯控股",
+        "ratio": 3.15
+      },
+      {
+        "name": "乐舒适",
+        "ratio": 2.06
+      },
+      {
+        "name": "紫金黄金国际",
+        "ratio": 1.95
+      },
+      {
+        "name": "维立志博-B",
+        "ratio": 1.78
+      }
+    ]
+  }
+]
