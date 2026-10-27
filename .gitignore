@@ -6,6 +6,8 @@
 /fund_dashboard_details.js
 /fund_dashboard_data.js.tmp
 /fund_dashboard_details.js.tmp
+# patches/ 是本地补丁存档（尚未应用的修复），只在本地保留，不入库
+/patches
 # data/ 里是 dual_etf_dashboard.py 的断点文件，必须提交，
 # 否则 CI / 新机器上没有 checkpoint，每次都会全量重抓。
 # 只忽略保存过程中的临时文件。

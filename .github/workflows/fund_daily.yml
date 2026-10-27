@@ -73,20 +73,22 @@ jobs:
         run: |
           python main.py --out index.html
 
-      - name: Commit Macro History Cache
+      - name: Commit Macro History & Holdings Cache
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          if [ -f data/macro_history.json ]; then
-            git add data/macro_history.json
+          # data/holdings 是季报持仓缓存：必须提交，否则每天 CI 都是空缓存、全量重抓，
+          # 且「只在季报披露窗口内刷新」的策略会失效。
+          if [ -f data/macro_history.json ] || [ -d data/holdings ]; then
+            git add data/macro_history.json data/holdings
             if git diff --staged --quiet; then
-              echo "No macro history changes to commit."
+              echo "No macro history / holdings changes to commit."
             else
-              git commit -m "chore(macro): update macro history cache"
+              git commit -m "chore(data): update macro history & holdings cache"
               git push || (git pull --rebase origin "$GITHUB_REF_NAME" && git push)
             fi
           else
-            echo "Macro history cache was not generated; skipping commit."
+            echo "No caches were generated; skipping commit."
           fi
 
       # 部署至 GitHub Pages
