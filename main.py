@@ -2790,7 +2790,9 @@ def fetch_holdings(opener, code):
                     if ratio > 0: holdings.append({'name': name, 'ratio': round(ratio, 2)})
                 result.append({'date': q, 'holdings': holdings})
             if result:
-                with open(cache_file, 'w', encoding='utf-8') as f:
+                # newline='\n'：Windows 下文本模式会把 \n 写成 \r\n，导致持仓缓存
+                # 每次本地构建都整体变 CRLF，与 CI 提交的 LF 版本产生无意义冲突。
+                with open(cache_file, 'w', encoding='utf-8', newline='\n') as f:
                     json.dump(result, f, ensure_ascii=False, indent=2)
                 return result
     except Exception: pass
