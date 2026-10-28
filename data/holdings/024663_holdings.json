@@ -8,19 +8,23 @@
       "holdings": [
         {
           "name": "新易盛",
-          "ratio": 0.01
+          "ratio": 0.01,
+          "code": "300502"
         },
         {
           "name": "中际旭创",
-          "ratio": 0.01
+          "ratio": 0.01,
+          "code": "300308"
         },
         {
           "name": "天孚通信",
-          "ratio": 0.01
+          "ratio": 0.01,
+          "code": "300394"
         },
         {
           "name": "江波龙",
-          "ratio": 0.01
+          "ratio": 0.01,
+          "code": "301308"
         }
       ]
     }
