@@ -1875,7 +1875,12 @@ def fetch_macro_history():
 COUNTRY_CACHE_VERSION = 4          # v4：改为保留最近 4 个季度（QDII 对比页要用 4 期）
 HOLDER_CACHE_VERSION = 2           # v2：缓存结构改为多期 periods
 COUNTRY_PERIODS_KEEP = 4           # 国家/地区分布保留期数
-HOLDINGS_PERIODS_KEEP = 4          # 前十大持仓保留期数（明细页只显示前 3 期）
+HOLDINGS_PERIODS_KEEP = 4          # 明细页主列展示期数（4 个季度并排）
+HOLDINGS_MAX_PERIODS = 120         # 缓存保留的季度上限（回溯全历史，仅作防爆保护）
+HOLDINGS_MIN_YEAR = 2004           # 历史回溯最早年份（境内基金最早 2001 年前后成立）
+HOLDINGS_CACHE_SCHEMA = 2          # v2：dict 结构（probed_min_year + 全量持仓 periods）
+HOLDINGS_POSITION_LIMIT = 400      # 单季度最多保存的持仓条数（半年报全量，防异常数据）
+HOLDINGS_BACKFILL_EMPTY_STREAK = 2 # 连续 N 个年份无数据即认定已到基金成立前，停止回溯
 
 _QUARTER_END_DAYS = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
 
@@ -2692,112 +2697,216 @@ def _fetch_holdings_year(code, year):
     return None
 
 
-def fetch_holdings(opener, code):
-    cache_file = os.path.join(HOLDINGS_CACHE_DIR, f"{code}_holdings.json")
-    cached_data = None
-    if os.path.exists(cache_file):
-        try:
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, list) and len(data) >= 2 and 'date' in data[0]:
-                if any(len(p['holdings']) > 0 for p in data):
-                    cached_data = data
-                else:
-                    os.remove(cache_file)
-        except Exception:
+def _load_holdings_cache(cache_file):
+    """读持仓缓存。
+
+    返回 (periods, probed_min_year, needs_rebuild, history_exhausted)：
+      - periods：季度列表（每期含 date + 全量 holdings）
+      - probed_min_year：已探测到的最早年份（含"探测过但无数据"的年份）
+      - needs_rebuild：v1 旧结构（只有 4 期、仅前十大），需要重抓成 v2 全量结构
+      - history_exhausted：是否已回溯到基金成立前，True 时后续不再往前探
+    """
+    if not os.path.exists(cache_file):
+        return None, None, False, False
+    try:
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        try: os.remove(cache_file)
+        except Exception: pass
+        return None, None, False, False
+
+    if isinstance(data, dict) and data.get('_v') == HOLDINGS_CACHE_SCHEMA:
+        periods = data.get('periods') or []
+        probed = data.get('probed_min_year')
+        probed = int(probed) if isinstance(probed, int) else None
+        exhausted = bool(data.get('history_exhausted'))
+        if not periods or not any(len(p.get('holdings') or []) > 0 for p in periods):
+            # 全空持仓缓存没有价值，删掉重抓
             try: os.remove(cache_file)
             except Exception: pass
+            return None, probed, True, exhausted
+        return periods, probed, False, exhausted
 
-    needs_upgrade = False
-    if cached_data is not None:
-        target_quarter = holdings_target_quarter()
-        newest_cached = None
+    if isinstance(data, list) and data and isinstance(data[0], dict) and 'date' in data[0]:
+        # v1：只有最近 4 期、且每期仅前十大 → 结构升级，需要重抓全量
+        if not any(len(p.get('holdings') or []) > 0 for p in data):
+            return None, None, True, False
+        return data, None, True, False
+
+    return None, None, True, False
+
+
+def _save_holdings_cache(cache_file, periods, probed_min_year, history_exhausted=False):
+    payload = {
+        '_v': HOLDINGS_CACHE_SCHEMA,
+        'probed_min_year': probed_min_year,
+        # 已回溯到基金成立前（连续空年），后续构建无需再往前探
+        'history_exhausted': bool(history_exhausted),
+        'periods': periods,
+    }
+    # newline='\n'：Windows 下文本模式会把 \n 写成 \r\n，导致持仓缓存
+    # 每次本地构建都整体变 CRLF，与 CI 提交的 LF 版本产生无意义冲突。
+    with open(cache_file, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _build_holdings_periods(all_dfs):
+    """把若干年份的季报 DataFrame 合并成「季度 → 全量持仓」列表（按季度倒序）。"""
+    combined = pd.concat(all_dfs, ignore_index=True)
+    combined.drop_duplicates(inplace=True)
+    if '季度' not in combined.columns:
+        if '报告期' in combined.columns:
+            combined['季度'] = combined['报告期'].apply(
+                lambda x: f"{x[:4]}Q{(int(x[5:7])-1)//3 + 1}" if isinstance(x, str) and len(x) >= 7 else None
+            )
+        else:
+            date_col = next((c for c in combined.columns if '日期' in c or '时间' in c), None)
+            if date_col:
+                combined['季度'] = combined[date_col].apply(
+                    lambda x: f"{x[:4]}Q{(int(x[5:7])-1)//3 + 1}" if isinstance(x, str) and len(x) >= 7 else None
+                )
+            else:
+                raise ValueError("缺少季度信息")
+
+    quarters = sorted(combined['季度'].dropna().unique(), reverse=True)[:HOLDINGS_MAX_PERIODS]
+    result = []
+    for q in quarters:
+        df_q = combined[combined['季度'] == q]
+        ratio_col = '占净值比例' if '占净值比例' in df_q.columns else None
+        name_col = '股票名称' if '股票名称' in df_q.columns else ('名称' if '名称' in df_q.columns else None)
+        if name_col is None or ratio_col is None:
+            for col in df_q.columns:
+                if '名称' in col and name_col is None: name_col = col
+                if '比例' in col and ratio_col is None: ratio_col = col
+        if name_col is None or ratio_col is None:
+            continue
+        code_col = '股票代码' if '股票代码' in df_q.columns else None
+        # 按占净值比例降序，保留全量（半年报/年报披露全部持仓，季报只有前十大）
+        df_q = df_q.sort_values(ratio_col, ascending=False)
+        holdings = []
+        for _, row in df_q.head(HOLDINGS_POSITION_LIMIT).iterrows():
+            name = str(row[name_col])
+            if pd.isna(name) or name in ('nan', 'None', ''):
+                continue
+            try:
+                ratio = float(row[ratio_col])
+            except (TypeError, ValueError):
+                continue
+            if ratio <= 0:
+                continue
+            item = {'name': name, 'ratio': round(ratio, 2)}
+            if code_col:
+                sc = str(row[code_col])
+                if not pd.isna(sc) and sc not in ('nan', 'None', ''):
+                    item['code'] = sc
+            holdings.append(item)
+        result.append({'date': q, 'holdings': holdings})
+    return result
+
+
+def fetch_holdings(opener, code):
+    cache_file = os.path.join(HOLDINGS_CACHE_DIR, f"{code}_holdings.json")
+    (cached_data, probed_min_year,
+     needs_rebuild, history_exhausted) = _load_holdings_cache(cache_file)
+
+    target_quarter = holdings_target_quarter()
+    newest_cached = None
+    oldest_cached_year = None
+    if cached_data:
         for period in cached_data:
             key = _parse_holdings_quarter(period.get('date'))
-            if key and (newest_cached is None or key > newest_cached):
+            if not key:
+                continue
+            if newest_cached is None or key > newest_cached:
                 newest_cached = key
-        # 期数不足（旧缓存只有 3 期）时也要重抓，否则 QDII 对比页拿不到 4 期。
-        # 只在「恰好是 3 期」时做一次性升级；若今天已经试过仍拿不到 4 期，
-        # 说明这只基金本来就只披露了 3 期，不再绕过节流反复重抓。
-        needs_upgrade = len(cached_data) == 3
-        if needs_upgrade and not _should_attempt_holdings(code, 1):
-            needs_upgrade = False
-        if not needs_upgrade and (target_quarter is None
-                                  or (newest_cached is not None and newest_cached >= target_quarter)):
-            # 缓存已覆盖"当前应披露的最新季度"：直接返回，不请求接口。
-            return cached_data
+            if oldest_cached_year is None or key[0] < oldest_cached_year:
+                oldest_cached_year = key[0]
 
-    # 抓取节流：披露窗口内每天最多尝试一次，窗口外每 7 天最多一次。
-    # 既能在新季报发布后及时更新，也不会因为个别基金长期不披露而天天重抓。
-    throttle_days = 1 if holdings_disclosure_quarter() else 7
-    if not needs_upgrade and not _should_attempt_holdings(code, throttle_days):
+    current_year = datetime.now().year
+    latest_stale = (newest_cached is None
+                    or (target_quarter is not None and newest_cached < target_quarter))
+
+    need_years = []
+    doing_backfill = False
+    if needs_rebuild or not cached_data:
+        # 首次 / 结构升级：从当前年一路回溯到下限，靠「连续空年」提前收手
+        need_years = list(range(current_year, HOLDINGS_MIN_YEAR - 1, -1))
+        doing_backfill = True
+    else:
+        if latest_stale:
+            need_years.append(current_year)
+        if not history_exhausted:
+            # 增量回溯：从「已探测过的最早年份」再往前推一年开始
+            start_year = (probed_min_year - 1) if probed_min_year else (
+                (oldest_cached_year - 1) if oldest_cached_year else current_year)
+            if start_year >= HOLDINGS_MIN_YEAR:
+                need_years.extend(range(start_year, HOLDINGS_MIN_YEAR - 1, -1))
+                doing_backfill = True
+
+    if not need_years:
         return cached_data or []
+
+    # 抓取节流只作用于「刷新最新季度」；补历史是一次性任务，不该被节流挡住。
+    if latest_stale:
+        throttle_days = 1 if holdings_disclosure_quarter() else 7
+        allowed = (_should_attempt_holdings(code, 1) if needs_rebuild
+                   else _should_attempt_holdings(code, throttle_days))
+        if not allowed:
+            need_years = [y for y in need_years if y != current_year]
+    if not need_years:
+        return cached_data or []
+
     _mark_holdings_attempt(code)
 
     try:
-        current_year = datetime.now().year
         all_dfs = []
-        # 先取今年，够 3 个季度且已覆盖目标季度就不再请求去年，减少一半请求。
-        for year in (current_year, current_year - 1):
+        probed_floor = probed_min_year
+        empty_streak = 0
+        broke_on_empty = False
+        for year in need_years:
             df = _fetch_holdings_year(code, year)
-            if df is not None:
+            if df is None or df.empty:
+                # 当前年没数据不算"探测过"：新季报随时可能发布，下次还要试
+                if year < current_year:
+                    probed_floor = year if probed_floor is None else min(probed_floor, year)
+                    empty_streak += 1
+            else:
                 all_dfs.append(df)
-                quarters_now = set()
-                for each in all_dfs:
-                    if '季度' in each.columns:
-                        quarters_now.update(each['季度'].dropna().tolist())
-                if len(quarters_now) >= HOLDINGS_PERIODS_KEEP:
-                    newest = max(
-                        (_parse_holdings_quarter(q) for q in quarters_now if _parse_holdings_quarter(q)),
-                        default=None,
-                    )
-                    if newest is not None and holdings_target_quarter() and newest >= holdings_target_quarter():
-                        break
+                probed_floor = year if probed_floor is None else min(probed_floor, year)
+                empty_streak = 0
+            if empty_streak >= HOLDINGS_BACKFILL_EMPTY_STREAK:
+                broke_on_empty = True
+                break
+
+        # 判定是否已经探到基金成立前：要么因连续空年中断，要么一路走到年份下限
+        exhausted_now = history_exhausted
+        if doing_backfill:
+            if broke_on_empty or min(need_years) <= HOLDINGS_MIN_YEAR:
+                exhausted_now = True
 
         if all_dfs:
-            combined = pd.concat(all_dfs, ignore_index=True)
-            combined.drop_duplicates(inplace=True)
-            if '季度' not in combined.columns:
-                if '报告期' in combined.columns:
-                    combined['季度'] = combined['报告期'].apply(
-                        lambda x: f"{x[:4]}Q{(int(x[5:7])-1)//3 + 1}" if isinstance(x, str) and len(x)>=7 else None
-                    )
-                else:
-                    date_col = next((c for c in combined.columns if '日期' in c or '时间' in c), None)
-                    if date_col:
-                        combined['季度'] = combined[date_col].apply(
-                            lambda x: f"{x[:4]}Q{(int(x[5:7])-1)//3 + 1}" if isinstance(x, str) and len(x)>=7 else None
-                        )
-                    else: raise ValueError("缺少季度信息")
-
-            quarters = sorted(combined['季度'].unique(), reverse=True)[:HOLDINGS_PERIODS_KEEP]
-            result = []
-            for q in quarters:
-                df_q = combined[combined['季度'] == q].sort_values('占净值比例', ascending=False)
-                name_col = '股票名称' if '股票名称' in df_q.columns else '名称' if '名称' in df_q.columns else None
-                ratio_col = '占净值比例' if '占净值比例' in df_q.columns else None
-                if name_col is None or ratio_col is None:
-                    for col in df_q.columns:
-                        if '名称' in col: name_col = col
-                        if '比例' in col: ratio_col = col
-                    if name_col is None or ratio_col is None: continue
-                top10 = df_q.head(10)[[name_col, ratio_col]]
-                holdings = []
-                for _, row in top10.iterrows():
-                    name = str(row[name_col])
-                    if pd.isna(name) or name == 'nan': continue
-                    ratio = float(row[ratio_col])
-                    if ratio > 0: holdings.append({'name': name, 'ratio': round(ratio, 2)})
-                result.append({'date': q, 'holdings': holdings})
-            if result:
-                # newline='\n'：Windows 下文本模式会把 \n 写成 \r\n，导致持仓缓存
-                # 每次本地构建都整体变 CRLF，与 CI 提交的 LF 版本产生无意义冲突。
-                with open(cache_file, 'w', encoding='utf-8', newline='\n') as f:
-                    json.dump(result, f, ensure_ascii=False, indent=2)
-                return result
-    except Exception: pass
+            fresh = _build_holdings_periods(all_dfs)
+            if fresh:
+                # 与旧缓存按季度合并：旧缓存里本次没抓到的更早季度要保留
+                merged = {_period_label(p['date']): p for p in (cached_data or [])}
+                for period in fresh:
+                    merged[_period_label(period['date'])] = period
+                ordered = sorted(
+                    merged.values(),
+                    key=lambda p: (_parse_holdings_quarter(p.get('date')) or (0, 0)),
+                    reverse=True,
+                )[:HOLDINGS_MAX_PERIODS]
+                _save_holdings_cache(cache_file, ordered, probed_floor, exhausted_now)
+                return ordered
+        elif exhausted_now != history_exhausted and cached_data:
+            # 本次只探到了空年份，但确认了边界：仍要落盘，避免下次重复探测
+            _save_holdings_cache(cache_file, cached_data, probed_floor, exhausted_now)
+    except Exception:
+        pass
     # 刷新失败时保留旧缓存，避免披露窗口内一次网络异常把已有持仓清空。
     return cached_data or []
+
 
 # ==============================================================================
 # 费率提取辅助函数（识别 --- / -- / 不适用 等"无此项费用"占位符）
@@ -4544,13 +4653,16 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         latest_cls = " cmp-latest-col" if idx == 0 else ""
         if not holdings:
             return f'<td class="cmp-cell cmp-cell-na{latest_cls}" data-val="-1">未披露</td>'
-        total = sum(h["ratio"] for h in holdings)
-        top3 = " · ".join(f'{h["name"]} {h["ratio"]:.2f}' for h in holdings[:3])
+        # 缓存里存的是全量持仓（半年报/年报可达上百条），
+        # 对比页口径固定为「前十大」，必须显式截断，否则合计会虚高到 80%+。
+        top10 = holdings[:10]
+        total = sum(h["ratio"] for h in top10)
+        top3 = " · ".join(f'{h["name"]} {h["ratio"]:.2f}' for h in top10[:3])
         # 与上一季度比较合计占比变化
         delta_html = ""
         if idx + 1 < len(cmp_holding_quarters):
             prev_period = fund["holdings"].get(cmp_holding_quarters[idx + 1])
-            prev_holdings = (prev_period or {}).get("holdings") or []
+            prev_holdings = ((prev_period or {}).get("holdings") or [])[:10]
             if prev_holdings:
                 delta = total - sum(h["ratio"] for h in prev_holdings)
                 if abs(delta) >= 0.01:
@@ -4618,7 +4730,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             return -1.0
         period = fund["holdings"].get(cmp_holding_quarters[idx])
         holdings = (period or {}).get("holdings") or []
-        return sum(h["ratio"] for h in holdings) if holdings else -1.0
+        # 缓存存的是全量持仓，这里统一按前十大口径统计
+        return sum(h["ratio"] for h in holdings[:10]) if holdings else -1.0
 
     def _country_lead(fund, idx):
         """该基金第 idx 个季度列的第一大国家/地区占比，用于默认排序。"""
@@ -4886,17 +4999,17 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     # ================= 止盈三信号逻辑结束 =================
 
     def date_to_label(date_str):
-        if 'Q' in date_str: return date_str
-        if date_str.isdigit() and len(date_str) == 4: return f"{date_str}年报"
-        try:
-            year, month, _ = date_str.split('-')
-            return f"{year}Q{(int(month) - 1) // 3 + 1}"
-        except Exception: return date_str
+        """统一把各种季度写法归一为 2026Q3 这类短标签（缓存里存的是「2026年3季度股票投资明细」）。"""
+        date_str = str(date_str or '')
+        if date_str.isdigit() and len(date_str) == 4:
+            return f"{date_str}年报"
+        return _period_label(date_str) or date_str
 
     def quarter_to_end_date(date_str):
         if not date_str: return ""
-        if re.match(r'^\d{4}-\d{2}-\d{2}$', str(date_str)): return date_str
-        m = re.match(r'^(\d{4})Q([1-4])$', str(date_str), re.I)
+        date_str = str(date_str)
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str): return date_str
+        m = re.match(r'^(\d{4})Q([1-4])$', _period_label(date_str), re.I)
         if m:
             end_map = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
             return f"{m.group(1)}-{end_map[int(m.group(2))]}"
@@ -4905,6 +5018,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     nav_data_json = {}
     fund_names_json = {}
     holding_detail_data_json = {}
+    # 全历史持仓明细（结构化），与上面的 HTML 一起写进 details.js，
+    # 供「详细」浮窗按季度查看全部持仓并支持切换历史季度。
+    full_holdings_data_json = {}
     for r in results:
         fund_names_json[r['code']] = r['name']
         if 'nav_data' in r and r['nav_data']:
@@ -5065,9 +5181,32 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
         display_holdings = []
         holdings_cards = []
+        # 全历史持仓的结构化数据，供「详细」浮窗按季度查看全部持仓（按占比降序）
+        full_holdings_by_quarter = {}
         if holdings_history:
-            sorted_holdings = sorted(holdings_history, key=lambda x: x['date'], reverse=True)
-            display_holdings = sorted_holdings[:4]
+            sorted_holdings = sorted(
+                holdings_history,
+                key=lambda x: (_parse_holdings_quarter(x.get('date')) or (0, 0)),
+                reverse=True,
+            )
+            display_holdings = sorted_holdings[:HOLDINGS_PERIODS_KEEP]
+            for period in sorted_holdings:
+                q_label = _period_label(period.get('date'))
+                if not q_label or q_label in full_holdings_by_quarter:
+                    continue
+                rows = sorted(
+                    (h for h in (period.get('holdings') or []) if h.get('ratio', 0) > 0),
+                    key=lambda h: h.get('ratio', 0),
+                    reverse=True,
+                )
+                if not rows:
+                    continue
+                full_holdings_by_quarter[q_label] = {
+                    'date': str(period.get('date') or q_label),
+                    'end': quarter_to_end_date(period.get('date')) or '',
+                    'list': [[h.get('name', ''), h.get('code', ''), round(float(h.get('ratio', 0)), 2)]
+                             for h in rows],
+                }
             for i, period in enumerate(display_holdings):
                 date_str = period['date']
                 holdings_list = period['holdings']
@@ -5079,7 +5218,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 stocks_html = ""
                 total_ratio = 0.0
                 if holdings_list:
-                    for h in holdings_list:
+                    for h in holdings_list[:10]:
                         name = h['name']
                         ratio = h['ratio']
                         total_ratio += ratio
@@ -5110,11 +5249,19 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     '''
                 else:
                     stocks_html = '<div style="color: var(--footer-text); padding: 10px 0;">暂无持仓明细</div>'
+                # 「详细」按钮：打开该季度全部持仓（半年报/年报披露全量，季报只有前十大）
+                q_key = _period_label(date_str)
+                full_count = len(full_holdings_by_quarter.get(q_key, {}).get('list') or [])
+                detail_btn = (
+                    f'<button type="button" class="quarter-detail-btn" '
+                    f'data-code="{r["code"]}" data-quarter="{html.escape(str(q_key))}" '
+                    f'title="查看 {html.escape(str(q_key))} 全部 {full_count} 条持仓">详细</button>'
+                ) if full_count else ''
                 holdings_cards.append(f"""
                 <div class="quarter-card">
                     <div class="quarter-label">
                         <span class="quarter-title">{label}</span>
-                        {end_date_html}
+                        <span class="quarter-label-right">{end_date_html}{detail_btn}</span>
                     </div>
                     <div class="quarter-stocks">{stocks_html}</div>
                 </div>
@@ -5402,6 +5549,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 </div>
             </div>
         """
+        if full_holdings_by_quarter:
+            full_holdings_data_json[r['code']] = full_holdings_by_quarter
 
     empty_row = f"""
         <tr id="empty-row" style="display:none;">
@@ -5411,18 +5560,32 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         </tr>
     """
 
-    holding_detail_script = "window.__FUND_HOLDING_DETAILS__=" + json.dumps(
-        holding_detail_data_json, ensure_ascii=False, separators=(",", ":")
-    ) + ";"
+    holding_detail_script = (
+        "window.__FUND_HOLDING_DETAILS__="
+        + json.dumps(holding_detail_data_json, ensure_ascii=False, separators=(",", ":"))
+        + ";"
+    )
+    # 全历史持仓单独成文件：体积比详情 HTML 还大，只在点「详细」时才加载，
+    # 避免每次打开基金浮窗都多下几 MB。
+    full_holdings_script = (
+        "window.__FUND_FULL_HOLDINGS__="
+        + json.dumps(full_holdings_data_json, ensure_ascii=False, separators=(",", ":"))
+        + ";"
+    )
     holding_detail_version = hashlib.sha256(
         holding_detail_script.encode("utf-8")
     ).hexdigest()[:12]
+    full_holdings_version = hashlib.sha256(
+        full_holdings_script.encode("utf-8")
+    ).hexdigest()[:12]
     nav_data_asset = f"fund_dashboard_data.js?v={nav_data_version}"
     holding_detail_asset = f"fund_dashboard_details.js?v={holding_detail_version}"
+    full_holdings_asset = f"fund_dashboard_full_holdings.js?v={full_holdings_version}"
     output_path = os.path.abspath(filename)
     output_dir = os.path.dirname(output_path)
     nav_data_output = os.path.join(output_dir, "fund_dashboard_data.js")
     holding_detail_output = os.path.join(output_dir, "fund_dashboard_details.js")
+    full_holdings_output = os.path.join(output_dir, "fund_dashboard_full_holdings.js")
 
     def _atomic_write(target, content):
         temp_target = target + ".tmp"
@@ -7882,8 +8045,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .quarter-card-ghost {{ flex: 1 1 auto; min-height: 0; padding: 0; background: transparent; box-shadow: none; }}
         .empty-holdings-placeholder {{ grid-column: auto; }}
         .quarter-label {{ font-weight: bold; font-size: 12px; margin-bottom: 8px; color: var(--header-text); border-bottom: 1px solid var(--border); padding-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }}
-        .quarter-title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .quarter-title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }}
         .quarter-end {{ font-size: 10px; color: var(--footer-text); }}
+        .quarter-label-right {{ display: flex; align-items: center; gap: 6px; flex: none; }}
+        .quarter-detail-btn {{
+            font-size: 10px; line-height: 1.7; padding: 0 7px; border-radius: 9px;
+            border: 1px solid var(--link-color); background: transparent; color: var(--link-color);
+            cursor: pointer; white-space: nowrap; flex: none; transition: background 0.15s, color 0.15s;
+        }}
+        .quarter-detail-btn:hover {{ background: var(--link-color); color: #fff; }}
         .quarter-stocks {{ display: flex; flex-direction: column; gap: 4px; flex: 1; }}
         .stock-item {{ display: grid; grid-template-columns: minmax(0, 1fr) 56px 62px; gap: 4px; font-size: 12px; align-items: center; }}
         .stock-name {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }}
@@ -8144,8 +8314,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             width: 94%;
             max-width: 1400px;
             max-height: 92vh;
-        }}
-        .modal-card-wide .modal-header h3 {{
+        }}        .modal-card-wide .modal-header h3 {{
             font-size: 14px;
             font-weight: 600;
             overflow: hidden;
@@ -8178,6 +8347,105 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             #fundDetailModal .quarter-pies.single .pie-cell-empty .pie-empty-body {{ min-height: 170px; }}
             #fundDetailModal .pie-mini-title {{ font-size: 11px; padding-bottom: 4px; }}
             #fundDetailModal .chart-container {{ min-height: 330px; }}
+        }}
+
+        /* ===== 全部持仓浮窗（二级浮窗，盖在基金详情之上） ===== */
+        .modal-overlay.modal-nested {{ z-index: 1100; }}
+        .modal-card.modal-card-mid {{
+            width: 90%;
+            max-width: 860px;
+            max-height: 88vh;
+        }}
+        .modal-card-mid .modal-header h3 {{
+            font-size: 14px; font-weight: 600;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }}
+        #holdingsDetailBody {{
+            padding: 10px 14px 14px;
+            gap: 10px;
+            max-height: calc(88vh - 52px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+        }}
+        /* 季度切换条 */
+        .hd-quarter-bar {{
+            display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 8px;
+            border-bottom: 1px solid var(--border); flex: none;
+            scrollbar-width: thin;
+        }}
+        .hd-quarter-chip {{
+            flex: none; font-size: 11px; line-height: 1.7; padding: 1px 9px;
+            border-radius: 11px; border: 1px solid var(--border);
+            background: transparent; color: var(--footer-text); cursor: pointer;
+            white-space: nowrap; transition: all 0.15s;
+        }}
+        .hd-quarter-chip:hover {{ border-color: var(--link-color); color: var(--link-color); }}
+        .hd-quarter-chip.active {{
+            background: var(--link-color); border-color: var(--link-color); color: #fff; font-weight: 600;
+        }}
+        .hd-summary {{
+            display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline;
+            font-size: 11px; color: var(--footer-text); flex: none;
+        }}
+        .hd-summary b {{ color: var(--text); font-size: 12px; }}
+        /* 全部持仓表 */
+        /* 桌面端不建滚动容器，表头才能 sticky 到浮窗主体上 */
+        .hd-table-wrap {{ overflow: visible; width: 100%; flex: none; }}
+        .hd-table {{
+            width: 100%; border-collapse: separate; border-spacing: 0;
+            table-layout: fixed; font-size: 12px;
+        }}
+        .hd-table thead th {{
+            position: sticky; top: 0; z-index: 2; background: var(--table-bg);
+            padding: 6px 6px; text-align: left; font-weight: 600;
+            color: var(--footer-text); font-size: 11px;
+            border-bottom: 1px solid var(--border); white-space: nowrap;
+        }}
+        .hd-table thead th.hd-num {{ text-align: right; }}
+        /* 全局的 th:nth-child(N) 规则给每一列都设了宽度，fixed 布局会把多余空间
+           按比例摊到所有列上，导致 colgroup 的列宽被等比放大。这里统一重置，
+           让列宽只由 <colgroup> 决定（未设宽度的列自动吸收剩余空间）。 */
+        .hd-table th, .hd-table td {{ width: auto !important; }}
+        .hd-table col.hd-col-rank {{ width: 40px; }}
+        .hd-table col.hd-col-code {{ width: 84px; }}
+        .hd-table col.hd-col-ratio {{ width: 84px; }}
+        .hd-table col.hd-col-bar {{ width: 180px; }}
+        .hd-table col.hd-col-chg {{ width: 80px; }}
+        .hd-table thead th.hd-c-rank {{ text-align: center; }}
+        .hd-table thead th.hd-c-ratio {{ text-align: right; }}
+        .hd-table thead th.hd-c-chg {{ text-align: right; }}
+        .hd-table tbody td {{
+            padding: 4px 6px; border-bottom: 1px solid var(--border);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }}
+        .hd-table tbody tr:hover td {{ background: var(--hover-bg); }}
+        .hd-table td.hd-rank {{ text-align: center; color: var(--footer-text); font-size: 10px; }}
+        .hd-table td.hd-code {{ color: var(--footer-text); font-size: 11px; font-family: ui-monospace, Menlo, Consolas, monospace; }}
+        .hd-table td.hd-ratio {{ text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }}
+        .hd-table td.hd-chg {{ text-align: right; font-size: 10px; font-variant-numeric: tabular-nums; }}
+        .hd-bar {{ height: 6px; border-radius: 3px; background: var(--hover-bg); overflow: hidden; }}
+        .hd-bar i {{ display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #7bb0f5, #1a73e8); }}
+        .hd-table tfoot td {{
+            padding: 7px 6px; font-weight: 600; font-size: 11px;
+            border-top: 2px solid var(--border); color: var(--text);
+        }}
+        .hd-table tfoot td.hd-ratio {{ color: #e67e22; }}
+        .hd-empty {{ padding: 40px 0; text-align: center; color: var(--footer-text); font-size: 12px; }}
+        @media (max-width: 992px) {{
+            .modal-card.modal-card-mid {{ width: 96%; max-height: 90vh; }}
+            #holdingsDetailBody {{ padding: 8px 10px 12px; max-height: calc(90vh - 48px); }}
+            .hd-table-wrap {{ overflow-x: auto; }}
+            .hd-table {{ font-size: 11px; min-width: 460px; }}
+            .hd-table col.hd-col-rank {{ width: 30px; }}
+            .hd-table col.hd-col-code {{ width: 62px; }}
+            .hd-table col.hd-col-ratio {{ width: 64px; }}
+            .hd-table col.hd-col-bar {{ width: 56px; }}
+            .hd-table col.hd-col-chg {{ width: 58px; }}
+            .hd-quarter-chip {{ font-size: 10px; padding: 1px 7px; }}
+            .hd-summary {{ font-size: 10px; gap: 4px 10px; }}
+            /* 窄屏标题放不下「代码 + 全名 + 季度」，隐去全名保证季度可见 */
+            .hd-tname {{ display: none; }}
+            .modal-card-mid .modal-header h3 {{ font-size: 12px; }}
         }}
         .holding-detail-loading {{
             padding: 64px 0;
@@ -9823,7 +10091,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             <div class="footer-note">
                 <div class="footer-left">
-                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方为最近 4 个季度的前十大持仓，下方是同一批季度的持有人结构饼图（QDII 基金另附国家/地区配置），再往下是双轴走势图与年度收益。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
+                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方为最近 4 个季度的前十大持仓，下方是同一批季度的持有人结构饼图（QDII 基金另附国家/地区配置），再往下是双轴走势图与年度收益。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>（按占净值比例降序），并可在浮窗内切换该基金所有历史季度。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
                 </div>
                 <div class="footer-right">
                     <span>⏱️ 统计更新于: <strong>{update_time_str}</strong></span>
@@ -9884,6 +10152,17 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <button class="modal-close" id="closeFundDetailModal" title="关闭">&times;</button>
             </div>
             <div class="modal-body" id="fundDetailBody"></div>
+        </div>
+    </div>
+
+    <!-- 全部持仓浮窗：某季度全部持仓（按占比降序），可切换该基金所有历史季度 -->
+    <div class="modal-overlay modal-nested" id="holdingsDetailModal">
+        <div class="modal-card modal-card-mid">
+            <div class="modal-header">
+                <h3 id="holdingsDetailTitle">📦 全部持仓</h3>
+                <button class="modal-close" id="closeHoldingsDetailModal" title="关闭">&times;</button>
+            </div>
+            <div class="modal-body" id="holdingsDetailBody"></div>
         </div>
     </div>
 
@@ -9960,7 +10239,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         var fundNames = {json.dumps(fund_names_json, ensure_ascii=False)};
         var fundParsedDates = {{}};
         var holdingDetailHtml = window.__FUND_HOLDING_DETAILS__ || {{}};
+        var fullHoldingsData = window.__FUND_FULL_HOLDINGS__ || {{}};
         var holdingDetailPromise = null;
+        var fullHoldingsPromise = null;
 
         document.addEventListener('DOMContentLoaded', function() {{
             fundNavData = window.__FUND_NAV_DATA__ || fundNavData || {{}};
@@ -9990,6 +10271,28 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 document.body.appendChild(script);
             }});
             return holdingDetailPromise;
+        }}
+
+        // 全历史持仓数据体积较大，只在点「详细」时按需加载
+        function loadFullHoldings() {{
+            if (Object.keys(fullHoldingsData).length > 0) return Promise.resolve();
+            if (fullHoldingsPromise) return fullHoldingsPromise;
+            fullHoldingsPromise = new Promise(resolve => {{
+                const script = document.createElement('script');
+                script.src = {json.dumps(full_holdings_asset)};
+                script.onload = () => {{
+                    fullHoldingsData = window.__FUND_FULL_HOLDINGS__ || {{}};
+                    window.__FUND_FULL_HOLDINGS__ = null;
+                    resolve();
+                }};
+                script.onerror = () => {{
+                    script.remove();
+                    fullHoldingsPromise = null;
+                    resolve();
+                }};
+                document.body.appendChild(script);
+            }});
+            return fullHoldingsPromise;
         }}
 
         // ★ 内嵌面板（CFTC / 沪深宽基ETF）懒加载 + 主题联动
@@ -11197,12 +11500,160 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
 
         function closeFundDetail() {{
+            closeHoldingsDetail();
             const modal = document.getElementById('fundDetailModal');
             if (!modal) return;
             modal.classList.remove('show');
             destroyFundDetailCharts(fundDetailCode);
             fundDetailCode = null;
         }}
+
+        // ===== 全部持仓浮窗（二级） =====
+        let hdState = {{ code: null, quarter: null }};
+
+        function _hdQuarters(code) {{
+            const all = fullHoldingsData[code];
+            if (!all) return [];
+            return Object.keys(all).sort().reverse();
+        }}
+
+        function _hdEsc(s) {{
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }}
+
+        function renderHoldingsDetail(code, quarter) {{
+            const body = document.getElementById('holdingsDetailBody');
+            const title = document.getElementById('holdingsDetailTitle');
+            if (!body || !title) return;
+
+            const all = fullHoldingsData[code] || {{}};
+            const quarters = _hdQuarters(code);
+            if (!quarters.length) {{
+                body.innerHTML = '<div class="hd-empty">该基金暂无持仓披露数据</div>';
+                return;
+            }}
+            if (!quarter || !all[quarter]) quarter = quarters[0];
+
+            const cur = all[quarter] || {{}};
+            const list = cur.list || [];
+            const prevQ = (function() {{
+                const i = quarters.indexOf(quarter);
+                return (i >= 0 && i + 1 < quarters.length) ? quarters[i + 1] : null;
+            }})();
+            const prevMap = {{}};
+            if (prevQ && all[prevQ] && all[prevQ].list) {{
+                all[prevQ].list.forEach(function(row) {{ prevMap[row[0]] = row[2]; }});
+            }}
+
+            const name = (typeof fundNames !== 'undefined' && fundNames[code]) ? fundNames[code] : '';
+            const maxRatio = list.reduce(function(m, r) {{ return Math.max(m, r[2] || 0); }}, 0) || 1;
+            const total = list.reduce(function(s, r) {{ return s + (r[2] || 0); }}, 0);
+
+            let rowsHtml = '';
+            list.forEach(function(row, i) {{
+                const sname = row[0] || '', scode = row[1] || '', ratio = row[2] || 0;
+                let chg = '<span style="color:var(--footer-text)">—</span>';
+                if (prevQ) {{
+                    if (Object.prototype.hasOwnProperty.call(prevMap, sname)) {{
+                        const d = ratio - prevMap[sname];
+                        if (Math.abs(d) < 0.01) {{
+                            chg = '<span style="color:var(--footer-text)">持平</span>';
+                        }} else if (d > 0) {{
+                            chg = '<span class="change-up">▲' + d.toFixed(2) + '</span>';
+                        }} else {{
+                            chg = '<span class="change-down">▼' + Math.abs(d).toFixed(2) + '</span>';
+                        }}
+                    }} else {{
+                        chg = '<span class="change-new">新增</span>';
+                    }}
+                }}
+                const barW = Math.max(1, Math.min(100, ratio / maxRatio * 100));
+                rowsHtml += '<tr>'
+                    + '<td class="hd-rank">' + (i + 1) + '</td>'
+                    + '<td title="' + _hdEsc(sname) + '">' + _hdEsc(sname) + '</td>'
+                    + '<td class="hd-code" title="' + _hdEsc(scode) + '">' + _hdEsc(scode || '--') + '</td>'
+                    + '<td class="hd-ratio">' + ratio.toFixed(2) + '%</td>'
+                    + '<td><div class="hd-bar"><i style="width:' + barW.toFixed(1) + '%"></i></div></td>'
+                    + '<td class="hd-chg">' + chg + '</td>'
+                    + '</tr>';
+            }});
+
+            let chipsHtml = '';
+            quarters.forEach(function(q) {{
+                chipsHtml += '<button type="button" class="hd-quarter-chip'
+                    + (q === quarter ? ' active' : '')
+                    + '" data-quarter="' + _hdEsc(q) + '">' + _hdEsc(q) + '</button>';
+            }});
+
+            title.innerHTML = '📦 [' + _hdEsc(code) + ']'
+                + (name ? ' <span class="hd-tname">' + _hdEsc(name) + '</span>' : '')
+                + ' · ' + _hdEsc(quarter) + ' 全部持仓';
+            title.setAttribute('title', title.textContent);
+
+            body.innerHTML = ''
+                + '<div class="hd-quarter-bar">' + chipsHtml + '</div>'
+                + '<div class="hd-summary">'
+                +   '<span>报告期 <b>' + _hdEsc(cur.end || quarter) + '</b></span>'
+                +   '<span>持仓条数 <b>' + list.length + '</b></span>'
+                +   '<span>合计占净值 <b>' + total.toFixed(2) + '%</b></span>'
+                +   (prevQ ? '<span>环比基准 <b>' + _hdEsc(prevQ) + '</b></span>' : '')
+                + '</div>'
+                + '<div class="hd-table-wrap"><table class="hd-table">'
+                +   '<colgroup>'
+                +     '<col class="hd-col-rank">'
+                +     '<col>'
+                +     '<col class="hd-col-code">'
+                +     '<col class="hd-col-ratio">'
+                +     '<col class="hd-col-bar">'
+                +     '<col class="hd-col-chg">'
+                +   '</colgroup>'
+                +   '<thead><tr>'
+                +     '<th class="hd-c-rank">#</th>'
+                +     '<th>股票名称</th>'
+                +     '<th class="hd-c-code">代码</th>'
+                +     '<th class="hd-c-ratio hd-num">占净值</th>'
+                +     '<th class="hd-c-bar">占比</th>'
+                +     '<th class="hd-c-chg hd-num">环比</th>'
+                +   '</tr></thead>'
+                +   '<tbody>' + rowsHtml + '</tbody>'
+                +   '<tfoot><tr>'
+                +     '<td colspan="3">合计（' + list.length + ' 条）</td>'
+                +     '<td class="hd-ratio">' + total.toFixed(2) + '%</td>'
+                +     '<td colspan="2"></td>'
+                +   '</tr></tfoot>'
+                + '</table></div>';
+
+            body.scrollTop = 0;
+            hdState = {{ code: code, quarter: quarter }};
+        }}
+
+        function openHoldingsDetail(code, quarter) {{
+            const modal = document.getElementById('holdingsDetailModal');
+            if (!modal) return;
+            hdState = {{ code: code, quarter: quarter || null }};
+            modal.classList.add('show');
+            if (Object.keys(fullHoldingsData).length) {{
+                renderHoldingsDetail(code, quarter);
+            }} else {{
+                const body = document.getElementById('holdingsDetailBody');
+                if (body) body.innerHTML = '<div class="hd-empty">正在加载全历史持仓数据...</div>';
+                loadFullHoldings().then(function() {{
+                    if (!modal.classList.contains('show')) return;
+                    renderHoldingsDetail(hdState.code, hdState.quarter);
+                }});
+            }}
+        }}
+
+        function closeHoldingsDetail() {{
+            const modal = document.getElementById('holdingsDetailModal');
+            if (modal) modal.classList.remove('show');
+            hdState = {{ code: null, quarter: null }};
+        }}
+
+        window.openHoldingsDetail = openHoldingsDetail;
+        window.closeHoldingsDetail = closeHoldingsDetail;
 
         window.openFundDetail = openFundDetail;
         window.closeFundDetail = closeFundDetail;
@@ -11216,8 +11667,41 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     if (e.target === modal) closeFundDetail();
                 }});
             }}
+
+            // 二级浮窗：全部持仓
+            const hdModal = document.getElementById('holdingsDetailModal');
+            if (hdModal) {{
+                const hdClose = document.getElementById('closeHoldingsDetailModal');
+                if (hdClose) hdClose.addEventListener('click', closeHoldingsDetail);
+                hdModal.addEventListener('click', function(e) {{
+                    if (e.target === hdModal) closeHoldingsDetail();
+                }});
+                const hdBody = document.getElementById('holdingsDetailBody');
+                if (hdBody) {{
+                    hdBody.addEventListener('click', function(e) {{
+                        const chip = e.target.closest('.hd-quarter-chip');
+                        if (!chip) return;
+                        e.stopPropagation();
+                        renderHoldingsDetail(hdState.code, chip.dataset.quarter);
+                    }});
+                }}
+            }}
+
+            // 基金详情内的「详细」按钮（内容动态注入，需事件委托）
+            const detailBody = document.getElementById('fundDetailBody');
+            if (detailBody) {{
+                detailBody.addEventListener('click', function(e) {{
+                    const btn = e.target.closest('.quarter-detail-btn');
+                    if (!btn) return;
+                    e.stopPropagation();
+                    openHoldingsDetail(btn.dataset.code, btn.dataset.quarter);
+                }});
+            }}
+
             document.addEventListener('keydown', function(e) {{
-                if (e.key === 'Escape' && fundDetailCode) closeFundDetail();
+                if (e.key !== 'Escape') return;
+                if (hdState.code) {{ closeHoldingsDetail(); return; }}
+                if (fundDetailCode) closeFundDetail();
             }});
 
             const table = document.getElementById('fundTable');
@@ -11801,6 +12285,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     os.makedirs(output_dir, exist_ok=True)
     _atomic_write(nav_data_output, nav_data_script)
     _atomic_write(holding_detail_output, holding_detail_script)
+    _atomic_write(full_holdings_output, full_holdings_script)
     _atomic_write(output_path, html_content)
     return output_path
 
