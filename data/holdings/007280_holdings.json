@@ -1,182 +1,5452 @@
-[
-  {
-    "date": "2026年3季度股票投资明细",
-    "holdings": [
-      {
-        "name": "瑞可利控股",
-        "ratio": 6.0
-      },
-      {
-        "name": "索尼",
-        "ratio": 4.39
-      },
-      {
-        "name": "三菱日联金融集团",
-        "ratio": 3.43
-      },
-      {
-        "name": "基恩士",
-        "ratio": 3.37
-      },
-      {
-        "name": "瑞穗金融集团",
-        "ratio": 3.18
-      },
-      {
-        "name": "东京电子",
-        "ratio": 3.13
-      },
-      {
-        "name": "三井住友金融集团",
-        "ratio": 2.99
-      },
-      {
-        "name": "日立公司",
-        "ratio": 2.95
-      },
-      {
-        "name": "欧力士",
-        "ratio": 2.7
-      },
-      {
-        "name": "东京海上控股",
-        "ratio": 2.67
-      }
-    ]
-  },
-  {
-    "date": "2026年2季度股票投资明细",
-    "holdings": [
-      {
-        "name": "东京电子",
-        "ratio": 5.29
-      },
-      {
-        "name": "村田制作所",
-        "ratio": 4.17
-      },
-      {
-        "name": "KIOXIA",
-        "ratio": 3.91
-      },
-      {
-        "name": "瑞可利控股",
-        "ratio": 3.85
-      },
-      {
-        "name": "三菱日联金融集团",
-        "ratio": 3.1
-      },
-      {
-        "name": "索尼",
-        "ratio": 3.0
-      },
-      {
-        "name": "三井住友金融集团",
-        "ratio": 2.98
-      },
-      {
-        "name": "瑞穗金融集团",
-        "ratio": 2.94
-      },
-      {
-        "name": "三菱电机",
-        "ratio": 2.75
-      },
-      {
-        "name": "日立公司",
-        "ratio": 2.38
-      }
-    ]
-  },
-  {
-    "date": "2026年1季度股票投资明细",
-    "holdings": [
-      {
-        "name": "索尼",
-        "ratio": 3.73
-      },
-      {
-        "name": "日立公司",
-        "ratio": 3.59
-      },
-      {
-        "name": "三井住友金融集团",
-        "ratio": 3.27
-      },
-      {
-        "name": "保谷光学",
-        "ratio": 3.18
-      },
-      {
-        "name": "瑞穗金融集团",
-        "ratio": 3.09
-      },
-      {
-        "name": "东京电子",
-        "ratio": 3.07
-      },
-      {
-        "name": "三菱电机",
-        "ratio": 2.85
-      },
-      {
-        "name": "丰田汽车",
-        "ratio": 2.79
-      },
-      {
-        "name": "三菱日联金融集团",
-        "ratio": 2.76
-      },
-      {
-        "name": "住友电工",
-        "ratio": 2.72
-      }
-    ]
-  },
-  {
-    "date": "2025年4季度股票投资明细",
-    "holdings": [
-      {
-        "name": "保谷光学",
-        "ratio": 4.33
-      },
-      {
-        "name": "瑞穗金融集团",
-        "ratio": 4.3
-      },
-      {
-        "name": "三井住友金融集团",
-        "ratio": 4.04
-      },
-      {
-        "name": "富士电机",
-        "ratio": 3.98
-      },
-      {
-        "name": "住友电工",
-        "ratio": 3.91
-      },
-      {
-        "name": "索尼",
-        "ratio": 3.85
-      },
-      {
-        "name": "日立公司",
-        "ratio": 3.64
-      },
-      {
-        "name": "瑞可利控股",
-        "ratio": 3.54
-      },
-      {
-        "name": "铃木汽车(Suzuki)",
-        "ratio": 2.79
-      },
-      {
-        "name": "三菱日联金融集团",
-        "ratio": 2.76
-      }
-    ]
-  }
-]
+{
+  "_v": 2,
+  "probed_min_year": 2015,
+  "history_exhausted": true,
+  "periods": [
+    {
+      "date": "2026年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "瑞可利控股",
+          "ratio": 6.0,
+          "code": "6098"
+        },
+        {
+          "name": "索尼",
+          "ratio": 4.39,
+          "code": "6758"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.43,
+          "code": "8306"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.37,
+          "code": "6861"
+        },
+        {
+          "name": "瑞穗金融集团",
+          "ratio": 3.18,
+          "code": "8411"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 3.13,
+          "code": "8035"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 2.99,
+          "code": "8316"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 2.95,
+          "code": "6501"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 2.7,
+          "code": "8591"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 2.67,
+          "code": "8766"
+        }
+      ]
+    },
+    {
+      "date": "2026年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "东京电子",
+          "ratio": 5.29,
+          "code": "8035"
+        },
+        {
+          "name": "村田制作所",
+          "ratio": 4.17,
+          "code": "6981"
+        },
+        {
+          "name": "KIOXIA",
+          "ratio": 3.91,
+          "code": "285A"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 3.85,
+          "code": "6098"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.1,
+          "code": "8306"
+        },
+        {
+          "name": "索尼",
+          "ratio": 3.0,
+          "code": "6758"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 2.98,
+          "code": "8316"
+        },
+        {
+          "name": "瑞穗金融集团",
+          "ratio": 2.94,
+          "code": "8411"
+        },
+        {
+          "name": "三菱电机",
+          "ratio": 2.75,
+          "code": "6503"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 2.38,
+          "code": "6501"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 2.31,
+          "code": "8591"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 2.26,
+          "code": "7741"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 2.15,
+          "code": "8766"
+        },
+        {
+          "name": "米思米",
+          "ratio": 2.11,
+          "code": "9962"
+        },
+        {
+          "name": "住友电工",
+          "ratio": 1.91,
+          "code": "5802"
+        },
+        {
+          "name": "NITERRA CO LTD",
+          "ratio": 1.91,
+          "code": "5334"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 1.87,
+          "code": "4063"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 1.87,
+          "code": "7203"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 1.87,
+          "code": "6861"
+        },
+        {
+          "name": "DAIFUKU CO LTD",
+          "ratio": 1.78,
+          "code": "6383"
+        },
+        {
+          "name": "软银集团",
+          "ratio": 1.7,
+          "code": "9984"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 1.64,
+          "code": "8001"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 1.58,
+          "code": "4091"
+        },
+        {
+          "name": "三井物产",
+          "ratio": 1.52,
+          "code": "8031"
+        },
+        {
+          "name": "三菱商事",
+          "ratio": 1.34,
+          "code": "8058"
+        },
+        {
+          "name": "丸红",
+          "ratio": 1.34,
+          "code": "8002"
+        },
+        {
+          "name": "Makita",
+          "ratio": 1.3,
+          "code": "6586"
+        },
+        {
+          "name": "鹿岛建设",
+          "ratio": 1.29,
+          "code": "1812"
+        },
+        {
+          "name": "Disco Corp",
+          "ratio": 1.23,
+          "code": "6146"
+        },
+        {
+          "name": "发那科",
+          "ratio": 1.13,
+          "code": "6954"
+        },
+        {
+          "name": "SINFONIA TECHNOLOG Y CO LTD",
+          "ratio": 1.11,
+          "code": "6507"
+        },
+        {
+          "name": "大林组",
+          "ratio": 1.1,
+          "code": "1802"
+        },
+        {
+          "name": "Amada Co., Ltd.",
+          "ratio": 1.06,
+          "code": "6113"
+        },
+        {
+          "name": "MITSUI OSK LINES LTD",
+          "ratio": 1.05,
+          "code": "9104"
+        },
+        {
+          "name": "SMC",
+          "ratio": 1.03,
+          "code": "6273"
+        },
+        {
+          "name": "OKI ELECTRIC INDUSTRY CO LTD",
+          "ratio": 0.98,
+          "code": "6703"
+        },
+        {
+          "name": "野村综合研究所",
+          "ratio": 0.97,
+          "code": "4307"
+        },
+        {
+          "name": "住友房地产开发",
+          "ratio": 0.93,
+          "code": "8830"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 0.92,
+          "code": "4543"
+        },
+        {
+          "name": "JAPAN POST BANK CO LTD",
+          "ratio": 0.92,
+          "code": "7182"
+        },
+        {
+          "name": "迅销",
+          "ratio": 0.89,
+          "code": "9983"
+        },
+        {
+          "name": "三井不动产",
+          "ratio": 0.87,
+          "code": "8801"
+        },
+        {
+          "name": "石川岛重工",
+          "ratio": 0.79,
+          "code": "7013"
+        },
+        {
+          "name": "富士胶片控股",
+          "ratio": 0.72,
+          "code": "4901"
+        },
+        {
+          "name": "SUMITOMO CORP",
+          "ratio": 0.69,
+          "code": "8053"
+        },
+        {
+          "name": "狮王",
+          "ratio": 0.67,
+          "code": "4912"
+        },
+        {
+          "name": "味之素",
+          "ratio": 0.67,
+          "code": "2802"
+        },
+        {
+          "name": "NEC CORP",
+          "ratio": 0.66,
+          "code": "6701"
+        },
+        {
+          "name": "CYBERAGENT网络服务",
+          "ratio": 0.66,
+          "code": "4751"
+        },
+        {
+          "name": "大冢商会",
+          "ratio": 0.61,
+          "code": "4768"
+        },
+        {
+          "name": "富士电机",
+          "ratio": 0.58,
+          "code": "6504"
+        },
+        {
+          "name": "日本涂料",
+          "ratio": 0.53,
+          "code": "4612"
+        },
+        {
+          "name": "中外制药",
+          "ratio": 0.52,
+          "code": "4519"
+        },
+        {
+          "name": "花王集团",
+          "ratio": 0.5,
+          "code": "4452"
+        },
+        {
+          "name": "SWCC Showa Holdings Co Ltd",
+          "ratio": 0.47,
+          "code": "5805"
+        },
+        {
+          "name": "Yokohama Rubber Co Ltd",
+          "ratio": 0.44,
+          "code": "5101"
+        },
+        {
+          "name": "积水房屋",
+          "ratio": 0.42,
+          "code": "1928"
+        },
+        {
+          "name": "MODEC INC",
+          "ratio": 0.42,
+          "code": "6269"
+        },
+        {
+          "name": "角川集团",
+          "ratio": 0.42,
+          "code": "9468"
+        },
+        {
+          "name": "7&I控股",
+          "ratio": 0.41,
+          "code": "3382"
+        },
+        {
+          "name": "大和工业",
+          "ratio": 0.38,
+          "code": "5444"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 0.33,
+          "code": "7974"
+        },
+        {
+          "name": "Pan Pacific International Holdings Corp",
+          "ratio": 0.28,
+          "code": "7532"
+        },
+        {
+          "name": "OSG CORP",
+          "ratio": 0.26,
+          "code": "6136"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 0.26,
+          "code": "4568"
+        },
+        {
+          "name": "卡普空",
+          "ratio": 0.24,
+          "code": "9697"
+        },
+        {
+          "name": "BENGO4.COM",
+          "ratio": 0.24,
+          "code": "6027"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 0.2,
+          "code": "7269"
+        },
+        {
+          "name": "Goldwin Inc",
+          "ratio": 0.15,
+          "code": "8111"
+        },
+        {
+          "name": "PAL集团",
+          "ratio": 0.13,
+          "code": "2726"
+        },
+        {
+          "name": "Sigmaxyz Inc",
+          "ratio": 0.06,
+          "code": "6088"
+        }
+      ]
+    },
+    {
+      "date": "2026年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 3.73,
+          "code": "6758"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 3.59,
+          "code": "6501"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 3.27,
+          "code": "8316"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 3.18,
+          "code": "7741"
+        },
+        {
+          "name": "瑞穗金融集团",
+          "ratio": 3.09,
+          "code": "8411"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 3.07,
+          "code": "8035"
+        },
+        {
+          "name": "三菱电机",
+          "ratio": 2.85,
+          "code": "6503"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 2.79,
+          "code": "7203"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 2.76,
+          "code": "8306"
+        },
+        {
+          "name": "住友电工",
+          "ratio": 2.72,
+          "code": "5802"
+        }
+      ]
+    },
+    {
+      "date": "2025年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "保谷光学",
+          "ratio": 4.33,
+          "code": "7741"
+        },
+        {
+          "name": "瑞穗金融集团",
+          "ratio": 4.3,
+          "code": "8411"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 4.04,
+          "code": "8316"
+        },
+        {
+          "name": "富士电机",
+          "ratio": 3.98,
+          "code": "6504"
+        },
+        {
+          "name": "住友电工",
+          "ratio": 3.91,
+          "code": "5802"
+        },
+        {
+          "name": "索尼",
+          "ratio": 3.85,
+          "code": "6758"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 3.64,
+          "code": "6501"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 3.54,
+          "code": "6098"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 2.79,
+          "code": "7269"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 2.76,
+          "code": "8306"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 2.41,
+          "code": "7974"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 2.29,
+          "code": "8001"
+        },
+        {
+          "name": "三菱电机",
+          "ratio": 2.25,
+          "code": "6503"
+        },
+        {
+          "name": "米思米",
+          "ratio": 2.21,
+          "code": "9962"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 2.05,
+          "code": "4063"
+        },
+        {
+          "name": "石川岛重工",
+          "ratio": 1.82,
+          "code": "7013"
+        },
+        {
+          "name": "大林组",
+          "ratio": 1.73,
+          "code": "1802"
+        },
+        {
+          "name": "SWCC Showa Holdings Co Ltd",
+          "ratio": 1.69,
+          "code": "5805"
+        },
+        {
+          "name": "富士胶片控股",
+          "ratio": 1.68,
+          "code": "4901"
+        },
+        {
+          "name": "鹿岛建设",
+          "ratio": 1.67,
+          "code": "1812"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 1.66,
+          "code": "4091"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 1.66,
+          "code": "8766"
+        },
+        {
+          "name": "丸红",
+          "ratio": 1.63,
+          "code": "8002"
+        },
+        {
+          "name": "KAKAKU日本价格网",
+          "ratio": 1.56,
+          "code": "2371"
+        },
+        {
+          "name": "狮王",
+          "ratio": 1.5,
+          "code": "4912"
+        },
+        {
+          "name": "Makita",
+          "ratio": 1.27,
+          "code": "6586"
+        },
+        {
+          "name": "神户物产",
+          "ratio": 1.23,
+          "code": "3038"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 1.23,
+          "code": "7203"
+        },
+        {
+          "name": "积水房屋",
+          "ratio": 1.19,
+          "code": "1928"
+        },
+        {
+          "name": "乐天银行",
+          "ratio": 1.14,
+          "code": "5838"
+        },
+        {
+          "name": "三井化学",
+          "ratio": 1.12,
+          "code": "4183"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 1.1,
+          "code": "8035"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 1.07,
+          "code": "6861"
+        },
+        {
+          "name": "味之素",
+          "ratio": 1.05,
+          "code": "2802"
+        },
+        {
+          "name": "住友房地产开发",
+          "ratio": 1.03,
+          "code": "8830"
+        },
+        {
+          "name": "CYBERAGENT网络服务",
+          "ratio": 1.03,
+          "code": "4751"
+        },
+        {
+          "name": "大冢商会",
+          "ratio": 0.9,
+          "code": "4768"
+        },
+        {
+          "name": "软银集团",
+          "ratio": 0.89,
+          "code": "9984"
+        },
+        {
+          "name": "花王集团",
+          "ratio": 0.85,
+          "code": "4452"
+        },
+        {
+          "name": "发那科",
+          "ratio": 0.79,
+          "code": "6954"
+        },
+        {
+          "name": "角川集团",
+          "ratio": 0.74,
+          "code": "9468"
+        },
+        {
+          "name": "Goldwin Inc",
+          "ratio": 0.7,
+          "code": "8111"
+        },
+        {
+          "name": "三井不动产",
+          "ratio": 0.69,
+          "code": "8801"
+        },
+        {
+          "name": "PAL集团",
+          "ratio": 0.68,
+          "code": "2726"
+        },
+        {
+          "name": "日本涂料",
+          "ratio": 0.66,
+          "code": "4612"
+        },
+        {
+          "name": "BENGO4.COM",
+          "ratio": 0.61,
+          "code": "6027"
+        },
+        {
+          "name": "迅销",
+          "ratio": 0.59,
+          "code": "9983"
+        },
+        {
+          "name": "Yokohama Rubber Co Ltd",
+          "ratio": 0.56,
+          "code": "5101"
+        },
+        {
+          "name": "Ebara Corp.",
+          "ratio": 0.52,
+          "code": "6361"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 0.49,
+          "code": "4543"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 0.47,
+          "code": "8591"
+        },
+        {
+          "name": "Amada Co., Ltd.",
+          "ratio": 0.46,
+          "code": "6113"
+        },
+        {
+          "name": "Sigmaxyz Inc",
+          "ratio": 0.41,
+          "code": "6088"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 0.38,
+          "code": "4568"
+        },
+        {
+          "name": "THK机械",
+          "ratio": 0.36,
+          "code": "6481"
+        },
+        {
+          "name": "卡普空",
+          "ratio": 0.35,
+          "code": "9697"
+        },
+        {
+          "name": "三菱商事",
+          "ratio": 0.33,
+          "code": "8058"
+        },
+        {
+          "name": "大和工业",
+          "ratio": 0.28,
+          "code": "5444"
+        },
+        {
+          "name": "7&I控股",
+          "ratio": 0.27,
+          "code": "3382"
+        },
+        {
+          "name": "东丽工业",
+          "ratio": 0.22,
+          "code": "3402"
+        },
+        {
+          "name": "Pan Pacific International Holdings Corp",
+          "ratio": 0.19,
+          "code": "7532"
+        },
+        {
+          "name": "Disco Corp",
+          "ratio": 0.1,
+          "code": "6146"
+        },
+        {
+          "name": "星崎",
+          "ratio": 0.09,
+          "code": "6465"
+        }
+      ]
+    },
+    {
+      "date": "2025年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 4.6,
+          "code": "6758"
+        },
+        {
+          "name": "瑞穗金融集团",
+          "ratio": 3.87,
+          "code": "8411"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 3.6,
+          "code": "8316"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.52,
+          "code": "8306"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.41,
+          "code": "4063"
+        },
+        {
+          "name": "Ebara Corp.",
+          "ratio": 3.09,
+          "code": "6361"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.03,
+          "code": "8766"
+        },
+        {
+          "name": "花王集团",
+          "ratio": 2.91,
+          "code": "4452"
+        },
+        {
+          "name": "住友电工",
+          "ratio": 2.88,
+          "code": "5802"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 2.74,
+          "code": "7269"
+        }
+      ]
+    },
+    {
+      "date": "2025年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 5.54,
+          "code": "6758"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.8,
+          "code": "8766"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 3.75,
+          "code": "8035"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.58,
+          "code": "4063"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 3.51,
+          "code": "8316"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.16,
+          "code": "8306"
+        },
+        {
+          "name": "花王集团",
+          "ratio": 3.06,
+          "code": "4452"
+        },
+        {
+          "name": "CYBERAGENT网络服务",
+          "ratio": 3.01,
+          "code": "4751"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 2.85,
+          "code": "7974"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 2.77,
+          "code": "8001"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 2.55,
+          "code": "7269"
+        },
+        {
+          "name": "丸红",
+          "ratio": 2.38,
+          "code": "8002"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 2.37,
+          "code": "6861"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 2.28,
+          "code": "4091"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 2.14,
+          "code": "6501"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 2.09,
+          "code": "7741"
+        },
+        {
+          "name": "味之素",
+          "ratio": 2.01,
+          "code": "2802"
+        },
+        {
+          "name": "瑞穗金融集团",
+          "ratio": 1.93,
+          "code": "8411"
+        },
+        {
+          "name": "瑞萨电子",
+          "ratio": 1.59,
+          "code": "6723"
+        },
+        {
+          "name": "Ebara Corp.",
+          "ratio": 1.56,
+          "code": "6361"
+        },
+        {
+          "name": "日本涂料",
+          "ratio": 1.54,
+          "code": "4612"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 1.53,
+          "code": "6098"
+        },
+        {
+          "name": "日本电报电话",
+          "ratio": 1.52,
+          "code": "9432"
+        },
+        {
+          "name": "KAKAKU日本价格网",
+          "ratio": 1.46,
+          "code": "2371"
+        },
+        {
+          "name": "神户物产",
+          "ratio": 1.45,
+          "code": "3038"
+        },
+        {
+          "name": "鹿岛建设",
+          "ratio": 1.39,
+          "code": "1812"
+        },
+        {
+          "name": "三菱重工",
+          "ratio": 1.39,
+          "code": "7011"
+        },
+        {
+          "name": "迅销",
+          "ratio": 1.38,
+          "code": "9983"
+        },
+        {
+          "name": "大林组",
+          "ratio": 1.34,
+          "code": "1802"
+        },
+        {
+          "name": "东丽工业",
+          "ratio": 1.19,
+          "code": "3402"
+        },
+        {
+          "name": "住友电工",
+          "ratio": 1.14,
+          "code": "5802"
+        },
+        {
+          "name": "狮王",
+          "ratio": 1.11,
+          "code": "4912"
+        },
+        {
+          "name": "富士电机",
+          "ratio": 0.99,
+          "code": "6504"
+        },
+        {
+          "name": "Yokohama Rubber Co Ltd",
+          "ratio": 0.98,
+          "code": "5101"
+        },
+        {
+          "name": "米思米",
+          "ratio": 0.95,
+          "code": "9962"
+        },
+        {
+          "name": "7&I控股",
+          "ratio": 0.91,
+          "code": "3382"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 0.9,
+          "code": "8591"
+        },
+        {
+          "name": "Amada Co., Ltd.",
+          "ratio": 0.87,
+          "code": "6113"
+        },
+        {
+          "name": "卡普空",
+          "ratio": 0.84,
+          "code": "9697"
+        },
+        {
+          "name": "THK机械",
+          "ratio": 0.79,
+          "code": "6481"
+        },
+        {
+          "name": "Makita",
+          "ratio": 0.76,
+          "code": "6586"
+        },
+        {
+          "name": "SCSK信息系统",
+          "ratio": 0.7,
+          "code": "9719"
+        },
+        {
+          "name": "SWCC Showa Holdings Co Ltd",
+          "ratio": 0.69,
+          "code": "5805"
+        },
+        {
+          "name": "BENGO4.COM",
+          "ratio": 0.62,
+          "code": "6027"
+        },
+        {
+          "name": "星崎",
+          "ratio": 0.62,
+          "code": "6465"
+        },
+        {
+          "name": "三井不动产",
+          "ratio": 0.55,
+          "code": "8801"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 0.54,
+          "code": "4568"
+        },
+        {
+          "name": "Amano Corp",
+          "ratio": 0.53,
+          "code": "6436"
+        },
+        {
+          "name": "Sigmaxyz Inc",
+          "ratio": 0.52,
+          "code": "6088"
+        },
+        {
+          "name": "大冢商会",
+          "ratio": 0.52,
+          "code": "4768"
+        },
+        {
+          "name": "三菱商事",
+          "ratio": 0.51,
+          "code": "8058"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 0.5,
+          "code": "7203"
+        },
+        {
+          "name": "Ibiden Co Ltd",
+          "ratio": 0.49,
+          "code": "4062"
+        },
+        {
+          "name": "日冷",
+          "ratio": 0.45,
+          "code": "2871"
+        },
+        {
+          "name": "Goldwin Inc",
+          "ratio": 0.44,
+          "code": "8111"
+        },
+        {
+          "name": "Pan Pacific International Holdings Corp",
+          "ratio": 0.42,
+          "code": "7532"
+        },
+        {
+          "name": "丰田工业",
+          "ratio": 0.4,
+          "code": "6201"
+        },
+        {
+          "name": "积水房屋",
+          "ratio": 0.37,
+          "code": "1928"
+        },
+        {
+          "name": "MS&AD保险",
+          "ratio": 0.37,
+          "code": "8725"
+        },
+        {
+          "name": "Disco Corp",
+          "ratio": 0.36,
+          "code": "6146"
+        },
+        {
+          "name": "爱德万测试",
+          "ratio": 0.25,
+          "code": "6857"
+        },
+        {
+          "name": "大和工业",
+          "ratio": 0.24,
+          "code": "5444"
+        },
+        {
+          "name": "PAL集团",
+          "ratio": 0.24,
+          "code": "2726"
+        },
+        {
+          "name": "住友房地产开发",
+          "ratio": 0.21,
+          "code": "8830"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 0.18,
+          "code": "4543"
+        }
+      ]
+    },
+    {
+      "date": "2025年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 6.71,
+          "code": "6758"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 4.07,
+          "code": "8316"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.89,
+          "code": "8766"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 3.77,
+          "code": "7203"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 3.71,
+          "code": "7974"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.55,
+          "code": "8306"
+        },
+        {
+          "name": "花王集团",
+          "ratio": 2.97,
+          "code": "4452"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 2.91,
+          "code": "4063"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 2.87,
+          "code": "8001"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 2.83,
+          "code": "7269"
+        }
+      ]
+    },
+    {
+      "date": "2024年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 5.48,
+          "code": "6758"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 4.9,
+          "code": "8001"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 4.27,
+          "code": "7974"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 3.82,
+          "code": "8316"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.67,
+          "code": "8766"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.51,
+          "code": "6861"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 3.43,
+          "code": "6501"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 3.34,
+          "code": "8591"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.11,
+          "code": "4063"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.08,
+          "code": "8306"
+        },
+        {
+          "name": "7&I控股",
+          "ratio": 2.8,
+          "code": "3382"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 2.73,
+          "code": "7269"
+        },
+        {
+          "name": "日本电装",
+          "ratio": 2.6,
+          "code": "6902"
+        },
+        {
+          "name": "花王集团",
+          "ratio": 2.53,
+          "code": "4452"
+        },
+        {
+          "name": "大林组",
+          "ratio": 2.29,
+          "code": "1802"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 2.17,
+          "code": "8035"
+        },
+        {
+          "name": "三菱商事",
+          "ratio": 1.85,
+          "code": "8058"
+        },
+        {
+          "name": "味之素",
+          "ratio": 1.83,
+          "code": "2802"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 1.75,
+          "code": "7741"
+        },
+        {
+          "name": "大冢商会",
+          "ratio": 1.75,
+          "code": "4768"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 1.71,
+          "code": "6098"
+        },
+        {
+          "name": "日本电报电话",
+          "ratio": 1.6,
+          "code": "9432"
+        },
+        {
+          "name": "迅销",
+          "ratio": 1.52,
+          "code": "9983"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 1.51,
+          "code": "4568"
+        },
+        {
+          "name": "Disco Corp",
+          "ratio": 1.5,
+          "code": "6146"
+        },
+        {
+          "name": "三井不动产",
+          "ratio": 1.43,
+          "code": "8801"
+        },
+        {
+          "name": "MONEYFORWARD软件",
+          "ratio": 1.43,
+          "code": "3994"
+        },
+        {
+          "name": "瑞萨电子",
+          "ratio": 1.41,
+          "code": "6723"
+        },
+        {
+          "name": "Yokohama Rubber Co Ltd",
+          "ratio": 1.39,
+          "code": "5101"
+        },
+        {
+          "name": "MS&AD保险",
+          "ratio": 1.39,
+          "code": "8725"
+        },
+        {
+          "name": "软银集团",
+          "ratio": 1.29,
+          "code": "9984"
+        },
+        {
+          "name": "日本交易所",
+          "ratio": 1.25,
+          "code": "8697"
+        },
+        {
+          "name": "CYBERAGENT网络服务",
+          "ratio": 1.18,
+          "code": "4751"
+        },
+        {
+          "name": "大成建设",
+          "ratio": 1.16,
+          "code": "1801"
+        },
+        {
+          "name": "可乐丽",
+          "ratio": 0.95,
+          "code": "3405"
+        },
+        {
+          "name": "KAKAKU日本价格网",
+          "ratio": 0.95,
+          "code": "2371"
+        },
+        {
+          "name": "鹿岛建设",
+          "ratio": 0.82,
+          "code": "1812"
+        },
+        {
+          "name": "爱德万测试",
+          "ratio": 0.78,
+          "code": "6857"
+        },
+        {
+          "name": "Pan Pacific International Holdings Corp",
+          "ratio": 0.77,
+          "code": "7532"
+        },
+        {
+          "name": "神户物产",
+          "ratio": 0.77,
+          "code": "3038"
+        },
+        {
+          "name": "日本涂料",
+          "ratio": 0.71,
+          "code": "4612"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 0.64,
+          "code": "4091"
+        },
+        {
+          "name": "Amano Corp",
+          "ratio": 0.54,
+          "code": "6436"
+        },
+        {
+          "name": "住友房地产开发",
+          "ratio": 0.51,
+          "code": "8830"
+        },
+        {
+          "name": "Sigmaxyz Inc",
+          "ratio": 0.5,
+          "code": "6088"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 0.49,
+          "code": "4543"
+        },
+        {
+          "name": "GMO支付网关",
+          "ratio": 0.48,
+          "code": "3769"
+        },
+        {
+          "name": "BENGO4.COM",
+          "ratio": 0.48,
+          "code": "6027"
+        },
+        {
+          "name": "SCSK信息系统",
+          "ratio": 0.47,
+          "code": "9719"
+        },
+        {
+          "name": "大同特殊钢",
+          "ratio": 0.37,
+          "code": "5471"
+        },
+        {
+          "name": "MEC Co Ltd",
+          "ratio": 0.32,
+          "code": "4971"
+        },
+        {
+          "name": "禧玛诺",
+          "ratio": 0.27,
+          "code": "7309"
+        },
+        {
+          "name": "大和工业",
+          "ratio": 0.22,
+          "code": "5444"
+        },
+        {
+          "name": "PAL集团",
+          "ratio": 0.22,
+          "code": "2726"
+        },
+        {
+          "name": "Ebara Corp.",
+          "ratio": 0.15,
+          "code": "6361"
+        },
+        {
+          "name": "富士电机",
+          "ratio": 0.14,
+          "code": "6504"
+        }
+      ]
+    },
+    {
+      "date": "2024年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "日立公司",
+          "ratio": 5.52,
+          "code": "6501"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 5.19,
+          "code": "8001"
+        },
+        {
+          "name": "索尼",
+          "ratio": 3.93,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.82,
+          "code": "4063"
+        },
+        {
+          "name": "三菱商事",
+          "ratio": 3.81,
+          "code": "8058"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.66,
+          "code": "8766"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.65,
+          "code": "6861"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 3.54,
+          "code": "8591"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 3.38,
+          "code": "8316"
+        },
+        {
+          "name": "爱德万测试",
+          "ratio": 3.25,
+          "code": "6857"
+        }
+      ]
+    },
+    {
+      "date": "2024年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "日立公司",
+          "ratio": 5.52,
+          "code": "6501"
+        },
+        {
+          "name": "MS&AD保险",
+          "ratio": 4.9,
+          "code": "8725"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 4.67,
+          "code": "8766"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 4.26,
+          "code": "8001"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.95,
+          "code": "8306"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 3.81,
+          "code": "6098"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.69,
+          "code": "4063"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.66,
+          "code": "6861"
+        },
+        {
+          "name": "软银集团",
+          "ratio": 3.58,
+          "code": "9984"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 3.3,
+          "code": "8316"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 2.81,
+          "code": "7741"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 2.34,
+          "code": "4568"
+        },
+        {
+          "name": "日本电报电话",
+          "ratio": 2.08,
+          "code": "9432"
+        },
+        {
+          "name": "Pan Pacific International Holdings Corp",
+          "ratio": 2.08,
+          "code": "7532"
+        },
+        {
+          "name": "索尼",
+          "ratio": 2.04,
+          "code": "6758"
+        },
+        {
+          "name": "SMC",
+          "ratio": 1.98,
+          "code": "6273"
+        },
+        {
+          "name": "普利司通公司",
+          "ratio": 1.95,
+          "code": "5108"
+        },
+        {
+          "name": "村田制作所",
+          "ratio": 1.75,
+          "code": "6981"
+        },
+        {
+          "name": "大和工业",
+          "ratio": 1.62,
+          "code": "5444"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 1.51,
+          "code": "8591"
+        },
+        {
+          "name": "日本电装",
+          "ratio": 1.42,
+          "code": "6902"
+        },
+        {
+          "name": "日冷",
+          "ratio": 1.38,
+          "code": "2871"
+        },
+        {
+          "name": "禧玛诺",
+          "ratio": 1.37,
+          "code": "7309"
+        },
+        {
+          "name": "花王集团",
+          "ratio": 1.31,
+          "code": "4452"
+        },
+        {
+          "name": "Yokohama Rubber Co Ltd",
+          "ratio": 1.31,
+          "code": "5101"
+        },
+        {
+          "name": "可乐丽",
+          "ratio": 1.2,
+          "code": "3405"
+        },
+        {
+          "name": "大成建设",
+          "ratio": 1.16,
+          "code": "1801"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 1.15,
+          "code": "8035"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 1.12,
+          "code": "7974"
+        },
+        {
+          "name": "大同特殊钢",
+          "ratio": 1.11,
+          "code": "5471"
+        },
+        {
+          "name": "塩野義",
+          "ratio": 1.08,
+          "code": "4507"
+        },
+        {
+          "name": "Ebara Corp.",
+          "ratio": 1.06,
+          "code": "6361"
+        },
+        {
+          "name": "角川集团",
+          "ratio": 1.01,
+          "code": "9468"
+        },
+        {
+          "name": "GMO支付网关",
+          "ratio": 0.86,
+          "code": "3769"
+        },
+        {
+          "name": "万代南梦宫控股",
+          "ratio": 0.85,
+          "code": "7832"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 0.84,
+          "code": "7269"
+        },
+        {
+          "name": "Infroneer Holdings Inc",
+          "ratio": 0.78,
+          "code": "5076"
+        },
+        {
+          "name": "三井高科技",
+          "ratio": 0.7,
+          "code": "6966"
+        },
+        {
+          "name": "PARK24",
+          "ratio": 0.66,
+          "code": "4666"
+        },
+        {
+          "name": "鹿岛建设",
+          "ratio": 0.65,
+          "code": "1812"
+        },
+        {
+          "name": "Rorze Corp",
+          "ratio": 0.65,
+          "code": "6323"
+        },
+        {
+          "name": "爱德万测试",
+          "ratio": 0.64,
+          "code": "6857"
+        },
+        {
+          "name": "史克威尔艾尼克斯控股",
+          "ratio": 0.62,
+          "code": "9684"
+        },
+        {
+          "name": "MONEYFORWARD软件",
+          "ratio": 0.62,
+          "code": "3994"
+        },
+        {
+          "name": "沢井集团控股",
+          "ratio": 0.6,
+          "code": "4887"
+        },
+        {
+          "name": "东京应化工业",
+          "ratio": 0.59,
+          "code": "4186"
+        },
+        {
+          "name": "Amano Corp",
+          "ratio": 0.56,
+          "code": "6436"
+        },
+        {
+          "name": "Sigmaxyz Inc",
+          "ratio": 0.53,
+          "code": "6088"
+        },
+        {
+          "name": "五洋建设",
+          "ratio": 0.5,
+          "code": "1893"
+        },
+        {
+          "name": "味之素",
+          "ratio": 0.49,
+          "code": "2802"
+        },
+        {
+          "name": "日清制粉",
+          "ratio": 0.47,
+          "code": "2002"
+        },
+        {
+          "name": "MEC Co Ltd",
+          "ratio": 0.46,
+          "code": "4971"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 0.46,
+          "code": "4091"
+        },
+        {
+          "name": "大冢商会",
+          "ratio": 0.45,
+          "code": "4768"
+        },
+        {
+          "name": "PAL集团",
+          "ratio": 0.44,
+          "code": "2726"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 0.44,
+          "code": "4543"
+        },
+        {
+          "name": "三菱电机",
+          "ratio": 0.42,
+          "code": "6503"
+        },
+        {
+          "name": "大金工业",
+          "ratio": 0.41,
+          "code": "6367"
+        },
+        {
+          "name": "松下",
+          "ratio": 0.37,
+          "code": "6752"
+        },
+        {
+          "name": "Visional Inc",
+          "ratio": 0.36,
+          "code": "4194"
+        },
+        {
+          "name": "Shimamura Co Ltd",
+          "ratio": 0.26,
+          "code": "8227"
+        },
+        {
+          "name": "富士电机",
+          "ratio": 0.16,
+          "code": "6504"
+        },
+        {
+          "name": "WEALTH NAVI INC",
+          "ratio": 0.08,
+          "code": "7342"
+        }
+      ]
+    },
+    {
+      "date": "2024年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "日立公司",
+          "ratio": 4.34,
+          "code": "6501"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.19,
+          "code": "4063"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.83,
+          "code": "8306"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 3.79,
+          "code": "8001"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.75,
+          "code": "8766"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.73,
+          "code": "6861"
+        },
+        {
+          "name": "日本电报电话",
+          "ratio": 3.54,
+          "code": "9432"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 3.2,
+          "code": "6098"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 3.05,
+          "code": "7741"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 2.95,
+          "code": "8316"
+        }
+      ]
+    },
+    {
+      "date": "2023年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 5.22,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.47,
+          "code": "4063"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 3.89,
+          "code": "8001"
+        },
+        {
+          "name": "日本电报电话",
+          "ratio": 3.69,
+          "code": "9432"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.24,
+          "code": "8306"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.06,
+          "code": "8766"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 2.82,
+          "code": "6098"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 2.72,
+          "code": "7741"
+        },
+        {
+          "name": "普利司通公司",
+          "ratio": 2.58,
+          "code": "5108"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 2.48,
+          "code": "8316"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 2.45,
+          "code": "6861"
+        },
+        {
+          "name": "SMC",
+          "ratio": 2.23,
+          "code": "6273"
+        },
+        {
+          "name": "KDDI电信",
+          "ratio": 2.0,
+          "code": "9433"
+        },
+        {
+          "name": "日本电装",
+          "ratio": 1.9,
+          "code": "6902"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 1.82,
+          "code": "6501"
+        },
+        {
+          "name": "大和工业",
+          "ratio": 1.73,
+          "code": "5444"
+        },
+        {
+          "name": "瑞萨电子",
+          "ratio": 1.7,
+          "code": "6723"
+        },
+        {
+          "name": "Rorze Corp",
+          "ratio": 1.64,
+          "code": "6323"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 1.62,
+          "code": "4568"
+        },
+        {
+          "name": "大金工业",
+          "ratio": 1.61,
+          "code": "6367"
+        },
+        {
+          "name": "Pan Pacific International Holdings Corp",
+          "ratio": 1.56,
+          "code": "7532"
+        },
+        {
+          "name": "日本制铁",
+          "ratio": 1.53,
+          "code": "5401"
+        },
+        {
+          "name": "Yokohama Rubber Co Ltd",
+          "ratio": 1.52,
+          "code": "5101"
+        },
+        {
+          "name": "东京应化工业",
+          "ratio": 1.52,
+          "code": "4186"
+        },
+        {
+          "name": "富士通",
+          "ratio": 1.49,
+          "code": "6702"
+        },
+        {
+          "name": "日挥控股",
+          "ratio": 1.48,
+          "code": "1963"
+        },
+        {
+          "name": "Infroneer Holdings Inc",
+          "ratio": 1.4,
+          "code": "5076"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 1.37,
+          "code": "8591"
+        },
+        {
+          "name": "村田制作所",
+          "ratio": 1.34,
+          "code": "6981"
+        },
+        {
+          "name": "沢井集团控股",
+          "ratio": 1.33,
+          "code": "4887"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 1.22,
+          "code": "8035"
+        },
+        {
+          "name": "似鸟控股",
+          "ratio": 1.17,
+          "code": "9843"
+        },
+        {
+          "name": "角川集团",
+          "ratio": 1.13,
+          "code": "9468"
+        },
+        {
+          "name": "朝日",
+          "ratio": 1.09,
+          "code": "2502"
+        },
+        {
+          "name": "禧玛诺",
+          "ratio": 1.06,
+          "code": "7309"
+        },
+        {
+          "name": "东海炭素",
+          "ratio": 1.0,
+          "code": "5301"
+        },
+        {
+          "name": "Ebara Corp.",
+          "ratio": 0.97,
+          "code": "6361"
+        },
+        {
+          "name": "可乐丽",
+          "ratio": 0.95,
+          "code": "3405"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 0.94,
+          "code": "4543"
+        },
+        {
+          "name": "Shimamura Co Ltd",
+          "ratio": 0.88,
+          "code": "8227"
+        },
+        {
+          "name": "塩野義",
+          "ratio": 0.85,
+          "code": "4507"
+        },
+        {
+          "name": "PARK24",
+          "ratio": 0.84,
+          "code": "4666"
+        },
+        {
+          "name": "万代南梦宫控股",
+          "ratio": 0.82,
+          "code": "7832"
+        },
+        {
+          "name": "史克威尔艾尼克斯控股",
+          "ratio": 0.81,
+          "code": "9684"
+        },
+        {
+          "name": "PAL集团",
+          "ratio": 0.68,
+          "code": "2726"
+        },
+        {
+          "name": "花王集团",
+          "ratio": 0.67,
+          "code": "4452"
+        },
+        {
+          "name": "五洋建设",
+          "ratio": 0.64,
+          "code": "1893"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 0.62,
+          "code": "7974"
+        },
+        {
+          "name": "日冷",
+          "ratio": 0.61,
+          "code": "2871"
+        },
+        {
+          "name": "Toyo Gosei Co Ltd",
+          "ratio": 0.57,
+          "code": "4970"
+        },
+        {
+          "name": "Sigmaxyz Inc",
+          "ratio": 0.57,
+          "code": "6088"
+        },
+        {
+          "name": "味之素",
+          "ratio": 0.56,
+          "code": "2802"
+        },
+        {
+          "name": "东海客运",
+          "ratio": 0.53,
+          "code": "9022"
+        },
+        {
+          "name": "Visional Inc",
+          "ratio": 0.51,
+          "code": "4194"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 0.45,
+          "code": "4091"
+        },
+        {
+          "name": "Fujimi Inc",
+          "ratio": 0.45,
+          "code": "5384"
+        },
+        {
+          "name": "松下",
+          "ratio": 0.44,
+          "code": "6752"
+        },
+        {
+          "name": "富士电机",
+          "ratio": 0.37,
+          "code": "6504"
+        },
+        {
+          "name": "卡西欧",
+          "ratio": 0.36,
+          "code": "6952"
+        },
+        {
+          "name": "日本涂料",
+          "ratio": 0.29,
+          "code": "4612"
+        },
+        {
+          "name": "7&I控股",
+          "ratio": 0.26,
+          "code": "3382"
+        },
+        {
+          "name": "WEALTH NAVI INC",
+          "ratio": 0.12,
+          "code": "7342"
+        }
+      ]
+    },
+    {
+      "date": "2023年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 5.08,
+          "code": "6758"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 4.84,
+          "code": "8306"
+        },
+        {
+          "name": "日本电装",
+          "ratio": 3.8,
+          "code": "6902"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.69,
+          "code": "4063"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 3.47,
+          "code": "8316"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.45,
+          "code": "8766"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 3.42,
+          "code": "8001"
+        },
+        {
+          "name": "日本电报电话",
+          "ratio": 3.17,
+          "code": "9432"
+        },
+        {
+          "name": "普利司通公司",
+          "ratio": 2.75,
+          "code": "5108"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 2.52,
+          "code": "8591"
+        }
+      ]
+    },
+    {
+      "date": "2023年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 4.96,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.06,
+          "code": "4063"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.97,
+          "code": "8306"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.81,
+          "code": "8766"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 3.55,
+          "code": "8001"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 2.83,
+          "code": "6861"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 2.81,
+          "code": "8316"
+        },
+        {
+          "name": "普利司通公司",
+          "ratio": 2.69,
+          "code": "5108"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 2.59,
+          "code": "8035"
+        },
+        {
+          "name": "日本电装",
+          "ratio": 2.38,
+          "code": "6902"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 2.31,
+          "code": "8591"
+        },
+        {
+          "name": "大金工业",
+          "ratio": 2.17,
+          "code": "6367"
+        },
+        {
+          "name": "住友电工",
+          "ratio": 2.11,
+          "code": "5802"
+        },
+        {
+          "name": "瑞萨电子",
+          "ratio": 1.9,
+          "code": "6723"
+        },
+        {
+          "name": "史克威尔艾尼克斯控股",
+          "ratio": 1.88,
+          "code": "9684"
+        },
+        {
+          "name": "角川集团",
+          "ratio": 1.88,
+          "code": "9468"
+        },
+        {
+          "name": "Shimadzu Corp",
+          "ratio": 1.81,
+          "code": "7701"
+        },
+        {
+          "name": "日本财产保险",
+          "ratio": 1.7,
+          "code": "8630"
+        },
+        {
+          "name": "禧玛诺",
+          "ratio": 1.7,
+          "code": "7309"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 1.69,
+          "code": "4568"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 1.67,
+          "code": "6501"
+        },
+        {
+          "name": "Infroneer Holdings Inc",
+          "ratio": 1.63,
+          "code": "5076"
+        },
+        {
+          "name": "味之素",
+          "ratio": 1.59,
+          "code": "2802"
+        },
+        {
+          "name": "住友金属矿山",
+          "ratio": 1.54,
+          "code": "5713"
+        },
+        {
+          "name": "日挥控股",
+          "ratio": 1.52,
+          "code": "1963"
+        },
+        {
+          "name": "Yokohama Rubber Co Ltd",
+          "ratio": 1.45,
+          "code": "5101"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 1.43,
+          "code": "4543"
+        },
+        {
+          "name": "东海炭素",
+          "ratio": 1.34,
+          "code": "5301"
+        },
+        {
+          "name": "三浦工业",
+          "ratio": 1.33,
+          "code": "6005"
+        },
+        {
+          "name": "米思米",
+          "ratio": 1.31,
+          "code": "9962"
+        },
+        {
+          "name": "万代南梦宫控股",
+          "ratio": 1.28,
+          "code": "7832"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 1.22,
+          "code": "4091"
+        },
+        {
+          "name": "朝日",
+          "ratio": 1.2,
+          "code": "2502"
+        },
+        {
+          "name": "东海客运",
+          "ratio": 1.04,
+          "code": "9022"
+        },
+        {
+          "name": "Fujimi Inc",
+          "ratio": 1.02,
+          "code": "5384"
+        },
+        {
+          "name": "富士通",
+          "ratio": 0.98,
+          "code": "6702"
+        },
+        {
+          "name": "PARK24",
+          "ratio": 0.91,
+          "code": "4666"
+        },
+        {
+          "name": "本田汽车",
+          "ratio": 0.91,
+          "code": "7267"
+        },
+        {
+          "name": "MEC Co Ltd",
+          "ratio": 0.91,
+          "code": "4971"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 0.9,
+          "code": "7741"
+        },
+        {
+          "name": "富士电机",
+          "ratio": 0.87,
+          "code": "6504"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 0.82,
+          "code": "7974"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 0.77,
+          "code": "6098"
+        },
+        {
+          "name": "NET ONE SYSTEM S CO LTD",
+          "ratio": 0.72,
+          "code": "7518"
+        },
+        {
+          "name": "Toyo Gosei Co Ltd",
+          "ratio": 0.72,
+          "code": "4970"
+        },
+        {
+          "name": "东京应化工业",
+          "ratio": 0.61,
+          "code": "4186"
+        },
+        {
+          "name": "东陶",
+          "ratio": 0.59,
+          "code": "5332"
+        },
+        {
+          "name": "东日本旅客铁道株式会社",
+          "ratio": 0.59,
+          "code": "9020"
+        },
+        {
+          "name": "日本涂料",
+          "ratio": 0.59,
+          "code": "4612"
+        },
+        {
+          "name": "日本航空",
+          "ratio": 0.55,
+          "code": "9201"
+        },
+        {
+          "name": "Sigmaxyz Inc",
+          "ratio": 0.55,
+          "code": "6088"
+        },
+        {
+          "name": "7&I控股",
+          "ratio": 0.54,
+          "code": "3382"
+        },
+        {
+          "name": "PAL集团",
+          "ratio": 0.52,
+          "code": "2726"
+        },
+        {
+          "name": "Rorze Corp",
+          "ratio": 0.51,
+          "code": "6323"
+        },
+        {
+          "name": "Visional Inc",
+          "ratio": 0.48,
+          "code": "4194"
+        },
+        {
+          "name": "TAKARA BIO",
+          "ratio": 0.47,
+          "code": "4974"
+        },
+        {
+          "name": "迅销",
+          "ratio": 0.45,
+          "code": "9983"
+        },
+        {
+          "name": "罗姆半导体",
+          "ratio": 0.4,
+          "code": "6963"
+        },
+        {
+          "name": "卡西欧",
+          "ratio": 0.35,
+          "code": "6952"
+        },
+        {
+          "name": "日本制铁",
+          "ratio": 0.33,
+          "code": "5401"
+        },
+        {
+          "name": "Shimamura Co Ltd",
+          "ratio": 0.31,
+          "code": "8227"
+        },
+        {
+          "name": "村田制作所",
+          "ratio": 0.31,
+          "code": "6981"
+        },
+        {
+          "name": "Ryohin Keikaku Ltd",
+          "ratio": 0.3,
+          "code": "7453"
+        },
+        {
+          "name": "Kyowa Kirin Co Ltd",
+          "ratio": 0.29,
+          "code": "4151"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 0.29,
+          "code": "7269"
+        },
+        {
+          "name": "NIPPON PARKING DEVELOPMENT",
+          "ratio": 0.21,
+          "code": "2353"
+        },
+        {
+          "name": "太阳诱电",
+          "ratio": 0.15,
+          "code": "6976"
+        },
+        {
+          "name": "WEALTH NAVI INC",
+          "ratio": 0.08,
+          "code": "7342"
+        }
+      ]
+    },
+    {
+      "date": "2023年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 4.62,
+          "code": "6758"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 4.33,
+          "code": "6861"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.31,
+          "code": "4063"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 3.14,
+          "code": "8001"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 2.8,
+          "code": "8035"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 2.67,
+          "code": "8306"
+        },
+        {
+          "name": "普利司通公司",
+          "ratio": 2.64,
+          "code": "5108"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 2.56,
+          "code": "8316"
+        },
+        {
+          "name": "大金工业",
+          "ratio": 2.54,
+          "code": "6367"
+        },
+        {
+          "name": "住友金属矿山",
+          "ratio": 2.44,
+          "code": "5713"
+        }
+      ]
+    },
+    {
+      "date": "2022年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "基恩士",
+          "ratio": 3.65,
+          "code": "6861"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.53,
+          "code": "4063"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 3.43,
+          "code": "8316"
+        },
+        {
+          "name": "索尼",
+          "ratio": 3.43,
+          "code": "6758"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 3.35,
+          "code": "8001"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 3.25,
+          "code": "8306"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 3.02,
+          "code": "7974"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 2.88,
+          "code": "8766"
+        },
+        {
+          "name": "住友金属矿山",
+          "ratio": 2.51,
+          "code": "5713"
+        },
+        {
+          "name": "大金工业",
+          "ratio": 2.42,
+          "code": "6367"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 2.21,
+          "code": "4568"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 2.19,
+          "code": "8591"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 2.16,
+          "code": "4543"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 2.14,
+          "code": "7741"
+        },
+        {
+          "name": "东海客运",
+          "ratio": 2.08,
+          "code": "9022"
+        },
+        {
+          "name": "史克威尔艾尼克斯控股",
+          "ratio": 2.01,
+          "code": "9684"
+        },
+        {
+          "name": "普利司通公司",
+          "ratio": 2.0,
+          "code": "5108"
+        },
+        {
+          "name": "Ryohin Keikaku Ltd",
+          "ratio": 1.81,
+          "code": "7453"
+        },
+        {
+          "name": "日本财产保险",
+          "ratio": 1.79,
+          "code": "8630"
+        },
+        {
+          "name": "日本电装",
+          "ratio": 1.77,
+          "code": "6902"
+        },
+        {
+          "name": "住友电工",
+          "ratio": 1.76,
+          "code": "5802"
+        },
+        {
+          "name": "T&D Holdings, Inc.",
+          "ratio": 1.69,
+          "code": "8795"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 1.69,
+          "code": "6098"
+        },
+        {
+          "name": "尤妮佳",
+          "ratio": 1.69,
+          "code": "8113"
+        },
+        {
+          "name": "野村综合研究所",
+          "ratio": 1.63,
+          "code": "4307"
+        },
+        {
+          "name": "三浦工业",
+          "ratio": 1.51,
+          "code": "6005"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 1.48,
+          "code": "6501"
+        },
+        {
+          "name": "7&I控股",
+          "ratio": 1.41,
+          "code": "3382"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 1.38,
+          "code": "8035"
+        },
+        {
+          "name": "丸井",
+          "ratio": 1.28,
+          "code": "8252"
+        },
+        {
+          "name": "米思米",
+          "ratio": 1.26,
+          "code": "9962"
+        },
+        {
+          "name": "富士通",
+          "ratio": 1.25,
+          "code": "6702"
+        },
+        {
+          "name": "Shimadzu Corp",
+          "ratio": 1.08,
+          "code": "7701"
+        },
+        {
+          "name": "朝日",
+          "ratio": 1.08,
+          "code": "2502"
+        },
+        {
+          "name": "迅销",
+          "ratio": 1.07,
+          "code": "9983"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 1.06,
+          "code": "4091"
+        },
+        {
+          "name": "旭化成",
+          "ratio": 1.05,
+          "code": "3407"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 1.0,
+          "code": "7203"
+        },
+        {
+          "name": "西日本客运",
+          "ratio": 0.99,
+          "code": "9021"
+        },
+        {
+          "name": "NET ONE SYSTEM S CO LTD",
+          "ratio": 0.97,
+          "code": "7518JP"
+        },
+        {
+          "name": "Fujimi Inc",
+          "ratio": 0.94,
+          "code": "5384"
+        },
+        {
+          "name": "本田汽车",
+          "ratio": 0.91,
+          "code": "7267"
+        },
+        {
+          "name": "东日本旅客铁道株式会社",
+          "ratio": 0.9,
+          "code": "9020"
+        },
+        {
+          "name": "PARK24",
+          "ratio": 0.83,
+          "code": "4666"
+        },
+        {
+          "name": "卡西欧",
+          "ratio": 0.78,
+          "code": "6952"
+        },
+        {
+          "name": "TOYO TANSO",
+          "ratio": 0.75,
+          "code": "5310"
+        },
+        {
+          "name": "日本航空",
+          "ratio": 0.72,
+          "code": "9201"
+        },
+        {
+          "name": "富士电机",
+          "ratio": 0.65,
+          "code": "6504"
+        },
+        {
+          "name": "TAKARA BIO",
+          "ratio": 0.63,
+          "code": "4974"
+        },
+        {
+          "name": "久保田",
+          "ratio": 0.6,
+          "code": "6326"
+        },
+        {
+          "name": "AIN控股",
+          "ratio": 0.54,
+          "code": "9627"
+        },
+        {
+          "name": "PAL集团",
+          "ratio": 0.52,
+          "code": "2726"
+        },
+        {
+          "name": "RISO KYOIKU",
+          "ratio": 0.48,
+          "code": "4714"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 0.47,
+          "code": "7269"
+        },
+        {
+          "name": "罗姆半导体",
+          "ratio": 0.46,
+          "code": "6963"
+        },
+        {
+          "name": "三菱化学",
+          "ratio": 0.46,
+          "code": "4188"
+        },
+        {
+          "name": "卡普空",
+          "ratio": 0.43,
+          "code": "9697"
+        },
+        {
+          "name": "Kyowa Kirin Co Ltd",
+          "ratio": 0.43,
+          "code": "4151"
+        },
+        {
+          "name": "Toyo Gosei Co Ltd",
+          "ratio": 0.42,
+          "code": "4970"
+        },
+        {
+          "name": "日本并购中心控股",
+          "ratio": 0.4,
+          "code": "2127"
+        },
+        {
+          "name": "JSR CORP",
+          "ratio": 0.34,
+          "code": "4185JP"
+        },
+        {
+          "name": "NIPPON PARKING DEVELOPMENT",
+          "ratio": 0.34,
+          "code": "2353"
+        },
+        {
+          "name": "村田制作所",
+          "ratio": 0.32,
+          "code": "6981"
+        },
+        {
+          "name": "东陶",
+          "ratio": 0.28,
+          "code": "5332"
+        },
+        {
+          "name": "万代南梦宫控股",
+          "ratio": 0.26,
+          "code": "7832"
+        },
+        {
+          "name": "日本涂料",
+          "ratio": 0.25,
+          "code": "4612"
+        },
+        {
+          "name": "关西涂料",
+          "ratio": 0.24,
+          "code": "4613"
+        },
+        {
+          "name": "胜高",
+          "ratio": 0.19,
+          "code": "3436"
+        },
+        {
+          "name": "太阳诱电",
+          "ratio": 0.19,
+          "code": "6976"
+        },
+        {
+          "name": "WEALTH NAVI INC",
+          "ratio": 0.11,
+          "code": "7342JP"
+        }
+      ]
+    },
+    {
+      "date": "2022年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "任天堂",
+          "ratio": 3.85,
+          "code": "7974"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.57,
+          "code": "6861"
+        },
+        {
+          "name": "索尼",
+          "ratio": 3.42,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.2,
+          "code": "4063"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 2.86,
+          "code": "8001"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 2.8,
+          "code": "7741"
+        },
+        {
+          "name": "大金工业",
+          "ratio": 2.74,
+          "code": "6367"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 2.7,
+          "code": "8766"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 2.57,
+          "code": "4568"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 2.53,
+          "code": "8591"
+        }
+      ]
+    },
+    {
+      "date": "2022年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 5.38,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.9,
+          "code": "4063"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 3.46,
+          "code": "7203"
+        },
+        {
+          "name": "欧力士",
+          "ratio": 3.31,
+          "code": "8591"
+        },
+        {
+          "name": "日本伊藤忠商事株式会社",
+          "ratio": 3.0,
+          "code": "8001"
+        },
+        {
+          "name": "大金工业",
+          "ratio": 2.68,
+          "code": "6367"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 2.66,
+          "code": "8306"
+        },
+        {
+          "name": "第一三共",
+          "ratio": 2.54,
+          "code": "4568"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 2.32,
+          "code": "4543"
+        },
+        {
+          "name": "保谷光学",
+          "ratio": 2.24,
+          "code": "7741"
+        },
+        {
+          "name": "日本财产保险",
+          "ratio": 2.21,
+          "code": "8630"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 2.11,
+          "code": "8766"
+        },
+        {
+          "name": "普利司通公司",
+          "ratio": 2.09,
+          "code": "5108"
+        },
+        {
+          "name": "T&D Holdings, Inc.",
+          "ratio": 2.05,
+          "code": "8795"
+        },
+        {
+          "name": "迅销",
+          "ratio": 2.04,
+          "code": "9983"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 1.9,
+          "code": "6861"
+        },
+        {
+          "name": "日本电装",
+          "ratio": 1.89,
+          "code": "6902"
+        },
+        {
+          "name": "JSR Corp",
+          "ratio": 1.81,
+          "code": "4185JP"
+        },
+        {
+          "name": "本田汽车",
+          "ratio": 1.76,
+          "code": "7267"
+        },
+        {
+          "name": "瑞可利控股",
+          "ratio": 1.54,
+          "code": "6098"
+        },
+        {
+          "name": "罗姆半导体",
+          "ratio": 1.52,
+          "code": "6963"
+        },
+        {
+          "name": "日立公司",
+          "ratio": 1.45,
+          "code": "6501"
+        },
+        {
+          "name": "万代南梦宫控股",
+          "ratio": 1.38,
+          "code": "7832"
+        },
+        {
+          "name": "朝日",
+          "ratio": 1.37,
+          "code": "2502"
+        },
+        {
+          "name": "住友电工",
+          "ratio": 1.35,
+          "code": "5802"
+        },
+        {
+          "name": "尤妮佳",
+          "ratio": 1.31,
+          "code": "8113"
+        },
+        {
+          "name": "三井住友金融集团",
+          "ratio": 1.29,
+          "code": "8316"
+        },
+        {
+          "name": "日本交易所",
+          "ratio": 1.25,
+          "code": "8697"
+        },
+        {
+          "name": "SMC",
+          "ratio": 1.24,
+          "code": "6273"
+        },
+        {
+          "name": "丸井",
+          "ratio": 1.21,
+          "code": "8252"
+        },
+        {
+          "name": "史克威尔艾尼克斯控股",
+          "ratio": 1.16,
+          "code": "9684"
+        },
+        {
+          "name": "久保田",
+          "ratio": 1.12,
+          "code": "6326"
+        },
+        {
+          "name": "富士通",
+          "ratio": 1.11,
+          "code": "6702"
+        },
+        {
+          "name": "旭化成",
+          "ratio": 1.11,
+          "code": "3407"
+        },
+        {
+          "name": "村田制作所",
+          "ratio": 1.09,
+          "code": "6981"
+        },
+        {
+          "name": "东海客运",
+          "ratio": 1.09,
+          "code": "9022"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 1.08,
+          "code": "4091"
+        },
+        {
+          "name": "卡普空",
+          "ratio": 0.97,
+          "code": "9697"
+        },
+        {
+          "name": "Visional Inc",
+          "ratio": 0.9,
+          "code": "4194"
+        },
+        {
+          "name": "电通集团",
+          "ratio": 0.87,
+          "code": "4324"
+        },
+        {
+          "name": "7&I控股",
+          "ratio": 0.87,
+          "code": "3382"
+        },
+        {
+          "name": "三菱化学",
+          "ratio": 0.86,
+          "code": "4188"
+        },
+        {
+          "name": "三浦工业",
+          "ratio": 0.8,
+          "code": "6005"
+        },
+        {
+          "name": "西日本客运",
+          "ratio": 0.78,
+          "code": "9021"
+        },
+        {
+          "name": "米思米",
+          "ratio": 0.74,
+          "code": "9962"
+        },
+        {
+          "name": "卡西欧",
+          "ratio": 0.67,
+          "code": "6952"
+        },
+        {
+          "name": "TAKARA BIO",
+          "ratio": 0.67,
+          "code": "4974"
+        },
+        {
+          "name": "Disco Corp",
+          "ratio": 0.66,
+          "code": "6146"
+        },
+        {
+          "name": "利富高塑胶",
+          "ratio": 0.62,
+          "code": "7988"
+        },
+        {
+          "name": "野村综合研究所",
+          "ratio": 0.59,
+          "code": "4307"
+        },
+        {
+          "name": "Anritsu Corp",
+          "ratio": 0.55,
+          "code": "6754"
+        },
+        {
+          "name": "东京电子",
+          "ratio": 0.55,
+          "code": "8035"
+        },
+        {
+          "name": "住友金属矿山",
+          "ratio": 0.54,
+          "code": "5713"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 0.48,
+          "code": "7974"
+        },
+        {
+          "name": "Appier Group Inc",
+          "ratio": 0.46,
+          "code": "4180"
+        },
+        {
+          "name": "铃木汽车(Suzuki)",
+          "ratio": 0.46,
+          "code": "7269"
+        },
+        {
+          "name": "雅马哈摩托",
+          "ratio": 0.45,
+          "code": "7272"
+        },
+        {
+          "name": "太阳诱电",
+          "ratio": 0.42,
+          "code": "6976"
+        },
+        {
+          "name": "Kyowa Kirin Co Ltd",
+          "ratio": 0.41,
+          "code": "4151"
+        },
+        {
+          "name": "RISO KYOIKU",
+          "ratio": 0.37,
+          "code": "4714"
+        },
+        {
+          "name": "胜高",
+          "ratio": 0.33,
+          "code": "3436"
+        },
+        {
+          "name": "TOYO TANSO",
+          "ratio": 0.32,
+          "code": "5310"
+        },
+        {
+          "name": "关西涂料",
+          "ratio": 0.24,
+          "code": "4613"
+        },
+        {
+          "name": "日本涂料",
+          "ratio": 0.22,
+          "code": "4612"
+        },
+        {
+          "name": "尼得科",
+          "ratio": 0.21,
+          "code": "6594"
+        },
+        {
+          "name": "Freee Kk",
+          "ratio": 0.15,
+          "code": "4478"
+        },
+        {
+          "name": "Wealthnav i Inc",
+          "ratio": 0.13,
+          "code": "7342JP"
+        }
+      ]
+    },
+    {
+      "date": "2022年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 5.92,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.55,
+          "code": "4063"
+        },
+        {
+          "name": "欧力士株式会社",
+          "ratio": 4.04,
+          "code": "8591"
+        },
+        {
+          "name": "伊藤忠商事",
+          "ratio": 3.73,
+          "code": "8001"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 3.35,
+          "code": "7203"
+        },
+        {
+          "name": "三菱日联金融集团",
+          "ratio": 2.55,
+          "code": "8306"
+        },
+        {
+          "name": "豪雅公司",
+          "ratio": 2.53,
+          "code": "7741"
+        },
+        {
+          "name": "泰尔茂",
+          "ratio": 2.1,
+          "code": "4543"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 1.98,
+          "code": "6861"
+        },
+        {
+          "name": "碧桂园服务",
+          "ratio": 1.96,
+          "code": "06098"
+        }
+      ]
+    },
+    {
+      "date": "2021年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 6.43,
+          "code": "6758"
+        },
+        {
+          "name": "欧力士株式会社",
+          "ratio": 4.06,
+          "code": "8591"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.02,
+          "code": "4063"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 2.92,
+          "code": "6861"
+        },
+        {
+          "name": "伊藤忠商事",
+          "ratio": 2.78,
+          "code": "8001"
+        },
+        {
+          "name": "豪雅公司",
+          "ratio": 2.7,
+          "code": "7741"
+        },
+        {
+          "name": "Sompo公司",
+          "ratio": 2.61,
+          "code": "8630"
+        },
+        {
+          "name": "碧桂园服务",
+          "ratio": 2.56,
+          "code": "06098"
+        },
+        {
+          "name": "T&D控股",
+          "ratio": 2.21,
+          "code": "8795"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 2.18,
+          "code": "7203"
+        },
+        {
+          "name": "Nidec Corp",
+          "ratio": 2.14,
+          "code": "6594"
+        },
+        {
+          "name": "Terumo",
+          "ratio": 2.04,
+          "code": "4543"
+        },
+        {
+          "name": "Mitsubish i Chemical Holdings Corp",
+          "ratio": 1.99,
+          "code": "4188"
+        },
+        {
+          "name": "Sumitomo Metal Mining Co Ltd",
+          "ratio": 1.95,
+          "code": "5713"
+        },
+        {
+          "name": "Daiichi Sankyo Co Ltd",
+          "ratio": 1.89,
+          "code": "4568"
+        },
+        {
+          "name": "Shionogi & Co Ltd",
+          "ratio": 1.73,
+          "code": "4507"
+        },
+        {
+          "name": "Kubota Corp",
+          "ratio": 1.59,
+          "code": "6326"
+        },
+        {
+          "name": "JSR Corp",
+          "ratio": 1.57,
+          "code": "4185"
+        },
+        {
+          "name": "Bridgesto ne Corp",
+          "ratio": 1.56,
+          "code": "5108"
+        },
+        {
+          "name": "Bandai Namco Holdings Inc",
+          "ratio": 1.45,
+          "code": "7832"
+        },
+        {
+          "name": "SMC Corp",
+          "ratio": 1.42,
+          "code": "6273"
+        },
+        {
+          "name": "Casio Computer Co Ltd",
+          "ratio": 1.29,
+          "code": "6952"
+        },
+        {
+          "name": "Tokio Marine Holdings Inc",
+          "ratio": 1.27,
+          "code": "8766"
+        },
+        {
+          "name": "Honda Motor Co Ltd",
+          "ratio": 1.25,
+          "code": "7267"
+        },
+        {
+          "name": "Fujitsu Ltd",
+          "ratio": 1.23,
+          "code": "6702"
+        },
+        {
+          "name": "Rohm Co Ltd",
+          "ratio": 1.23,
+          "code": "6963"
+        },
+        {
+          "name": "Hitachi Ltd",
+          "ratio": 1.21,
+          "code": "6501"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 1.17,
+          "code": "4091"
+        },
+        {
+          "name": "Japan Exchange Group Inc",
+          "ratio": 1.15,
+          "code": "8697"
+        },
+        {
+          "name": "Murata Manufact uring Co Ltd",
+          "ratio": 1.14,
+          "code": "6981"
+        },
+        {
+          "name": "Rinnai Corp",
+          "ratio": 1.11,
+          "code": "5947"
+        },
+        {
+          "name": "Anritsu Corp",
+          "ratio": 1.08,
+          "code": "6754"
+        },
+        {
+          "name": "Unicharm Corp",
+          "ratio": 1.06,
+          "code": "8113"
+        },
+        {
+          "name": "Sumitomo Electric Industries Ltd",
+          "ratio": 1.06,
+          "code": "5802"
+        },
+        {
+          "name": "Raksul Inc",
+          "ratio": 1.04,
+          "code": "4384"
+        },
+        {
+          "name": "Nomura Research Institute Ltd",
+          "ratio": 1.02,
+          "code": "4307"
+        },
+        {
+          "name": "Central Japan Railway Co",
+          "ratio": 0.96,
+          "code": "9022"
+        },
+        {
+          "name": "Takara",
+          "ratio": 0.92,
+          "code": "4974"
+        },
+        {
+          "name": "Mitsubish i UFJ Lease & Finance Co Ltd",
+          "ratio": 0.9,
+          "code": "8593"
+        },
+        {
+          "name": "Marui Group Co Ltd",
+          "ratio": 0.82,
+          "code": "8252"
+        },
+        {
+          "name": "Asahi Group Holdings Ltd",
+          "ratio": 0.77,
+          "code": "2502"
+        },
+        {
+          "name": "Kansai Paint Co Ltd",
+          "ratio": 0.73,
+          "code": "4613"
+        },
+        {
+          "name": "Tokyo Electron Ltd",
+          "ratio": 0.73,
+          "code": "8035"
+        },
+        {
+          "name": "West Japan Railway Co Ltd",
+          "ratio": 0.72,
+          "code": "9021"
+        },
+        {
+          "name": "Mitsui Fudosan Co Ltd",
+          "ratio": 0.7,
+          "code": "8801"
+        },
+        {
+          "name": "Kyowa Kirin Co Ltd",
+          "ratio": 0.7,
+          "code": "4151"
+        },
+        {
+          "name": "Miura Co Ltd",
+          "ratio": 0.7,
+          "code": "6005"
+        },
+        {
+          "name": "Misumi Group Inc",
+          "ratio": 0.69,
+          "code": "9962"
+        },
+        {
+          "name": "SoftBank Group Corp",
+          "ratio": 0.68,
+          "code": "9984"
+        },
+        {
+          "name": "Rakuten Inc",
+          "ratio": 0.67,
+          "code": "4755"
+        },
+        {
+          "name": "Kadokaw a Corp",
+          "ratio": 0.66,
+          "code": "9468"
+        },
+        {
+          "name": "Asahi Kasei Corp",
+          "ratio": 0.66,
+          "code": "3407"
+        },
+        {
+          "name": "Appier Group Inc",
+          "ratio": 0.65,
+          "code": "4180"
+        },
+        {
+          "name": "Disco Corp",
+          "ratio": 0.65,
+          "code": "6146"
+        },
+        {
+          "name": "Nitori Holdings Co Ltd",
+          "ratio": 0.63,
+          "code": "9843"
+        },
+        {
+          "name": "Nifco Inc",
+          "ratio": 0.5,
+          "code": "7988"
+        },
+        {
+          "name": "Rakus Co Ltd",
+          "ratio": 0.5,
+          "code": "3923"
+        },
+        {
+          "name": "Daikin Industries Ltd",
+          "ratio": 0.48,
+          "code": "6367"
+        },
+        {
+          "name": "Sansan Inc",
+          "ratio": 0.48,
+          "code": "4443"
+        },
+        {
+          "name": "Suzuki Motor Corp",
+          "ratio": 0.46,
+          "code": "7269"
+        },
+        {
+          "name": "Plaid Inc",
+          "ratio": 0.45,
+          "code": "4165"
+        },
+        {
+          "name": "Capcom Co Ltd",
+          "ratio": 0.45,
+          "code": "9697"
+        },
+        {
+          "name": "Riso Kyoiku Co Ltd",
+          "ratio": 0.44,
+          "code": "4714"
+        },
+        {
+          "name": "Square Enix Holdings Co Ltd",
+          "ratio": 0.43,
+          "code": "9684"
+        },
+        {
+          "name": "Sumco",
+          "ratio": 0.43,
+          "code": "3436"
+        },
+        {
+          "name": "Fancl Corp",
+          "ratio": 0.43,
+          "code": "4921"
+        },
+        {
+          "name": "Cyber Agent Inc",
+          "ratio": 0.39,
+          "code": "4751"
+        },
+        {
+          "name": "Kaonavi Inc",
+          "ratio": 0.36,
+          "code": "4435"
+        },
+        {
+          "name": "Nippon Paint Co Ltd",
+          "ratio": 0.26,
+          "code": "4612"
+        },
+        {
+          "name": "Yappli Inc",
+          "ratio": 0.23,
+          "code": "4168"
+        },
+        {
+          "name": "Taiyo Yuden Co Ltd",
+          "ratio": 0.22,
+          "code": "6976"
+        },
+        {
+          "name": "Nintendo Co Ltd",
+          "ratio": 0.2,
+          "code": "7974"
+        },
+        {
+          "name": "Wealthnav i Inc",
+          "ratio": 0.15,
+          "code": "7342"
+        },
+        {
+          "name": "Freee KK",
+          "ratio": 0.07,
+          "code": "4478"
+        },
+        {
+          "name": "Nippon Gas Co Ltd",
+          "ratio": 0.03,
+          "code": "8174"
+        }
+      ]
+    },
+    {
+      "date": "2021年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 5.34,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.6,
+          "code": "4063"
+        },
+        {
+          "name": "碧桂园服务",
+          "ratio": 3.45,
+          "code": "06098"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 3.43,
+          "code": "7203"
+        },
+        {
+          "name": "欧力士株式会社",
+          "ratio": 3.23,
+          "code": "8591"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.19,
+          "code": "6861"
+        },
+        {
+          "name": "豪雅公司",
+          "ratio": 2.83,
+          "code": "7741"
+        },
+        {
+          "name": "村田",
+          "ratio": 2.7,
+          "code": "6981"
+        },
+        {
+          "name": "伊藤忠商事",
+          "ratio": 2.61,
+          "code": "8001"
+        },
+        {
+          "name": "Sompo公司",
+          "ratio": 2.51,
+          "code": "8630"
+        }
+      ]
+    },
+    {
+      "date": "2021年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 4.26,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 3.82,
+          "code": "4063"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 3.74,
+          "code": "7203"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.43,
+          "code": "6861"
+        },
+        {
+          "name": "豪雅公司",
+          "ratio": 3.22,
+          "code": "7741"
+        },
+        {
+          "name": "村田",
+          "ratio": 2.93,
+          "code": "6981"
+        },
+        {
+          "name": "Sompo公司",
+          "ratio": 2.6,
+          "code": "8630"
+        },
+        {
+          "name": "伊藤忠商事",
+          "ratio": 2.57,
+          "code": "8001"
+        },
+        {
+          "name": "欧力士株式会社",
+          "ratio": 2.46,
+          "code": "8591"
+        },
+        {
+          "name": "住友金属矿山株式",
+          "ratio": 2.46,
+          "code": "5713"
+        },
+        {
+          "name": "日本电产株式会社",
+          "ratio": 2.31,
+          "code": "6594"
+        },
+        {
+          "name": "普利司通公司",
+          "ratio": 2.03,
+          "code": "5108"
+        },
+        {
+          "name": "T&D控股",
+          "ratio": 1.69,
+          "code": "8795"
+        },
+        {
+          "name": "三菱化学控股",
+          "ratio": 1.66,
+          "code": "4188"
+        },
+        {
+          "name": "大阳日酸株式会社",
+          "ratio": 1.56,
+          "code": "4091"
+        },
+        {
+          "name": "日本本田汽车公司",
+          "ratio": 1.51,
+          "code": "7267"
+        },
+        {
+          "name": "三井不动产株式会社",
+          "ratio": 1.48,
+          "code": "8801"
+        },
+        {
+          "name": "SMC株式会社",
+          "ratio": 1.44,
+          "code": "6273"
+        },
+        {
+          "name": "卡西欧",
+          "ratio": 1.4,
+          "code": "6952"
+        },
+        {
+          "name": "软银",
+          "ratio": 1.39,
+          "code": "9984"
+        },
+        {
+          "name": "日立",
+          "ratio": 1.39,
+          "code": "6501"
+        },
+        {
+          "name": "Bandai Namco Holdings Inc",
+          "ratio": 1.38,
+          "code": "7832"
+        },
+        {
+          "name": "Fancl Corp",
+          "ratio": 1.37,
+          "code": "4921"
+        },
+        {
+          "name": "住友电气工业株式会社",
+          "ratio": 1.32,
+          "code": "5802"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 1.25,
+          "code": "8766"
+        },
+        {
+          "name": "Kyowa Kirin Co Ltd",
+          "ratio": 1.22,
+          "code": "4151"
+        },
+        {
+          "name": "Rinnai Corp",
+          "ratio": 1.2,
+          "code": "5947"
+        },
+        {
+          "name": "Anritsu Corp",
+          "ratio": 1.19,
+          "code": "6754"
+        },
+        {
+          "name": "野村研究所",
+          "ratio": 1.17,
+          "code": "4307"
+        },
+        {
+          "name": "中央铁道公司",
+          "ratio": 1.1,
+          "code": "9022"
+        },
+        {
+          "name": "Kadokaw a Corp",
+          "ratio": 1.04,
+          "code": "9468"
+        },
+        {
+          "name": "Sumco Corp",
+          "ratio": 1.04,
+          "code": "3436"
+        },
+        {
+          "name": "Mitsubish i UFJ Lease & Finance Co Ltd",
+          "ratio": 1.03,
+          "code": "8593"
+        },
+        {
+          "name": "West Japan Railway Co Ltd",
+          "ratio": 1.02,
+          "code": "9021"
+        },
+        {
+          "name": "Misumi Group Inc",
+          "ratio": 1.0,
+          "code": "9962"
+        },
+        {
+          "name": "Takara Bio Inc",
+          "ratio": 1.0,
+          "code": "4974"
+        },
+        {
+          "name": "Rakuten Inc",
+          "ratio": 0.9,
+          "code": "4755"
+        },
+        {
+          "name": "Disco Corp",
+          "ratio": 0.89,
+          "code": "6146"
+        },
+        {
+          "name": "盐野义制药",
+          "ratio": 0.89,
+          "code": "4507"
+        },
+        {
+          "name": "Terumo Corp",
+          "ratio": 0.87,
+          "code": "4543"
+        },
+        {
+          "name": "Daiichi Sankyo Co Ltd",
+          "ratio": 0.79,
+          "code": "4568"
+        },
+        {
+          "name": "Miura Co Ltd",
+          "ratio": 0.78,
+          "code": "6005"
+        },
+        {
+          "name": "Nitori Holdings Co Ltd",
+          "ratio": 0.77,
+          "code": "9843"
+        },
+        {
+          "name": "Marui Group Co Ltd",
+          "ratio": 0.74,
+          "code": "8252"
+        },
+        {
+          "name": "Atrae Inc",
+          "ratio": 0.68,
+          "code": "6194"
+        },
+        {
+          "name": "Daikin Industries Ltd",
+          "ratio": 0.63,
+          "code": "6367"
+        },
+        {
+          "name": "Tokyo Electron Ltd",
+          "ratio": 0.63,
+          "code": "8035"
+        },
+        {
+          "name": "Rohm Co Ltd",
+          "ratio": 0.63,
+          "code": "6963"
+        },
+        {
+          "name": "Fuso Chemical Co Ltd",
+          "ratio": 0.57,
+          "code": "4368"
+        },
+        {
+          "name": "Plaid Inc",
+          "ratio": 0.57,
+          "code": "4165"
+        },
+        {
+          "name": "SMS Co Ltd",
+          "ratio": 0.57,
+          "code": "2175"
+        },
+        {
+          "name": "Pigeon Corp",
+          "ratio": 0.56,
+          "code": "7956"
+        },
+        {
+          "name": "Cyber Agent Inc",
+          "ratio": 0.54,
+          "code": "4751"
+        },
+        {
+          "name": "Maruwa Co Ltd (5344)",
+          "ratio": 0.54,
+          "code": "5344"
+        },
+        {
+          "name": "Mec Co Ltd",
+          "ratio": 0.54,
+          "code": "4971"
+        },
+        {
+          "name": "Nippon Prologis REIT Inc",
+          "ratio": 0.53,
+          "code": "3283"
+        },
+        {
+          "name": "Sansan Inc",
+          "ratio": 0.51,
+          "code": "4443"
+        },
+        {
+          "name": "Bengo4.C om Inc",
+          "ratio": 0.51,
+          "code": "6027"
+        },
+        {
+          "name": "Suzuki Motor Corp",
+          "ratio": 0.49,
+          "code": "7269"
+        },
+        {
+          "name": "Appier Group Inc",
+          "ratio": 0.48,
+          "code": "4180"
+        },
+        {
+          "name": "Square Enix Holdings Co Ltd",
+          "ratio": 0.46,
+          "code": "9684"
+        },
+        {
+          "name": "Kaonavi Inc",
+          "ratio": 0.45,
+          "code": "4435"
+        },
+        {
+          "name": "关西涂料",
+          "ratio": 0.45,
+          "code": "4613"
+        },
+        {
+          "name": "Taiyo Yuden Co Ltd",
+          "ratio": 0.41,
+          "code": "6976"
+        },
+        {
+          "name": "Riso Kyoiku Co Ltd",
+          "ratio": 0.39,
+          "code": "4714"
+        },
+        {
+          "name": "Capcom Co Ltd",
+          "ratio": 0.37,
+          "code": "9697"
+        },
+        {
+          "name": "立邦涂料",
+          "ratio": 0.34,
+          "code": "4612"
+        },
+        {
+          "name": "Ascentech KK",
+          "ratio": 0.33,
+          "code": "3565"
+        },
+        {
+          "name": "Nippon Gas Co Ltd",
+          "ratio": 0.31,
+          "code": "8174"
+        },
+        {
+          "name": "Wealthnav i Inc",
+          "ratio": 0.3,
+          "code": "7342"
+        },
+        {
+          "name": "Benefit One Inc",
+          "ratio": 0.29,
+          "code": "2412"
+        },
+        {
+          "name": "日本任天堂公司",
+          "ratio": 0.28,
+          "code": "7974"
+        },
+        {
+          "name": "Yappli Inc",
+          "ratio": 0.26,
+          "code": "4168"
+        },
+        {
+          "name": "Freee KK",
+          "ratio": 0.13,
+          "code": "4478"
+        }
+      ]
+    },
+    {
+      "date": "2021年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "信越化学工业",
+          "ratio": 4.35,
+          "code": "4063"
+        },
+        {
+          "name": "索尼",
+          "ratio": 4.14,
+          "code": "6758"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.85,
+          "code": "8766"
+        },
+        {
+          "name": "瑞可利集团",
+          "ratio": 3.76,
+          "code": "6098"
+        },
+        {
+          "name": "伊藤忠商事",
+          "ratio": 3.45,
+          "code": "8001"
+        },
+        {
+          "name": "豪雅公司",
+          "ratio": 3.27,
+          "code": "7741"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 3.1,
+          "code": "6861"
+        },
+        {
+          "name": "村田",
+          "ratio": 3.0,
+          "code": "6981"
+        },
+        {
+          "name": "Sumco公司",
+          "ratio": 2.69,
+          "code": "3436"
+        },
+        {
+          "name": "住友金属矿山株式会社",
+          "ratio": 2.59,
+          "code": "5713"
+        }
+      ]
+    },
+    {
+      "date": "2020年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "信越化学工业",
+          "ratio": 5.05,
+          "code": "4063"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 4.64,
+          "code": "6861"
+        },
+        {
+          "name": "村田",
+          "ratio": 4.21,
+          "code": "6981"
+        },
+        {
+          "name": "索尼",
+          "ratio": 4.06,
+          "code": "6758"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 4.03,
+          "code": "8766"
+        },
+        {
+          "name": "豪雅公司",
+          "ratio": 3.83,
+          "code": "7741"
+        },
+        {
+          "name": "伊藤忠商事",
+          "ratio": 3.34,
+          "code": "8001"
+        },
+        {
+          "name": "瑞可利集团",
+          "ratio": 3.19,
+          "code": "6098"
+        },
+        {
+          "name": "住友金属矿山株式会社",
+          "ratio": 3.17,
+          "code": "5713"
+        },
+        {
+          "name": "Sumco Corp",
+          "ratio": 2.65,
+          "code": "3436"
+        },
+        {
+          "name": "Sompo Japan Nipponko a Holdings Inc",
+          "ratio": 2.65,
+          "code": "8630"
+        },
+        {
+          "name": "Fast Retailing Co Ltd",
+          "ratio": 2.64,
+          "code": "9983"
+        },
+        {
+          "name": "SMC Corp",
+          "ratio": 2.16,
+          "code": "6273"
+        },
+        {
+          "name": "Nidec Corp",
+          "ratio": 2.08,
+          "code": "6594"
+        },
+        {
+          "name": "Toyota Motor Corp",
+          "ratio": 2.0,
+          "code": "7203"
+        },
+        {
+          "name": "Nitori Holdings Co Ltd",
+          "ratio": 1.98,
+          "code": "9843"
+        },
+        {
+          "name": "Nintendo Co Ltd",
+          "ratio": 1.88,
+          "code": "7974"
+        },
+        {
+          "name": "Rinnai Corp",
+          "ratio": 1.78,
+          "code": "5947"
+        },
+        {
+          "name": "Orix Corp",
+          "ratio": 1.7,
+          "code": "8591"
+        },
+        {
+          "name": "Cyber Agent Inc",
+          "ratio": 1.46,
+          "code": "4751"
+        },
+        {
+          "name": "Daikin Industries Ltd",
+          "ratio": 1.44,
+          "code": "6367"
+        },
+        {
+          "name": "Takara Bio Inc",
+          "ratio": 1.39,
+          "code": "4974"
+        },
+        {
+          "name": "Disco Corp",
+          "ratio": 1.39,
+          "code": "6146"
+        },
+        {
+          "name": "Advantest Corp",
+          "ratio": 1.37,
+          "code": "6857"
+        },
+        {
+          "name": "Taiyo Nippon Sanso Corp",
+          "ratio": 1.37,
+          "code": "4091"
+        },
+        {
+          "name": "Fancl Corp",
+          "ratio": 1.34,
+          "code": "4921"
+        },
+        {
+          "name": "Anritsu Corp",
+          "ratio": 1.22,
+          "code": "6754"
+        },
+        {
+          "name": "Kao Corp",
+          "ratio": 1.18,
+          "code": "4452"
+        },
+        {
+          "name": "Misumi Group Inc",
+          "ratio": 1.18,
+          "code": "9962"
+        },
+        {
+          "name": "Nomura Research Institute Ltd",
+          "ratio": 1.16,
+          "code": "4307"
+        },
+        {
+          "name": "开曼晨星半导体",
+          "ratio": 1.15,
+          "code": "3697"
+        },
+        {
+          "name": "Rohm Co Ltd",
+          "ratio": 1.03,
+          "code": "6963"
+        },
+        {
+          "name": "Miura Co Ltd",
+          "ratio": 0.99,
+          "code": "6005"
+        },
+        {
+          "name": "Hitachi Ltd",
+          "ratio": 0.93,
+          "code": "6501"
+        },
+        {
+          "name": "SoftBank Group Corp",
+          "ratio": 0.92,
+          "code": "9984"
+        },
+        {
+          "name": "Rakuten Inc",
+          "ratio": 0.91,
+          "code": "4755"
+        },
+        {
+          "name": "Nippon Prologis REIT Inc",
+          "ratio": 0.88,
+          "code": "3283"
+        },
+        {
+          "name": "Kyowa Kirin Co Ltd",
+          "ratio": 0.87,
+          "code": "4151"
+        },
+        {
+          "name": "Pigeon Corp",
+          "ratio": 0.83,
+          "code": "7956"
+        },
+        {
+          "name": "Capcom Co Ltd",
+          "ratio": 0.8,
+          "code": "9697"
+        },
+        {
+          "name": "Daiichi Sankyo Co Ltd",
+          "ratio": 0.77,
+          "code": "4568"
+        },
+        {
+          "name": "Otsuka Corp",
+          "ratio": 0.75,
+          "code": "4768"
+        },
+        {
+          "name": "Maruwa Co Ltd (5344)",
+          "ratio": 0.73,
+          "code": "5344"
+        },
+        {
+          "name": "Freee KK",
+          "ratio": 0.69,
+          "code": "4478"
+        },
+        {
+          "name": "Square Enix Holdings Co Ltd",
+          "ratio": 0.68,
+          "code": "9684"
+        },
+        {
+          "name": "Tokyo Electron Ltd",
+          "ratio": 0.66,
+          "code": "8035"
+        },
+        {
+          "name": "Kaonavi Inc",
+          "ratio": 0.65,
+          "code": "4435"
+        },
+        {
+          "name": "SBI Holdings Inc",
+          "ratio": 0.64,
+          "code": "8473"
+        },
+        {
+          "name": "Mec Co Ltd",
+          "ratio": 0.61,
+          "code": "4971"
+        },
+        {
+          "name": "Bengo4.C om Inc",
+          "ratio": 0.59,
+          "code": "6027"
+        },
+        {
+          "name": "Casio Computer Co Ltd",
+          "ratio": 0.57,
+          "code": "6952"
+        },
+        {
+          "name": "Terumo Corp",
+          "ratio": 0.57,
+          "code": "4543"
+        },
+        {
+          "name": "Taiyo Yuden Co Ltd",
+          "ratio": 0.55,
+          "code": "6976"
+        },
+        {
+          "name": "Fuso Chemical Co Ltd",
+          "ratio": 0.53,
+          "code": "4368"
+        },
+        {
+          "name": "Mitsui Fudosan Co Ltd",
+          "ratio": 0.51,
+          "code": "8801"
+        },
+        {
+          "name": "Shimadzu Corp",
+          "ratio": 0.5,
+          "code": "7701"
+        },
+        {
+          "name": "Ascentech KK",
+          "ratio": 0.5,
+          "code": "3565"
+        },
+        {
+          "name": "Sushiro Global Hldgs Ltd",
+          "ratio": 0.5,
+          "code": "3563"
+        },
+        {
+          "name": "Don Quijote Co Ltd",
+          "ratio": 0.48,
+          "code": "7532"
+        },
+        {
+          "name": "Atrae Inc",
+          "ratio": 0.48,
+          "code": "6194"
+        },
+        {
+          "name": "Sansan Inc",
+          "ratio": 0.39,
+          "code": "4443"
+        },
+        {
+          "name": "Obic Co Ltd",
+          "ratio": 0.36,
+          "code": "4684"
+        },
+        {
+          "name": "Nippon Gas Co Ltd",
+          "ratio": 0.32,
+          "code": "8174"
+        },
+        {
+          "name": "Benefit One Inc",
+          "ratio": 0.28,
+          "code": "2412"
+        }
+      ]
+    },
+    {
+      "date": "2020年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "基恩士",
+          "ratio": 4.76,
+          "code": "6861"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.32,
+          "code": "4063"
+        },
+        {
+          "name": "豪雅公司",
+          "ratio": 3.84,
+          "code": "7741"
+        },
+        {
+          "name": "村田",
+          "ratio": 3.78,
+          "code": "6981"
+        },
+        {
+          "name": "迅销",
+          "ratio": 3.73,
+          "code": "9983"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 3.58,
+          "code": "8766"
+        },
+        {
+          "name": "伊藤忠商事",
+          "ratio": 3.48,
+          "code": "8001"
+        },
+        {
+          "name": "索尼",
+          "ratio": 3.38,
+          "code": "6758"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 3.37,
+          "code": "7203"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 2.9,
+          "code": "7974"
+        }
+      ]
+    },
+    {
+      "date": "2020年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "索尼",
+          "ratio": 4.98,
+          "code": "6758"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 4.62,
+          "code": "6861"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.15,
+          "code": "4063"
+        },
+        {
+          "name": "东京海上控股",
+          "ratio": 4.06,
+          "code": "8766"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 3.43,
+          "code": "7203"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 3.37,
+          "code": "7974"
+        },
+        {
+          "name": "村田",
+          "ratio": 3.21,
+          "code": "6981"
+        },
+        {
+          "name": "大金工业",
+          "ratio": 3.09,
+          "code": "6367"
+        },
+        {
+          "name": "迅销",
+          "ratio": 3.0,
+          "code": "9983"
+        },
+        {
+          "name": "伊藤忠商事",
+          "ratio": 2.98,
+          "code": "8001"
+        },
+        {
+          "name": "HOYA CORPOR ATION",
+          "ratio": 2.94,
+          "code": "7741"
+        },
+        {
+          "name": "SMC Corporati on",
+          "ratio": 2.68,
+          "code": "6273"
+        },
+        {
+          "name": "Daiichi Sankyo Company, Limited",
+          "ratio": 2.62,
+          "code": "4568"
+        },
+        {
+          "name": "太阳诱电株式会社",
+          "ratio": 2.49,
+          "code": "6976"
+        },
+        {
+          "name": "欧力士株式会社",
+          "ratio": 2.35,
+          "code": "8591"
+        },
+        {
+          "name": "CyberAge nt, Inc.",
+          "ratio": 2.31,
+          "code": "4751"
+        },
+        {
+          "name": "Misumi Group Inc.",
+          "ratio": 2.21,
+          "code": "9962"
+        },
+        {
+          "name": "SoftBank Group Corp.",
+          "ratio": 2.12,
+          "code": "9984"
+        },
+        {
+          "name": "Disco Corporati on",
+          "ratio": 2.11,
+          "code": "6146"
+        },
+        {
+          "name": "Kao Corp.",
+          "ratio": 1.98,
+          "code": "4452"
+        },
+        {
+          "name": "Hitachi,Lt d.",
+          "ratio": 1.62,
+          "code": "6501"
+        },
+        {
+          "name": "Advantest Corp.",
+          "ratio": 1.55,
+          "code": "6857"
+        },
+        {
+          "name": "Capcom Co., Ltd.",
+          "ratio": 1.52,
+          "code": "9697"
+        },
+        {
+          "name": "Takara Bio Inc.",
+          "ratio": 1.5,
+          "code": "4974"
+        },
+        {
+          "name": "SBI Holdings, Inc.",
+          "ratio": 1.5,
+          "code": "8473"
+        },
+        {
+          "name": "Oriental Land Co., Ltd.",
+          "ratio": 1.46,
+          "code": "4661"
+        },
+        {
+          "name": "Tokyo Electron Ltd.",
+          "ratio": 1.43,
+          "code": "8035"
+        },
+        {
+          "name": "Recruit Holdings Co., Ltd.",
+          "ratio": 1.41,
+          "code": "6098"
+        },
+        {
+          "name": "Nippon Prologis REIT Inc",
+          "ratio": 1.4,
+          "code": "3283"
+        },
+        {
+          "name": "Sumitomo Metal Mining Co., Ltd.",
+          "ratio": 1.38,
+          "code": "5713"
+        },
+        {
+          "name": "Rohm Co., Ltd.",
+          "ratio": 1.35,
+          "code": "6963"
+        },
+        {
+          "name": "Pan Pacific Internatio",
+          "ratio": 1.34,
+          "code": "7532"
+        },
+        {
+          "name": "MARUW ACO., LTD.",
+          "ratio": 1.32,
+          "code": "5344"
+        },
+        {
+          "name": "Fuso Chemical Co Ltd",
+          "ratio": 1.29,
+          "code": "4368JP"
+        },
+        {
+          "name": "Square Enix Holdings Co., Ltd.",
+          "ratio": 1.26,
+          "code": "9684"
+        },
+        {
+          "name": "Sompo Holdings,I nc.",
+          "ratio": 1.26,
+          "code": "8630"
+        },
+        {
+          "name": "SUMCO Corporati on",
+          "ratio": 0.94,
+          "code": "3436"
+        },
+        {
+          "name": "Nishimats u Constructi on Co., Ltd.",
+          "ratio": 0.82,
+          "code": "1820"
+        },
+        {
+          "name": "Otsuka Corporati on",
+          "ratio": 0.77,
+          "code": "4768"
+        },
+        {
+          "name": "Kumagai Gumi Co., Ltd.",
+          "ratio": 0.77,
+          "code": "1861"
+        },
+        {
+          "name": "Japan Exchange Group, Inc.",
+          "ratio": 0.66,
+          "code": "8697"
+        },
+        {
+          "name": "MEC Company Ltd.",
+          "ratio": 0.57,
+          "code": "4971"
+        },
+        {
+          "name": "Bengo4.C om Inc",
+          "ratio": 0.55,
+          "code": "6027JP"
+        },
+        {
+          "name": "Atrae Inc",
+          "ratio": 0.53,
+          "code": "6194JP"
+        },
+        {
+          "name": "Monogata ri Corporati on",
+          "ratio": 0.41,
+          "code": "3097"
+        },
+        {
+          "name": "Shimadzu Corporati on",
+          "ratio": 0.37,
+          "code": "7701"
+        },
+        {
+          "name": "Sansan Inc",
+          "ratio": 0.36,
+          "code": "4443JP"
+        },
+        {
+          "name": "Nomura Research Institute,L td.",
+          "ratio": 0.27,
+          "code": "4307"
+        },
+        {
+          "name": "Paltac Corporati on",
+          "ratio": 0.19,
+          "code": "8283"
+        },
+        {
+          "name": "Benefit One Inc.",
+          "ratio": 0.19,
+          "code": "2412"
+        }
+      ]
+    },
+    {
+      "date": "2020年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "东京海上控股",
+          "ratio": 4.66,
+          "code": "8766"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.31,
+          "code": "4063"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 4.1,
+          "code": "6861"
+        },
+        {
+          "name": "索尼",
+          "ratio": 3.95,
+          "code": "6758"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 3.74,
+          "code": "7974"
+        },
+        {
+          "name": "丰田汽车",
+          "ratio": 3.69,
+          "code": "7203"
+        },
+        {
+          "name": "欧力士株式会社",
+          "ratio": 3.62,
+          "code": "8591"
+        },
+        {
+          "name": "日立",
+          "ratio": 3.22,
+          "code": "6501"
+        },
+        {
+          "name": "CyberAgent, Inc.",
+          "ratio": 2.99,
+          "code": "4751"
+        },
+        {
+          "name": "村田",
+          "ratio": 2.88,
+          "code": "6981"
+        }
+      ]
+    },
+    {
+      "date": "2019年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "花王",
+          "ratio": 5.11,
+          "code": "4452"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 4.35,
+          "code": "7974"
+        },
+        {
+          "name": "索尼",
+          "ratio": 4.16,
+          "code": "6758"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 4.12,
+          "code": "4063"
+        },
+        {
+          "name": "迅销",
+          "ratio": 4.09,
+          "code": "9983"
+        },
+        {
+          "name": "欧力士株式会社",
+          "ratio": 3.57,
+          "code": "8591"
+        },
+        {
+          "name": "日立",
+          "ratio": 3.39,
+          "code": "6501"
+        },
+        {
+          "name": "CyberAge nt, Inc.",
+          "ratio": 3.12,
+          "code": "4751"
+        },
+        {
+          "name": "太阳诱电株式会社",
+          "ratio": 3.03,
+          "code": "6976"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 2.94,
+          "code": "6861"
+        },
+        {
+          "name": "Tokio Marine Holdings, Inc.",
+          "ratio": 2.78,
+          "code": "8766"
+        },
+        {
+          "name": "Misumi Group Inc.",
+          "ratio": 2.48,
+          "code": "9962"
+        },
+        {
+          "name": "Fuso Chemical Co Ltd",
+          "ratio": 2.25,
+          "code": "4368JP"
+        },
+        {
+          "name": "Net One Systems Co., Ltd.",
+          "ratio": 1.96,
+          "code": "7518"
+        },
+        {
+          "name": "MARUW ACO., LTD.",
+          "ratio": 1.95,
+          "code": "5344"
+        },
+        {
+          "name": "KONAMI HOLDIN GS CORP",
+          "ratio": 1.94,
+          "code": "9766"
+        },
+        {
+          "name": "Japan Exchange Group, Inc.",
+          "ratio": 1.86,
+          "code": "8697"
+        },
+        {
+          "name": "Capcom Co., Ltd.",
+          "ratio": 1.84,
+          "code": "9697"
+        },
+        {
+          "name": "Nitto Boseki Co., Ltd.",
+          "ratio": 1.82,
+          "code": "3110"
+        },
+        {
+          "name": "Bengo4.C om Inc",
+          "ratio": 1.78,
+          "code": "6027JP"
+        },
+        {
+          "name": "Japan Material Co., Ltd.",
+          "ratio": 1.47,
+          "code": "6055"
+        },
+        {
+          "name": "Shimadzu Corporati on",
+          "ratio": 1.45,
+          "code": "7701"
+        },
+        {
+          "name": "Nippon Telegraph and Telephone Corporati on",
+          "ratio": 1.43,
+          "code": "9432"
+        },
+        {
+          "name": "Recruit Holdings Co., Ltd.",
+          "ratio": 1.42,
+          "code": "6098"
+        },
+        {
+          "name": "Daiichi Sankyo Company, Limited",
+          "ratio": 1.4,
+          "code": "4568"
+        },
+        {
+          "name": "Paltac Corporati on",
+          "ratio": 1.37,
+          "code": "8283"
+        },
+        {
+          "name": "Peptidrea m Inc.",
+          "ratio": 1.36,
+          "code": "4587"
+        },
+        {
+          "name": "Murata Manufact uring Co., Ltd.",
+          "ratio": 1.33,
+          "code": "6981"
+        },
+        {
+          "name": "Ryohin Keikaku Co., Ltd.",
+          "ratio": 1.33,
+          "code": "7453"
+        },
+        {
+          "name": "Sumitomo Mitsui Financial Group, Inc.",
+          "ratio": 1.33,
+          "code": "8316"
+        },
+        {
+          "name": "Shimano Inc.",
+          "ratio": 1.28,
+          "code": "7309"
+        },
+        {
+          "name": "Nishimats u Constructi on Co., Ltd.",
+          "ratio": 1.18,
+          "code": "1820"
+        },
+        {
+          "name": "Mitsui Fudosan Co., Ltd.",
+          "ratio": 1.17,
+          "code": "8801"
+        },
+        {
+          "name": "Sansan Inc",
+          "ratio": 1.12,
+          "code": "4443JP"
+        },
+        {
+          "name": "Square Enix Holdings Co., Ltd.",
+          "ratio": 1.07,
+          "code": "9684"
+        },
+        {
+          "name": "Mitsubish i Estate Company, Limited",
+          "ratio": 1.07,
+          "code": "8802"
+        },
+        {
+          "name": "Mitsubish i Electric Corp.",
+          "ratio": 1.03,
+          "code": "6503"
+        },
+        {
+          "name": "SBI Holdings, Inc.",
+          "ratio": 1.01,
+          "code": "8473"
+        },
+        {
+          "name": "Kumagai Gumi Co., Ltd.",
+          "ratio": 0.93,
+          "code": "1861"
+        },
+        {
+          "name": "Maeda Corporati on",
+          "ratio": 0.87,
+          "code": "1824"
+        },
+        {
+          "name": "QB Net Holdings Co., Ltd.",
+          "ratio": 0.85,
+          "code": "6571"
+        },
+        {
+          "name": "Otsuka Holdings Co., Ltd.",
+          "ratio": 0.77,
+          "code": "4578"
+        },
+        {
+          "name": "JXTG Holdings. Inc.",
+          "ratio": 0.7,
+          "code": "5020"
+        },
+        {
+          "name": "DAIKIN INDUST RIES, LTD.",
+          "ratio": 0.69,
+          "code": "6367"
+        },
+        {
+          "name": "Shiseido Company, Limited",
+          "ratio": 0.66,
+          "code": "4911"
+        },
+        {
+          "name": "Sanrio Company, Ltd.",
+          "ratio": 0.66,
+          "code": "8136"
+        },
+        {
+          "name": "Riso Kyoiku Co., Ltd.",
+          "ratio": 0.65,
+          "code": "4714"
+        },
+        {
+          "name": "Hosokawa Micron Corporati on",
+          "ratio": 0.63,
+          "code": "6277"
+        },
+        {
+          "name": "INTER ACTION Corporati on",
+          "ratio": 0.61,
+          "code": "7725"
+        },
+        {
+          "name": "Benefit One Inc.",
+          "ratio": 0.57,
+          "code": "2412"
+        },
+        {
+          "name": "GMO Pepabo, Inc.",
+          "ratio": 0.56,
+          "code": "3633"
+        },
+        {
+          "name": "FP Corporati on",
+          "ratio": 0.55,
+          "code": "7947"
+        },
+        {
+          "name": "Atrae Inc",
+          "ratio": 0.54,
+          "code": "6194JP"
+        },
+        {
+          "name": "Toyo Gosei Co., Ltd.",
+          "ratio": 0.53,
+          "code": "4970"
+        },
+        {
+          "name": "TOTO Ltd",
+          "ratio": 0.5,
+          "code": "5332"
+        },
+        {
+          "name": "Japan Elevator Service Holdings Co Ltd",
+          "ratio": 0.46,
+          "code": "6544JP"
+        },
+        {
+          "name": "Monogata ri Corporati on",
+          "ratio": 0.42,
+          "code": "3097"
+        },
+        {
+          "name": "BANDAI NAMCO Holdings Inc.",
+          "ratio": 0.42,
+          "code": "7832"
+        },
+        {
+          "name": "Uzabase Inc",
+          "ratio": 0.41,
+          "code": "3966JP"
+        },
+        {
+          "name": "MEC Company Ltd.",
+          "ratio": 0.38,
+          "code": "4971"
+        },
+        {
+          "name": "Mercari Inc",
+          "ratio": 0.29,
+          "code": "4385JP"
+        },
+        {
+          "name": "M3, Inc.",
+          "ratio": 0.21,
+          "code": "2413"
+        }
+      ]
+    },
+    {
+      "date": "2019年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "花王",
+          "ratio": 1.81,
+          "code": "4452"
+        },
+        {
+          "name": "信越化学工业",
+          "ratio": 1.79,
+          "code": "4063"
+        },
+        {
+          "name": "任天堂",
+          "ratio": 1.7,
+          "code": "7974"
+        },
+        {
+          "name": "日本电信电话",
+          "ratio": 1.64,
+          "code": "9432"
+        },
+        {
+          "name": "迅销",
+          "ratio": 1.36,
+          "code": "9983"
+        },
+        {
+          "name": "太阳诱电株式会社",
+          "ratio": 1.19,
+          "code": "6976"
+        },
+        {
+          "name": "欧力士株式会社",
+          "ratio": 1.05,
+          "code": "8591"
+        },
+        {
+          "name": "东京海上控股株式会社",
+          "ratio": 1.02,
+          "code": "8766"
+        },
+        {
+          "name": "基恩士",
+          "ratio": 1.01,
+          "code": "6861"
+        },
+        {
+          "name": "SBI控股",
+          "ratio": 0.95,
+          "code": "8473"
+        }
+      ]
+    }
+  ]
+}

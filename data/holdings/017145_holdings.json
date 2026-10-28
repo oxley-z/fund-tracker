@@ -1,182 +1,1522 @@
-[
-  {
-    "date": "2026年3季度股票投资明细",
-    "holdings": [
-      {
-        "name": "迈威尔科技",
-        "ratio": 9.03
-      },
-      {
-        "name": "法拉利",
-        "ratio": 8.75
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 8.24
-      },
-      {
-        "name": "Rivian Automotive Inc-A",
-        "ratio": 7.55
-      },
-      {
-        "name": "蔚来",
-        "ratio": 7.54
-      },
-      {
-        "name": "小马智行",
-        "ratio": 7.28
-      },
-      {
-        "name": "超威半导体",
-        "ratio": 7.0
-      },
-      {
-        "name": "闪迪",
-        "ratio": 6.79
-      },
-      {
-        "name": "美光科技",
-        "ratio": 6.64
-      },
-      {
-        "name": "博通",
-        "ratio": 5.2
-      }
-    ]
-  },
-  {
-    "date": "2026年2季度股票投资明细",
-    "holdings": [
-      {
-        "name": "迈威尔科技",
-        "ratio": 9.83
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 9.61
-      },
-      {
-        "name": "蔚来",
-        "ratio": 9.17
-      },
-      {
-        "name": "Rivian Automotive Inc-A",
-        "ratio": 8.94
-      },
-      {
-        "name": "法拉利",
-        "ratio": 8.44
-      },
-      {
-        "name": "小马智行",
-        "ratio": 7.34
-      },
-      {
-        "name": "超威半导体",
-        "ratio": 6.3
-      },
-      {
-        "name": "美光科技",
-        "ratio": 5.99
-      },
-      {
-        "name": "宁德时代",
-        "ratio": 5.61
-      },
-      {
-        "name": "博通",
-        "ratio": 4.91
-      }
-    ]
-  },
-  {
-    "date": "2026年1季度股票投资明细",
-    "holdings": [
-      {
-        "name": "蔚来",
-        "ratio": 10.17
-      },
-      {
-        "name": "Carvana Co-A",
-        "ratio": 9.74
-      },
-      {
-        "name": "Rivian Automotive Inc-A",
-        "ratio": 9.65
-      },
-      {
-        "name": "博通",
-        "ratio": 9.64
-      },
-      {
-        "name": "法拉利",
-        "ratio": 9.58
-      },
-      {
-        "name": "英伟达",
-        "ratio": 9.46
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 9.33
-      },
-      {
-        "name": "小马智行",
-        "ratio": 6.9
-      },
-      {
-        "name": "宁德时代",
-        "ratio": 6.39
-      },
-      {
-        "name": "迈威尔科技",
-        "ratio": 4.81
-      }
-    ]
-  },
-  {
-    "date": "2025年4季度股票投资明细",
-    "holdings": [
-      {
-        "name": "英伟达",
-        "ratio": 9.78
-      },
-      {
-        "name": "Rivian Automotive Inc-A",
-        "ratio": 9.69
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 9.53
-      },
-      {
-        "name": "法拉利",
-        "ratio": 9.05
-      },
-      {
-        "name": "蔚来",
-        "ratio": 8.93
-      },
-      {
-        "name": "博通",
-        "ratio": 8.33
-      },
-      {
-        "name": "Carvana Co-A",
-        "ratio": 8.27
-      },
-      {
-        "name": "小马智行",
-        "ratio": 6.53
-      },
-      {
-        "name": "迈威尔科技",
-        "ratio": 5.85
-      },
-      {
-        "name": "小鹏汽车-W",
-        "ratio": 5.33
-      }
-    ]
-  }
-]
+{
+  "_v": 2,
+  "probed_min_year": 2019,
+  "history_exhausted": true,
+  "periods": [
+    {
+      "date": "2026年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "迈威尔科技",
+          "ratio": 9.03,
+          "code": "MRVL"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 8.75,
+          "code": "RACE"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 8.24,
+          "code": "TSLA"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 7.55,
+          "code": "RIVN"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 7.54,
+          "code": "NIO"
+        },
+        {
+          "name": "小马智行",
+          "ratio": 7.28,
+          "code": "PONY"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 7.0,
+          "code": "AMD"
+        },
+        {
+          "name": "闪迪",
+          "ratio": 6.79,
+          "code": "SNDK"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 6.64,
+          "code": "MU"
+        },
+        {
+          "name": "博通",
+          "ratio": 5.2,
+          "code": "AVGO"
+        }
+      ]
+    },
+    {
+      "date": "2026年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "迈威尔科技",
+          "ratio": 9.83,
+          "code": "MRVL"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 9.61,
+          "code": "TSLA"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 9.17,
+          "code": "NIO"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 8.94,
+          "code": "RIVN"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 8.44,
+          "code": "RACE"
+        },
+        {
+          "name": "小马智行",
+          "ratio": 7.34,
+          "code": "PONY"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 6.3,
+          "code": "AMD"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 5.99,
+          "code": "MU"
+        },
+        {
+          "name": "宁德时代",
+          "ratio": 5.61,
+          "code": "03750"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.91,
+          "code": "AVGO"
+        },
+        {
+          "name": "高通",
+          "ratio": 3.85,
+          "code": "QCOM"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 3.77,
+          "code": "ON"
+        },
+        {
+          "name": "Carvana Co-A",
+          "ratio": 3.62,
+          "code": "CVNA"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 3.27,
+          "code": "NVDA"
+        },
+        {
+          "name": "意法半导体",
+          "ratio": 2.08,
+          "code": "STM"
+        },
+        {
+          "name": "优步",
+          "ratio": 0.33,
+          "code": "UBER"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.29,
+          "code": "NXPI"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.24,
+          "code": "ADI"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.1,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.09,
+          "code": "GOOGL"
+        },
+        {
+          "name": "思佳讯",
+          "ratio": 0.09,
+          "code": "SWKS"
+        },
+        {
+          "name": "微软",
+          "ratio": 0.08,
+          "code": "MSFT"
+        },
+        {
+          "name": "真泰克",
+          "ratio": 0.06,
+          "code": "GNTX"
+        },
+        {
+          "name": "文远知行",
+          "ratio": 0.05,
+          "code": "WRD"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 0.05,
+          "code": "TXN"
+        },
+        {
+          "name": "小鹏集团",
+          "ratio": 0.03,
+          "code": "XPEV"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 0.02,
+          "code": "FWONK"
+        },
+        {
+          "name": "理想汽车",
+          "ratio": 0.01,
+          "code": "LI"
+        },
+        {
+          "name": "禾赛",
+          "ratio": 0.01,
+          "code": "HSAI"
+        }
+      ]
+    },
+    {
+      "date": "2026年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "蔚来",
+          "ratio": 10.17,
+          "code": "NIO"
+        },
+        {
+          "name": "Carvana Co-A",
+          "ratio": 9.74,
+          "code": "CVNA"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 9.65,
+          "code": "RIVN"
+        },
+        {
+          "name": "博通",
+          "ratio": 9.64,
+          "code": "AVGO"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 9.58,
+          "code": "RACE"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 9.46,
+          "code": "NVDA"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 9.33,
+          "code": "TSLA"
+        },
+        {
+          "name": "小马智行",
+          "ratio": 6.9,
+          "code": "PONY"
+        },
+        {
+          "name": "宁德时代",
+          "ratio": 6.39,
+          "code": "03750"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 4.81,
+          "code": "MRVL"
+        }
+      ]
+    },
+    {
+      "date": "2025年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.78,
+          "code": "NVDA"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 9.69,
+          "code": "RIVN"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 9.53,
+          "code": "TSLA"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 9.05,
+          "code": "RACE"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 8.93,
+          "code": "NIO"
+        },
+        {
+          "name": "博通",
+          "ratio": 8.33,
+          "code": "AVGO"
+        },
+        {
+          "name": "Carvana Co-A",
+          "ratio": 8.27,
+          "code": "CVNA"
+        },
+        {
+          "name": "小马智行",
+          "ratio": 6.53,
+          "code": "PONY"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 5.85,
+          "code": "MRVL"
+        },
+        {
+          "name": "小鹏汽车-W",
+          "ratio": 5.33,
+          "code": "09868"
+        },
+        {
+          "name": "零跑汽车",
+          "ratio": 3.29,
+          "code": "09863"
+        },
+        {
+          "name": "宁德时代",
+          "ratio": 2.96,
+          "code": "03750"
+        },
+        {
+          "name": "禾赛",
+          "ratio": 1.46,
+          "code": "HSAI"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 1.26,
+          "code": "LCID"
+        },
+        {
+          "name": "小米集团-W",
+          "ratio": 0.95,
+          "code": "01810"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.39,
+          "code": "QCOM"
+        },
+        {
+          "name": "速腾聚创",
+          "ratio": 0.31,
+          "code": "02498"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 0.31,
+          "code": "FWONK"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.25,
+          "code": "ON"
+        },
+        {
+          "name": "优步",
+          "ratio": 0.15,
+          "code": "UBER"
+        },
+        {
+          "name": "意法半导体",
+          "ratio": 0.14,
+          "code": "STM"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 0.14,
+          "code": "AMD"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.09,
+          "code": "NXPI"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.06,
+          "code": "ADI"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.05,
+          "code": "META"
+        },
+        {
+          "name": "微软",
+          "ratio": 0.04,
+          "code": "MSFT"
+        },
+        {
+          "name": "思佳讯",
+          "ratio": 0.03,
+          "code": "SWKS"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.03,
+          "code": "GOOGL"
+        },
+        {
+          "name": "文远知行",
+          "ratio": 0.03,
+          "code": "WRD"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 0.03,
+          "code": "00881"
+        },
+        {
+          "name": "真泰克",
+          "ratio": 0.02,
+          "code": "GNTX"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 0.02,
+          "code": "XPEV"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 0.01,
+          "code": "TXN"
+        },
+        {
+          "name": "理想汽车",
+          "ratio": 0.01,
+          "code": "LI"
+        }
+      ]
+    },
+    {
+      "date": "2025年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "蔚来",
+          "ratio": 9.89,
+          "code": "NIO"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 9.71,
+          "code": "NVDA"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 9.23,
+          "code": "RACE"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 8.34,
+          "code": "TSLA"
+        },
+        {
+          "name": "博通",
+          "ratio": 7.98,
+          "code": "AVGO"
+        },
+        {
+          "name": "Carvana Co-A",
+          "ratio": 6.83,
+          "code": "CVNA"
+        },
+        {
+          "name": "小马智行",
+          "ratio": 6.71,
+          "code": "PONY"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 6.68,
+          "code": "MRVL"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 6.03,
+          "code": "FWONK"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 4.02,
+          "code": "RIVN"
+        }
+      ]
+    },
+    {
+      "date": "2025年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.8,
+          "code": "NVDA"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 9.77,
+          "code": "RACE"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 9.27,
+          "code": "NIO"
+        },
+        {
+          "name": "博通",
+          "ratio": 8.99,
+          "code": "AVGO"
+        },
+        {
+          "name": "小米集团-W",
+          "ratio": 8.33,
+          "code": "01810"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 8.26,
+          "code": "TSLA"
+        },
+        {
+          "name": "Carvana Co-A",
+          "ratio": 7.9,
+          "code": "CVNA"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 7.81,
+          "code": "MRVL"
+        },
+        {
+          "name": "小马智行",
+          "ratio": 5.43,
+          "code": "PONY"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 4.95,
+          "code": "RIVN"
+        },
+        {
+          "name": "零跑汽车",
+          "ratio": 3.27,
+          "code": "09863"
+        },
+        {
+          "name": "禾赛",
+          "ratio": 2.92,
+          "code": "HSAI"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 2.81,
+          "code": "FWONK"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 1.83,
+          "code": "LCID"
+        },
+        {
+          "name": "宁德时代",
+          "ratio": 0.64,
+          "code": "03750"
+        },
+        {
+          "name": "速腾聚创",
+          "ratio": 0.51,
+          "code": "02498"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.46,
+          "code": "ON"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.28,
+          "code": "QCOM"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 0.17,
+          "code": "AMD"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.16,
+          "code": "NXPI"
+        },
+        {
+          "name": "意法半导体",
+          "ratio": 0.15,
+          "code": "STM"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.1,
+          "code": "ADI"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.1,
+          "code": "META"
+        },
+        {
+          "name": "思佳讯",
+          "ratio": 0.07,
+          "code": "SWKS"
+        },
+        {
+          "name": "微软",
+          "ratio": 0.07,
+          "code": "MSFT"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 0.05,
+          "code": "00881"
+        },
+        {
+          "name": "文远知行",
+          "ratio": 0.05,
+          "code": "WRD"
+        },
+        {
+          "name": "真泰克",
+          "ratio": 0.04,
+          "code": "GNTX"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.03,
+          "code": "GOOGL"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 0.03,
+          "code": "XPEV"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 0.02,
+          "code": "TXN"
+        },
+        {
+          "name": "理想汽车",
+          "ratio": 0.02,
+          "code": "LI"
+        }
+      ]
+    },
+    {
+      "date": "2025年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "法拉利",
+          "ratio": 9.57,
+          "code": "RACE"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 9.48,
+          "code": "NVDA"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 9.45,
+          "code": "TSLA"
+        },
+        {
+          "name": "博通",
+          "ratio": 8.49,
+          "code": "AVGO"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 7.43,
+          "code": "NIO"
+        },
+        {
+          "name": "Carvana Co-A",
+          "ratio": 7.42,
+          "code": "CVNA"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 6.35,
+          "code": "RIVN"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 6.17,
+          "code": "MRVL"
+        },
+        {
+          "name": "小米集团-W",
+          "ratio": 5.81,
+          "code": "01810"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 5.69,
+          "code": "FWONK"
+        }
+      ]
+    },
+    {
+      "date": "2024年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "特斯拉",
+          "ratio": 9.53,
+          "code": "TSLA"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 9.1,
+          "code": "NIO"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 8.84,
+          "code": "NVDA"
+        },
+        {
+          "name": "博通",
+          "ratio": 8.65,
+          "code": "AVGO"
+        },
+        {
+          "name": "小鹏汽车-W",
+          "ratio": 6.7,
+          "code": "09868"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 6.63,
+          "code": "MRVL"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 5.49,
+          "code": "RIVN"
+        },
+        {
+          "name": "小米集团-W",
+          "ratio": 5.39,
+          "code": "01810"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 4.84,
+          "code": "LCID"
+        },
+        {
+          "name": "零跑汽车",
+          "ratio": 3.18,
+          "code": "09863"
+        },
+        {
+          "name": "比亚迪股份",
+          "ratio": 3.04,
+          "code": "01211"
+        },
+        {
+          "name": "Carvana Co-A",
+          "ratio": 2.35,
+          "code": "CVNA"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 2.21,
+          "code": "RACE"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 2.17,
+          "code": "XPEV"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 2.07,
+          "code": "FWONK"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.9,
+          "code": "ON"
+        },
+        {
+          "name": "小马智行",
+          "ratio": 0.63,
+          "code": "PONY"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.44,
+          "code": "QCOM"
+        },
+        {
+          "name": "极氪",
+          "ratio": 0.32,
+          "code": "ZK"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.26,
+          "code": "NXPI"
+        },
+        {
+          "name": "理想汽车",
+          "ratio": 0.24,
+          "code": "LI"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 0.24,
+          "code": "AMD"
+        },
+        {
+          "name": "意法半导体",
+          "ratio": 0.2,
+          "code": "STM"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.15,
+          "code": "ADI"
+        },
+        {
+          "name": "思佳讯",
+          "ratio": 0.14,
+          "code": "SWKS"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.13,
+          "code": "META"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 0.1,
+          "code": "00881"
+        },
+        {
+          "name": "微软",
+          "ratio": 0.1,
+          "code": "MSFT"
+        },
+        {
+          "name": "真泰克",
+          "ratio": 0.09,
+          "code": "GNTX"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.06,
+          "code": "GOOGL"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 0.03,
+          "code": "TXN"
+        },
+        {
+          "name": "文远知行",
+          "ratio": 0.03,
+          "code": "WRD"
+        }
+      ]
+    },
+    {
+      "date": "2024年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "蔚来",
+          "ratio": 10.15,
+          "code": "NIO"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 9.0,
+          "code": "XPEV"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 8.93,
+          "code": "TSLA"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 8.61,
+          "code": "RACE"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 8.37,
+          "code": "NVDA"
+        },
+        {
+          "name": "博通",
+          "ratio": 7.82,
+          "code": "AVGO"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 7.39,
+          "code": "FWONK"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 7.24,
+          "code": "MRVL"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 6.06,
+          "code": "RIVN"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 6.06,
+          "code": "LCID"
+        }
+      ]
+    },
+    {
+      "date": "2024年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "特斯拉",
+          "ratio": 10.06,
+          "code": "TSLA"
+        },
+        {
+          "name": "博通",
+          "ratio": 10.0,
+          "code": "AVGO"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 9.63,
+          "code": "NVDA"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 9.13,
+          "code": "RACE"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 8.56,
+          "code": "NIO"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 8.24,
+          "code": "MRVL"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 7.5,
+          "code": "XPEV"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 7.01,
+          "code": "FWONK"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 6.0,
+          "code": "RIVN"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 4.39,
+          "code": "LCID"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 3.23,
+          "code": "NXPI"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 2.99,
+          "code": "ON"
+        },
+        {
+          "name": "意法半导体",
+          "ratio": 1.88,
+          "code": "STM"
+        },
+        {
+          "name": "思佳讯",
+          "ratio": 1.17,
+          "code": "SWKS"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 1.13,
+          "code": "ADI"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.77,
+          "code": "META"
+        },
+        {
+          "name": "微软",
+          "ratio": 0.73,
+          "code": "MSFT"
+        },
+        {
+          "name": "真泰克",
+          "ratio": 0.69,
+          "code": "GNTX"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.38,
+          "code": "GOOGL"
+        },
+        {
+          "name": "理想汽车",
+          "ratio": 0.36,
+          "code": "LI"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 0.25,
+          "code": "TXN"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.24,
+          "code": "QCOM"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 0.05,
+          "code": "AMD"
+        },
+        {
+          "name": "特许通讯",
+          "ratio": 0.02,
+          "code": "CHTR"
+        },
+        {
+          "name": "李尔",
+          "ratio": 0.01,
+          "code": "LEA"
+        }
+      ]
+    },
+    {
+      "date": "2024年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.73,
+          "code": "NVDA"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 9.45,
+          "code": "TSLA"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 9.28,
+          "code": "RACE"
+        },
+        {
+          "name": "博通",
+          "ratio": 9.24,
+          "code": "AVGO"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 9.21,
+          "code": "NIO"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 7.35,
+          "code": "MRVL"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 6.56,
+          "code": "FWONK"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 5.39,
+          "code": "XPEV"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 4.52,
+          "code": "ON"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 3.82,
+          "code": "LCID"
+        }
+      ]
+    },
+    {
+      "date": "2023年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "特斯拉",
+          "ratio": 9.23,
+          "code": "TSLA"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 9.22,
+          "code": "RACE"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 8.73,
+          "code": "NVDA"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 8.65,
+          "code": "NIO"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 7.08,
+          "code": "XPEV"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 6.79,
+          "code": "RIVN"
+        },
+        {
+          "name": "博通",
+          "ratio": 6.34,
+          "code": "AVGO"
+        },
+        {
+          "name": "Liberty Media Corp Liberty Formula One-C",
+          "ratio": 5.58,
+          "code": "FWONK"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 4.81,
+          "code": "MRVL"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 4.52,
+          "code": "LCID"
+        },
+        {
+          "name": "理想汽车",
+          "ratio": 4.36,
+          "code": "LI"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 4.02,
+          "code": "ON"
+        },
+        {
+          "name": "意法半导体",
+          "ratio": 3.83,
+          "code": "STM"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 2.64,
+          "code": "NXPI"
+        },
+        {
+          "name": "零跑汽车",
+          "ratio": 2.39,
+          "code": "09863"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 1.11,
+          "code": "TXN"
+        },
+        {
+          "name": "Fisker Inc-A",
+          "ratio": 0.97,
+          "code": "FSR"
+        },
+        {
+          "name": "思佳讯",
+          "ratio": 0.85,
+          "code": "SWKS"
+        },
+        {
+          "name": "比亚迪股份",
+          "ratio": 0.82,
+          "code": "01211"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.67,
+          "code": "ADI"
+        },
+        {
+          "name": "真泰克",
+          "ratio": 0.46,
+          "code": "GNTX"
+        },
+        {
+          "name": "微软",
+          "ratio": 0.42,
+          "code": "MSFT"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.37,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.2,
+          "code": "GOOGL"
+        },
+        {
+          "name": "科磊",
+          "ratio": 0.14,
+          "code": "KLAC"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.12,
+          "code": "QCOM"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 0.12,
+          "code": "SNPS"
+        },
+        {
+          "name": "苹果",
+          "ratio": 0.05,
+          "code": "AAPL"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 0.03,
+          "code": "AMD"
+        },
+        {
+          "name": "百度",
+          "ratio": 0.02,
+          "code": "BIDU"
+        },
+        {
+          "name": "特许通讯",
+          "ratio": 0.01,
+          "code": "CHTR"
+        },
+        {
+          "name": "李尔",
+          "ratio": 0.01,
+          "code": "LEA"
+        }
+      ]
+    },
+    {
+      "date": "2023年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "特斯拉",
+          "ratio": 8.57,
+          "code": "TSLA"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 8.54,
+          "code": "XPEV"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 7.98,
+          "code": "NIO"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 7.98,
+          "code": "RACE"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 7.52,
+          "code": "NVDA"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 6.4,
+          "code": "RIVN"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 5.71,
+          "code": "MRVL"
+        },
+        {
+          "name": "理想汽车",
+          "ratio": 5.36,
+          "code": "LI"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 5.08,
+          "code": "ON"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 3.96,
+          "code": "LCID"
+        }
+      ]
+    },
+    {
+      "date": "2023年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "蔚来",
+          "ratio": 9.57,
+          "code": "NIO"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 9.15,
+          "code": "TSLA"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 8.42,
+          "code": "NVDA"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 7.98,
+          "code": "MRVL"
+        },
+        {
+          "name": "小鹏汽车",
+          "ratio": 5.68,
+          "code": "XPEV"
+        },
+        {
+          "name": "理想汽车",
+          "ratio": 5.35,
+          "code": "LI"
+        },
+        {
+          "name": "Lucid Group Inc-A",
+          "ratio": 4.04,
+          "code": "LCID"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 3.83,
+          "code": "ON"
+        },
+        {
+          "name": "百度",
+          "ratio": 3.42,
+          "code": "BIDU"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 2.7,
+          "code": "AMD"
+        },
+        {
+          "name": "高通",
+          "ratio": 2.59,
+          "code": "QCOM"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 2.59,
+          "code": "RACE"
+        },
+        {
+          "name": "意法半导体",
+          "ratio": 2.4,
+          "code": "STM"
+        },
+        {
+          "name": "思佳讯",
+          "ratio": 2.29,
+          "code": "SWKS"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 1.92,
+          "code": "GOOG"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 1.81,
+          "code": "ADI"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 1.76,
+          "code": "NXPI"
+        },
+        {
+          "name": "Fisker Inc-A",
+          "ratio": 1.73,
+          "code": "FSR"
+        },
+        {
+          "name": "Rivian Automotive Inc-A",
+          "ratio": 1.71,
+          "code": "RIVN"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 1.52,
+          "code": "TXN"
+        },
+        {
+          "name": "李尔",
+          "ratio": 1.36,
+          "code": "LEA"
+        },
+        {
+          "name": "真泰克",
+          "ratio": 1.13,
+          "code": "GNTX"
+        },
+        {
+          "name": "苹果",
+          "ratio": 1.12,
+          "code": "AAPL"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 1.06,
+          "code": "GOOGL"
+        },
+        {
+          "name": "微软",
+          "ratio": 1.04,
+          "code": "MSFT"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.82,
+          "code": "META"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 0.75,
+          "code": "AMZN"
+        },
+        {
+          "name": "Sensata科技控股",
+          "ratio": 0.71,
+          "code": "ST"
+        },
+        {
+          "name": "博通",
+          "ratio": 0.54,
+          "code": "AVGO"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 0.35,
+          "code": "ADBE"
+        },
+        {
+          "name": "科磊",
+          "ratio": 0.32,
+          "code": "KLAC"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 0.31,
+          "code": "CDNS"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 0.27,
+          "code": "SNPS"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 0.24,
+          "code": "MU"
+        },
+        {
+          "name": "特许通讯",
+          "ratio": 0.04,
+          "code": "CHTR"
+        }
+      ]
+    }
+  ]
+}

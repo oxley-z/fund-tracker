@@ -4,8 +4,11 @@
 /fund_drawdown_dashboard.html
 /fund_dashboard_data.js
 /fund_dashboard_details.js
+/fund_dashboard_full_holdings.js
 /fund_dashboard_data.js.tmp
 /fund_dashboard_details.js.tmp
+/fund_dashboard_full_holdings.js.tmp
+.workbuddy-ai/
 # patches/ 是本地补丁存档（尚未应用的修复），只在本地保留，不入库
 /patches
 # data/ 里是 dual_etf_dashboard.py 的断点文件，必须提交，

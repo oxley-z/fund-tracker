@@ -1,182 +1,4002 @@
-[
-  {
-    "date": "2026年3季度股票投资明细",
-    "holdings": [
-      {
-        "name": "英伟达",
-        "ratio": 8.14
-      },
-      {
-        "name": "美光科技",
-        "ratio": 7.35
-      },
-      {
-        "name": "闪迪",
-        "ratio": 6.67
-      },
-      {
-        "name": "台积电",
-        "ratio": 6.53
-      },
-      {
-        "name": "超威半导体",
-        "ratio": 4.38
-      },
-      {
-        "name": "英特尔",
-        "ratio": 4.3
-      },
-      {
-        "name": "Meta Platforms Inc-A",
-        "ratio": 4.27
-      },
-      {
-        "name": "阿斯麦",
-        "ratio": 3.85
-      },
-      {
-        "name": "微软",
-        "ratio": 2.75
-      },
-      {
-        "name": "迈威尔科技",
-        "ratio": 2.5
-      }
-    ]
-  },
-  {
-    "date": "2026年2季度股票投资明细",
-    "holdings": [
-      {
-        "name": "闪迪",
-        "ratio": 9.12
-      },
-      {
-        "name": "美光科技",
-        "ratio": 8.46
-      },
-      {
-        "name": "拉姆研究",
-        "ratio": 3.67
-      },
-      {
-        "name": "台积电",
-        "ratio": 3.65
-      },
-      {
-        "name": "MKS Inc",
-        "ratio": 3.61
-      },
-      {
-        "name": "应用材料",
-        "ratio": 3.53
-      },
-      {
-        "name": "阿斯麦",
-        "ratio": 3.47
-      },
-      {
-        "name": "超威半导体",
-        "ratio": 2.43
-      },
-      {
-        "name": "Nebius Group NV-A",
-        "ratio": 2.41
-      },
-      {
-        "name": "英伟达",
-        "ratio": 2.37
-      }
-    ]
-  },
-  {
-    "date": "2026年1季度股票投资明细",
-    "holdings": [
-      {
-        "name": "英伟达",
-        "ratio": 7.79
-      },
-      {
-        "name": "Lumentum Holdings Inc",
-        "ratio": 7.07
-      },
-      {
-        "name": "闪迪",
-        "ratio": 5.47
-      },
-      {
-        "name": "美光科技",
-        "ratio": 4.53
-      },
-      {
-        "name": "博通",
-        "ratio": 4.15
-      },
-      {
-        "name": "谷歌-C",
-        "ratio": 3.96
-      },
-      {
-        "name": "台积电",
-        "ratio": 3.89
-      },
-      {
-        "name": "康宁",
-        "ratio": 2.96
-      },
-      {
-        "name": "Coherent Corp",
-        "ratio": 2.66
-      },
-      {
-        "name": "阿斯麦",
-        "ratio": 2.36
-      }
-    ]
-  },
-  {
-    "date": "2025年4季度股票投资明细",
-    "holdings": [
-      {
-        "name": "英伟达",
-        "ratio": 10.0
-      },
-      {
-        "name": "博通",
-        "ratio": 7.14
-      },
-      {
-        "name": "谷歌-C",
-        "ratio": 6.07
-      },
-      {
-        "name": "美光科技",
-        "ratio": 4.83
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 4.17
-      },
-      {
-        "name": "亚马逊",
-        "ratio": 4.16
-      },
-      {
-        "name": "Lumentum Holdings Inc",
-        "ratio": 3.8
-      },
-      {
-        "name": "微软",
-        "ratio": 3.74
-      },
-      {
-        "name": "苹果",
-        "ratio": 3.72
-      },
-      {
-        "name": "台积电",
-        "ratio": 3.48
-      }
-    ]
-  }
-]
+{
+  "_v": 2,
+  "probed_min_year": 2016,
+  "history_exhausted": true,
+  "periods": [
+    {
+      "date": "2026年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 8.14,
+          "code": "NVDA"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 7.35,
+          "code": "MU"
+        },
+        {
+          "name": "闪迪",
+          "ratio": 6.67,
+          "code": "SNDK"
+        },
+        {
+          "name": "台积电",
+          "ratio": 6.53,
+          "code": "TSM"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 4.38,
+          "code": "AMD"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 4.3,
+          "code": "INTC"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 4.27,
+          "code": "META"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 3.85,
+          "code": "ASML"
+        },
+        {
+          "name": "微软",
+          "ratio": 2.75,
+          "code": "MSFT"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 2.5,
+          "code": "MRVL"
+        }
+      ]
+    },
+    {
+      "date": "2026年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "闪迪",
+          "ratio": 9.12,
+          "code": "SNDK"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 8.46,
+          "code": "MU"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 3.67,
+          "code": "LRCX"
+        },
+        {
+          "name": "台积电",
+          "ratio": 3.65,
+          "code": "TSM"
+        },
+        {
+          "name": "MKS Inc",
+          "ratio": 3.61,
+          "code": "MKSI"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 3.53,
+          "code": "AMAT"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 3.47,
+          "code": "ASML"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 2.43,
+          "code": "AMD"
+        },
+        {
+          "name": "Nebius Group NV-A",
+          "ratio": 2.41,
+          "code": "NBIS"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 2.37,
+          "code": "NVDA"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 2.23,
+          "code": "MRVL"
+        },
+        {
+          "name": "科磊",
+          "ratio": 2.05,
+          "code": "KLAC"
+        },
+        {
+          "name": "康宁",
+          "ratio": 2.05,
+          "code": "GLW"
+        },
+        {
+          "name": "西部数据",
+          "ratio": 2.01,
+          "code": "WDC"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 1.95,
+          "code": "INTC"
+        },
+        {
+          "name": "库力索法工业",
+          "ratio": 1.87,
+          "code": "KLIC"
+        },
+        {
+          "name": "希捷科技",
+          "ratio": 1.26,
+          "code": "STX"
+        },
+        {
+          "name": "Credo Technology Group Holding Ltd",
+          "ratio": 1.14,
+          "code": "CRDO"
+        },
+        {
+          "name": "日月光半导体",
+          "ratio": 1.1,
+          "code": "ASX"
+        },
+        {
+          "name": "Coherent Corp",
+          "ratio": 1.1,
+          "code": "COHR"
+        },
+        {
+          "name": "博通",
+          "ratio": 1.05,
+          "code": "AVGO"
+        },
+        {
+          "name": "卡特彼勒",
+          "ratio": 1.0,
+          "code": "CAT"
+        },
+        {
+          "name": "GE航空航天",
+          "ratio": 0.98,
+          "code": "GE"
+        },
+        {
+          "name": "联华电子",
+          "ratio": 0.95,
+          "code": "UMC"
+        },
+        {
+          "name": "慧荣科技",
+          "ratio": 0.93,
+          "code": "SIMO"
+        },
+        {
+          "name": "Arm Holdings plc ADR",
+          "ratio": 0.93,
+          "code": "ARM"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 0.92,
+          "code": "GOOG"
+        },
+        {
+          "name": "Bloom Energy Corp-A",
+          "ratio": 0.84,
+          "code": "BE"
+        },
+        {
+          "name": "Tower半导体",
+          "ratio": 0.82,
+          "code": "TSEM"
+        },
+        {
+          "name": "泰瑞达",
+          "ratio": 0.76,
+          "code": "TER"
+        },
+        {
+          "name": "艾马克技术",
+          "ratio": 0.72,
+          "code": "AMKR"
+        },
+        {
+          "name": "Astera Labs Inc",
+          "ratio": 0.62,
+          "code": "ALAB"
+        },
+        {
+          "name": "兆易创新",
+          "ratio": 0.61,
+          "code": "03986"
+        },
+        {
+          "name": "建滔积层板",
+          "ratio": 0.6,
+          "code": "01888"
+        },
+        {
+          "name": "维易科精密仪器",
+          "ratio": 0.59,
+          "code": "VECO"
+        },
+        {
+          "name": "意法半导体",
+          "ratio": 0.59,
+          "code": "STM"
+        },
+        {
+          "name": "超科林半导体",
+          "ratio": 0.57,
+          "code": "UCTT"
+        },
+        {
+          "name": "ACM Research Inc-A",
+          "ratio": 0.53,
+          "code": "ACMR"
+        },
+        {
+          "name": "Ichor Holdings Ltd",
+          "ratio": 0.53,
+          "code": "ICHR"
+        },
+        {
+          "name": "Lumentum Holdings Inc",
+          "ratio": 0.52,
+          "code": "LITE"
+        },
+        {
+          "name": "GLOBALFOUNDRIES Inc",
+          "ratio": 0.52,
+          "code": "GFS"
+        },
+        {
+          "name": "安费诺",
+          "ratio": 0.49,
+          "code": "APH"
+        },
+        {
+          "name": "TTM科技",
+          "ratio": 0.49,
+          "code": "TTMI"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.48,
+          "code": "QCOM"
+        },
+        {
+          "name": "华虹宏力",
+          "ratio": 0.48,
+          "code": "01347"
+        },
+        {
+          "name": "威世科技",
+          "ratio": 0.47,
+          "code": "VSH"
+        },
+        {
+          "name": "Revolution Medicines Inc",
+          "ratio": 0.46,
+          "code": "RVMD"
+        },
+        {
+          "name": "高盛",
+          "ratio": 0.44,
+          "code": "GS"
+        },
+        {
+          "name": "先科电子",
+          "ratio": 0.4,
+          "code": "SMTC"
+        },
+        {
+          "name": "天数智芯",
+          "ratio": 0.36,
+          "code": "09903"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.35,
+          "code": "ADI"
+        },
+        {
+          "name": "Vertiv Holdings Co-A",
+          "ratio": 0.29,
+          "code": "VRT"
+        },
+        {
+          "name": "戴尔科技",
+          "ratio": 0.26,
+          "code": "DELL"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 0.26,
+          "code": "TXN"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.25,
+          "code": "NXPI"
+        },
+        {
+          "name": "智谱",
+          "ratio": 0.24,
+          "code": "02513"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 0.22,
+          "code": "PLTR"
+        },
+        {
+          "name": "中芯国际",
+          "ratio": 0.12,
+          "code": "00981"
+        },
+        {
+          "name": "ASMPT",
+          "ratio": 0.11,
+          "code": "00522"
+        },
+        {
+          "name": "大族数控",
+          "ratio": 0.06,
+          "code": "03200"
+        }
+      ]
+    },
+    {
+      "date": "2026年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 7.79,
+          "code": "NVDA"
+        },
+        {
+          "name": "Lumentum Holdings Inc",
+          "ratio": 7.07,
+          "code": "LITE"
+        },
+        {
+          "name": "闪迪",
+          "ratio": 5.47,
+          "code": "SNDK"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 4.53,
+          "code": "MU"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.15,
+          "code": "AVGO"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 3.96,
+          "code": "GOOG"
+        },
+        {
+          "name": "台积电",
+          "ratio": 3.89,
+          "code": "TSM"
+        },
+        {
+          "name": "康宁",
+          "ratio": 2.96,
+          "code": "GLW"
+        },
+        {
+          "name": "Coherent Corp",
+          "ratio": 2.66,
+          "code": "COHR"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 2.36,
+          "code": "ASML"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.96,
+          "code": "GOOGL"
+        }
+      ]
+    },
+    {
+      "date": "2025年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 10.0,
+          "code": "NVDA"
+        },
+        {
+          "name": "博通",
+          "ratio": 7.14,
+          "code": "AVGO"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 6.07,
+          "code": "GOOG"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 4.83,
+          "code": "MU"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 4.17,
+          "code": "TSLA"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.16,
+          "code": "AMZN"
+        },
+        {
+          "name": "Lumentum Holdings Inc",
+          "ratio": 3.8,
+          "code": "LITE"
+        },
+        {
+          "name": "微软",
+          "ratio": 3.74,
+          "code": "MSFT"
+        },
+        {
+          "name": "苹果",
+          "ratio": 3.72,
+          "code": "AAPL"
+        },
+        {
+          "name": "台积电",
+          "ratio": 3.48,
+          "code": "TSM"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.19,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.42,
+          "code": "GOOGL"
+        },
+        {
+          "name": "闪迪",
+          "ratio": 2.14,
+          "code": "SNDK"
+        },
+        {
+          "name": "西部数据",
+          "ratio": 2.14,
+          "code": "WDC"
+        },
+        {
+          "name": "Coherent Corp",
+          "ratio": 2.08,
+          "code": "COHR"
+        },
+        {
+          "name": "康宁",
+          "ratio": 1.44,
+          "code": "GLW"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 1.4,
+          "code": "PLTR"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 1.24,
+          "code": "LRCX"
+        },
+        {
+          "name": "Tower半导体",
+          "ratio": 1.13,
+          "code": "TSEM"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 1.03,
+          "code": "AMAT"
+        },
+        {
+          "name": "甲骨文",
+          "ratio": 0.94,
+          "code": "ORCL"
+        },
+        {
+          "name": "泰瑞达",
+          "ratio": 0.94,
+          "code": "TER"
+        },
+        {
+          "name": "Robinhood Markets Inc-A",
+          "ratio": 0.91,
+          "code": "HOOD"
+        },
+        {
+          "name": "阿里巴巴-W",
+          "ratio": 0.89,
+          "code": "09988"
+        },
+        {
+          "name": "Fabrinet",
+          "ratio": 0.81,
+          "code": "FN"
+        },
+        {
+          "name": "AXT Inc",
+          "ratio": 0.63,
+          "code": "AXTI"
+        },
+        {
+          "name": "Rocket Lab Corp",
+          "ratio": 0.63,
+          "code": "RKLB"
+        },
+        {
+          "name": "天弘科技",
+          "ratio": 0.57,
+          "code": "CLS"
+        },
+        {
+          "name": "Ciena科技",
+          "ratio": 0.57,
+          "code": "CIEN"
+        },
+        {
+          "name": "回声星通信",
+          "ratio": 0.49,
+          "code": "SATS"
+        },
+        {
+          "name": "库力索法工业",
+          "ratio": 0.48,
+          "code": "KLIC"
+        },
+        {
+          "name": "Vertiv Holdings Co-A",
+          "ratio": 0.47,
+          "code": "VRT"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 0.46,
+          "code": "INTC"
+        },
+        {
+          "name": "Applovin Corp-A",
+          "ratio": 0.46,
+          "code": "APP"
+        },
+        {
+          "name": "艾马克技术",
+          "ratio": 0.45,
+          "code": "AMKR"
+        },
+        {
+          "name": "TTM科技",
+          "ratio": 0.44,
+          "code": "TTMI"
+        },
+        {
+          "name": "泰科电子",
+          "ratio": 0.44,
+          "code": "TEL"
+        },
+        {
+          "name": "Arrowhead Pharmaceuticals Inc",
+          "ratio": 0.44,
+          "code": "ARWR"
+        },
+        {
+          "name": "Coinbase Global Inc-A",
+          "ratio": 0.44,
+          "code": "COIN"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 0.37,
+          "code": "00700"
+        },
+        {
+          "name": "Affirm Holdings Inc-A",
+          "ratio": 0.29,
+          "code": "AFRM"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 0.29,
+          "code": "MRVL"
+        },
+        {
+          "name": "Bloom Energy Corp-A",
+          "ratio": 0.28,
+          "code": "BE"
+        },
+        {
+          "name": "紫金矿业",
+          "ratio": 0.27,
+          "code": "02899"
+        },
+        {
+          "name": "安费诺",
+          "ratio": 0.26,
+          "code": "APH"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 0.26,
+          "code": "AMD"
+        },
+        {
+          "name": "Centrus Energy Corp-A",
+          "ratio": 0.25,
+          "code": "LEU"
+        },
+        {
+          "name": "伟创力",
+          "ratio": 0.24,
+          "code": "FLEX"
+        },
+        {
+          "name": "CoreWeave Inc-A",
+          "ratio": 0.24,
+          "code": "CRWV"
+        },
+        {
+          "name": "Astera Labs Inc",
+          "ratio": 0.24,
+          "code": "ALAB"
+        },
+        {
+          "name": "Planet Labs PBC-A",
+          "ratio": 0.22,
+          "code": "PL"
+        },
+        {
+          "name": "Nebius Group NV-A",
+          "ratio": 0.22,
+          "code": "NBIS"
+        }
+      ]
+    },
+    {
+      "date": "2025年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.45,
+          "code": "NVDA"
+        },
+        {
+          "name": "博通",
+          "ratio": 8.17,
+          "code": "AVGO"
+        },
+        {
+          "name": "微软",
+          "ratio": 6.25,
+          "code": "MSFT"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 6.04,
+          "code": "META"
+        },
+        {
+          "name": "苹果",
+          "ratio": 5.58,
+          "code": "AAPL"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 5.41,
+          "code": "TSLA"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 5.07,
+          "code": "GOOG"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.38,
+          "code": "AMZN"
+        },
+        {
+          "name": "台积电",
+          "ratio": 3.55,
+          "code": "TSM"
+        },
+        {
+          "name": "西部数据",
+          "ratio": 2.63,
+          "code": "WDC"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.16,
+          "code": "GOOGL"
+        }
+      ]
+    },
+    {
+      "date": "2025年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.69,
+          "code": "NVDA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 9.26,
+          "code": "META"
+        },
+        {
+          "name": "微软",
+          "ratio": 8.09,
+          "code": "MSFT"
+        },
+        {
+          "name": "Robinhood Markets Inc-A",
+          "ratio": 5.99,
+          "code": "HOOD"
+        },
+        {
+          "name": "博通",
+          "ratio": 5.53,
+          "code": "AVGO"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.95,
+          "code": "AMZN"
+        },
+        {
+          "name": "苹果",
+          "ratio": 4.12,
+          "code": "AAPL"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.98,
+          "code": "TSLA"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 3.83,
+          "code": "GOOG"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 3.69,
+          "code": "NFLX"
+        },
+        {
+          "name": "台积电",
+          "ratio": 3.18,
+          "code": "TSM"
+        },
+        {
+          "name": "Sezzle Inc",
+          "ratio": 2.97,
+          "code": "SEZL"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 2.14,
+          "code": "MRVL"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 2.05,
+          "code": "PLTR"
+        },
+        {
+          "name": "Dave Inc-A",
+          "ratio": 1.95,
+          "code": "DAVE"
+        },
+        {
+          "name": "Roblox Corp-A",
+          "ratio": 1.74,
+          "code": "RBLX"
+        },
+        {
+          "name": "泡泡玛特",
+          "ratio": 1.7,
+          "code": "09992"
+        },
+        {
+          "name": "天弘科技",
+          "ratio": 1.37,
+          "code": "CLS"
+        },
+        {
+          "name": "Vertiv Holdings Co-A",
+          "ratio": 1.35,
+          "code": "VRT"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 1.1,
+          "code": "AMD"
+        },
+        {
+          "name": "Snowflake Inc",
+          "ratio": 1.07,
+          "code": "SNOW"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 1.04,
+          "code": "00700"
+        },
+        {
+          "name": "Coherent Corp",
+          "ratio": 0.96,
+          "code": "COHR"
+        },
+        {
+          "name": "思爱普",
+          "ratio": 0.95,
+          "code": "SAP"
+        },
+        {
+          "name": "Coinbase Global Inc-A",
+          "ratio": 0.79,
+          "code": "COIN"
+        },
+        {
+          "name": "Credo Technology Group Holding Ltd",
+          "ratio": 0.7,
+          "code": "CRDO"
+        },
+        {
+          "name": "Spotify Technology SA",
+          "ratio": 0.67,
+          "code": "SPOT"
+        },
+        {
+          "name": "Vistra Corp",
+          "ratio": 0.53,
+          "code": "VST"
+        },
+        {
+          "name": "Applovin Corp-A",
+          "ratio": 0.53,
+          "code": "APP"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 0.53,
+          "code": "MU"
+        },
+        {
+          "name": "超微电脑",
+          "ratio": 0.5,
+          "code": "SMCI"
+        },
+        {
+          "name": "Lumentum Holdings Inc",
+          "ratio": 0.48,
+          "code": "LITE"
+        },
+        {
+          "name": "阿里巴巴-W",
+          "ratio": 0.47,
+          "code": "09988"
+        },
+        {
+          "name": "信达生物",
+          "ratio": 0.28,
+          "code": "01801"
+        },
+        {
+          "name": "Circle Internet Group Inc-A",
+          "ratio": 0.23,
+          "code": "CRCL"
+        },
+        {
+          "name": "石药集团",
+          "ratio": 0.2,
+          "code": "01093"
+        }
+      ]
+    },
+    {
+      "date": "2025年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 8.3,
+          "code": "NVDA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 7.22,
+          "code": "META"
+        },
+        {
+          "name": "苹果",
+          "ratio": 5.46,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 5.1,
+          "code": "MSFT"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.9,
+          "code": "AMZN"
+        },
+        {
+          "name": "博通",
+          "ratio": 3.61,
+          "code": "AVGO"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.16,
+          "code": "TSLA"
+        },
+        {
+          "name": "伯克希尔哈撒韦-B",
+          "ratio": 2.99,
+          "code": "BRK_B"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.93,
+          "code": "GOOG"
+        },
+        {
+          "name": "台积电",
+          "ratio": 2.68,
+          "code": "TSM"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.17,
+          "code": "GOOGL"
+        }
+      ]
+    },
+    {
+      "date": "2024年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "亚马逊",
+          "ratio": 7.08,
+          "code": "AMZN"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 6.25,
+          "code": "NVDA"
+        },
+        {
+          "name": "苹果",
+          "ratio": 6.18,
+          "code": "AAPL"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 5.14,
+          "code": "META"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 4.95,
+          "code": "TSLA"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.57,
+          "code": "AVGO"
+        },
+        {
+          "name": "微软",
+          "ratio": 4.3,
+          "code": "MSFT"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 3.54,
+          "code": "MRVL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 3.16,
+          "code": "GOOG"
+        },
+        {
+          "name": "台积电",
+          "ratio": 2.67,
+          "code": "TSM"
+        },
+        {
+          "name": "沃尔玛",
+          "ratio": 2.36,
+          "code": "WMT"
+        },
+        {
+          "name": "Robinhood Markets Inc-A",
+          "ratio": 2.21,
+          "code": "HOOD"
+        },
+        {
+          "name": "Credo Technology Group Holding Ltd",
+          "ratio": 1.36,
+          "code": "CRDO"
+        },
+        {
+          "name": "Astera Labs Inc",
+          "ratio": 1.35,
+          "code": "ALAB"
+        },
+        {
+          "name": "Block Inc-A",
+          "ratio": 1.21,
+          "code": "XYZ"
+        },
+        {
+          "name": "Applovin Corp-A",
+          "ratio": 1.2,
+          "code": "APP"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 1.15,
+          "code": "00700"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 1.12,
+          "code": "GOOGL"
+        },
+        {
+          "name": "赛富时",
+          "ratio": 1.11,
+          "code": "CRM"
+        },
+        {
+          "name": "Snowflake Inc-A",
+          "ratio": 0.95,
+          "code": "SNOW"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 0.93,
+          "code": "PLTR"
+        },
+        {
+          "name": "Rocket Lab USA Inc-A",
+          "ratio": 0.91,
+          "code": "RKLB"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 0.89,
+          "code": "NFLX"
+        },
+        {
+          "name": "Affirm Holdings Inc-A",
+          "ratio": 0.87,
+          "code": "AFRM"
+        },
+        {
+          "name": "现在服务公司",
+          "ratio": 0.86,
+          "code": "NOW"
+        },
+        {
+          "name": "SoFi Technologies Inc",
+          "ratio": 0.8,
+          "code": "SOFI"
+        },
+        {
+          "name": "泡泡玛特",
+          "ratio": 0.8,
+          "code": "09992"
+        },
+        {
+          "name": "Build-A-Bear Workshop Inc",
+          "ratio": 0.77,
+          "code": "BBW"
+        },
+        {
+          "name": "MaxLinear Inc",
+          "ratio": 0.75,
+          "code": "MXL"
+        },
+        {
+          "name": "Redwire Corp",
+          "ratio": 0.7,
+          "code": "RDW"
+        },
+        {
+          "name": "亚玛芬体育",
+          "ratio": 0.66,
+          "code": "AS"
+        },
+        {
+          "name": "BellRing Brands Inc",
+          "ratio": 0.63,
+          "code": "BRBR"
+        },
+        {
+          "name": "Braze Inc-A",
+          "ratio": 0.6,
+          "code": "BRZE"
+        },
+        {
+          "name": "开市客",
+          "ratio": 0.54,
+          "code": "COST"
+        },
+        {
+          "name": "GEO惩教集团",
+          "ratio": 0.53,
+          "code": "GEO"
+        },
+        {
+          "name": "Spotify Technology SA",
+          "ratio": 0.52,
+          "code": "SPOT"
+        },
+        {
+          "name": "Twilio Inc-A",
+          "ratio": 0.51,
+          "code": "TWLO"
+        },
+        {
+          "name": "中国海洋石油",
+          "ratio": 0.51,
+          "code": "00883"
+        },
+        {
+          "name": "联合航空",
+          "ratio": 0.51,
+          "code": "UAL"
+        },
+        {
+          "name": "携程",
+          "ratio": 0.51,
+          "code": "TCOM"
+        },
+        {
+          "name": "嘉年华邮轮(US)",
+          "ratio": 0.5,
+          "code": "CCL"
+        },
+        {
+          "name": "The Trade Desk Inc-A",
+          "ratio": 0.5,
+          "code": "TTD"
+        },
+        {
+          "name": "Global-E Online Ltd",
+          "ratio": 0.49,
+          "code": "GLBE"
+        },
+        {
+          "name": "美团-W",
+          "ratio": 0.46,
+          "code": "03690"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.42,
+          "code": "CRWD"
+        },
+        {
+          "name": "Reddit Inc-A",
+          "ratio": 0.4,
+          "code": "RDDT"
+        },
+        {
+          "name": "威富",
+          "ratio": 0.36,
+          "code": "VFC"
+        },
+        {
+          "name": "德克斯户外",
+          "ratio": 0.34,
+          "code": "DECK"
+        },
+        {
+          "name": "Cloudflare Inc-A",
+          "ratio": 0.32,
+          "code": "NET"
+        },
+        {
+          "name": "Roku Inc-A",
+          "ratio": 0.32,
+          "code": "ROKU"
+        },
+        {
+          "name": "昂跑",
+          "ratio": 0.3,
+          "code": "ONON"
+        },
+        {
+          "name": "Vistra Corp",
+          "ratio": 0.26,
+          "code": "VST"
+        }
+      ]
+    },
+    {
+      "date": "2024年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.29,
+          "code": "NVDA"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 6.57,
+          "code": "AMZN"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 6.22,
+          "code": "META"
+        },
+        {
+          "name": "苹果",
+          "ratio": 6.11,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 5.89,
+          "code": "MSFT"
+        },
+        {
+          "name": "台积电",
+          "ratio": 5.86,
+          "code": "TSM"
+        },
+        {
+          "name": "博通",
+          "ratio": 3.62,
+          "code": "AVGO"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 3.57,
+          "code": "GOOG"
+        },
+        {
+          "name": "沃尔玛",
+          "ratio": 3.03,
+          "code": "WMT"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 2.94,
+          "code": "TSLA"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 1.74,
+          "code": "GOOGL"
+        }
+      ]
+    },
+    {
+      "date": "2024年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 8.93,
+          "code": "NVDA"
+        },
+        {
+          "name": "台积电",
+          "ratio": 8.92,
+          "code": "TSM"
+        },
+        {
+          "name": "博通",
+          "ratio": 7.12,
+          "code": "AVGO"
+        },
+        {
+          "name": "微软",
+          "ratio": 6.88,
+          "code": "MSFT"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 6.76,
+          "code": "AMZN"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 5.77,
+          "code": "META"
+        },
+        {
+          "name": "苹果",
+          "ratio": 4.23,
+          "code": "AAPL"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 4.05,
+          "code": "MU"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 3.15,
+          "code": "GOOGL"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 2.91,
+          "code": "ASML"
+        },
+        {
+          "name": "礼来",
+          "ratio": 2.87,
+          "code": "LLY"
+        },
+        {
+          "name": "慧与",
+          "ratio": 2.47,
+          "code": "HPE"
+        },
+        {
+          "name": "高通",
+          "ratio": 2.42,
+          "code": "QCOM"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.41,
+          "code": "GOOG"
+        },
+        {
+          "name": "Arm Holdings plc ADR",
+          "ratio": 2.06,
+          "code": "ARM"
+        },
+        {
+          "name": "诺和诺德",
+          "ratio": 1.27,
+          "code": "NVO"
+        },
+        {
+          "name": "中国海洋石油",
+          "ratio": 1.12,
+          "code": "00883"
+        },
+        {
+          "name": "安费诺",
+          "ratio": 1.1,
+          "code": "APH"
+        },
+        {
+          "name": "Arista Networks Inc",
+          "ratio": 0.93,
+          "code": "ANET"
+        },
+        {
+          "name": "西部数据",
+          "ratio": 0.81,
+          "code": "WDC"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 0.78,
+          "code": "TSLA"
+        },
+        {
+          "name": "The TJX Companies Inc",
+          "ratio": 0.72,
+          "code": "TJX"
+        },
+        {
+          "name": "墨式烧烤",
+          "ratio": 0.58,
+          "code": "CMG"
+        },
+        {
+          "name": "阿贝克隆比&费奇",
+          "ratio": 0.58,
+          "code": "ANF"
+        },
+        {
+          "name": "SharkNinja Inc",
+          "ratio": 0.56,
+          "code": "SN"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 0.5,
+          "code": "NFLX"
+        },
+        {
+          "name": "CAVA Group Inc",
+          "ratio": 0.43,
+          "code": "CAVA"
+        },
+        {
+          "name": "Vertiv Holdings Co-A",
+          "ratio": 0.4,
+          "code": "VRT"
+        },
+        {
+          "name": "沃尔玛",
+          "ratio": 0.38,
+          "code": "WMT"
+        },
+        {
+          "name": "Joint Stock Co Kaspi.kz ADR",
+          "ratio": 0.36,
+          "code": "KSPI"
+        },
+        {
+          "name": "Wingstop Inc",
+          "ratio": 0.36,
+          "code": "WING"
+        },
+        {
+          "name": "美团-W",
+          "ratio": 0.13,
+          "code": "03690"
+        }
+      ]
+    },
+    {
+      "date": "2024年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.53,
+          "code": "NVDA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 8.05,
+          "code": "META"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 8.0,
+          "code": "AMZN"
+        },
+        {
+          "name": "微软",
+          "ratio": 7.46,
+          "code": "MSFT"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.99,
+          "code": "AVGO"
+        },
+        {
+          "name": "台积电",
+          "ratio": 4.38,
+          "code": "TSM"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 3.16,
+          "code": "MU"
+        },
+        {
+          "name": "Vertiv Holdings Co-A",
+          "ratio": 3.08,
+          "code": "VRT"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 2.84,
+          "code": "ASML"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.84,
+          "code": "GOOG"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.38,
+          "code": "GOOGL"
+        }
+      ]
+    },
+    {
+      "date": "2023年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "拼多多",
+          "ratio": 9.08,
+          "code": "PDD"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 8.47,
+          "code": "AMZN"
+        },
+        {
+          "name": "微软",
+          "ratio": 7.91,
+          "code": "MSFT"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 6.51,
+          "code": "NVDA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 6.4,
+          "code": "META"
+        },
+        {
+          "name": "苹果",
+          "ratio": 3.44,
+          "code": "AAPL"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 3.25,
+          "code": "SNPS"
+        },
+        {
+          "name": "新东方",
+          "ratio": 3.12,
+          "code": "EDU"
+        },
+        {
+          "name": "Snowflake Inc-A",
+          "ratio": 2.83,
+          "code": "SNOW"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.82,
+          "code": "GOOG"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 2.61,
+          "code": "00700"
+        },
+        {
+          "name": "Coinbase Global Inc-A",
+          "ratio": 2.4,
+          "code": "COIN"
+        },
+        {
+          "name": "高通",
+          "ratio": 2.13,
+          "code": "QCOM"
+        },
+        {
+          "name": "礼来",
+          "ratio": 2.02,
+          "code": "LLY"
+        },
+        {
+          "name": "赛富时",
+          "ratio": 1.52,
+          "code": "CRM"
+        },
+        {
+          "name": "波音",
+          "ratio": 1.23,
+          "code": "BA"
+        },
+        {
+          "name": "优步",
+          "ratio": 1.23,
+          "code": "UBER"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 1.2,
+          "code": "TSLA"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 1.18,
+          "code": "GOOGL"
+        },
+        {
+          "name": "博通",
+          "ratio": 1.17,
+          "code": "AVGO"
+        },
+        {
+          "name": "开市客",
+          "ratio": 1.11,
+          "code": "COST"
+        },
+        {
+          "name": "台积电",
+          "ratio": 1.09,
+          "code": "TSM"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 1.08,
+          "code": "MU"
+        },
+        {
+          "name": "现在服务公司",
+          "ratio": 1.04,
+          "code": "NOW"
+        },
+        {
+          "name": "PVH Corp",
+          "ratio": 1.03,
+          "code": "PVH"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 1.02,
+          "code": "NFLX"
+        },
+        {
+          "name": "大健云仓",
+          "ratio": 1.0,
+          "code": "GCT"
+        },
+        {
+          "name": "日月光半导体",
+          "ratio": 0.99,
+          "code": "ASX"
+        },
+        {
+          "name": "必乐透",
+          "ratio": 0.94,
+          "code": "BIG"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 0.75,
+          "code": "ADBE"
+        },
+        {
+          "name": "Arista Networks Inc",
+          "ratio": 0.74,
+          "code": "ANET"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 0.7,
+          "code": "AMD"
+        },
+        {
+          "name": "好未来",
+          "ratio": 0.54,
+          "code": "TAL"
+        },
+        {
+          "name": "MongoDB Inc-A",
+          "ratio": 0.52,
+          "code": "MDB"
+        },
+        {
+          "name": "昂跑",
+          "ratio": 0.51,
+          "code": "ONON"
+        },
+        {
+          "name": "阿贝克隆比&费奇",
+          "ratio": 0.46,
+          "code": "ANF"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 0.45,
+          "code": "PLTR"
+        },
+        {
+          "name": "粉笔",
+          "ratio": 0.43,
+          "code": "02469"
+        },
+        {
+          "name": "Riot Platforms Inc",
+          "ratio": 0.42,
+          "code": "RIOT"
+        },
+        {
+          "name": "理想汽车-W",
+          "ratio": 0.28,
+          "code": "02015"
+        },
+        {
+          "name": "阿里巴巴-SW",
+          "ratio": 0.25,
+          "code": "09988"
+        },
+        {
+          "name": "新东方-S",
+          "ratio": 0.22,
+          "code": "09901"
+        }
+      ]
+    },
+    {
+      "date": "2023年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 8.07,
+          "code": "NVDA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 7.79,
+          "code": "META"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 7.22,
+          "code": "AMZN"
+        },
+        {
+          "name": "微软",
+          "ratio": 5.85,
+          "code": "MSFT"
+        },
+        {
+          "name": "苹果",
+          "ratio": 5.16,
+          "code": "AAPL"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 4.55,
+          "code": "PDD"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 4.13,
+          "code": "GOOG"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 4.09,
+          "code": "GOOGL"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.57,
+          "code": "TSLA"
+        },
+        {
+          "name": "礼来",
+          "ratio": 2.86,
+          "code": "LLY"
+        }
+      ]
+    },
+    {
+      "date": "2023年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "中国移动",
+          "ratio": 7.19,
+          "code": "00941"
+        },
+        {
+          "name": "中国石油股份",
+          "ratio": 7.1,
+          "code": "00857"
+        },
+        {
+          "name": "中国石油化工股份",
+          "ratio": 5.79,
+          "code": "00386"
+        },
+        {
+          "name": "中国海洋石油",
+          "ratio": 5.11,
+          "code": "00883"
+        },
+        {
+          "name": "中国神华",
+          "ratio": 3.95,
+          "code": "01088"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 3.49,
+          "code": "NVDA"
+        },
+        {
+          "name": "苹果",
+          "ratio": 3.46,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 3.43,
+          "code": "MSFT"
+        },
+        {
+          "name": "华电国际电力股份",
+          "ratio": 3.19,
+          "code": "01071"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.13,
+          "code": "META"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 2.51,
+          "code": "ADBE"
+        },
+        {
+          "name": "法拉利",
+          "ratio": 2.38,
+          "code": "RACE"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 2.09,
+          "code": "AMD"
+        },
+        {
+          "name": "赛富时",
+          "ratio": 1.94,
+          "code": "CRM"
+        },
+        {
+          "name": "家得宝",
+          "ratio": 1.71,
+          "code": "HD"
+        },
+        {
+          "name": "德克斯户外",
+          "ratio": 1.69,
+          "code": "DECK"
+        },
+        {
+          "name": "博通",
+          "ratio": 1.59,
+          "code": "AVGO"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 1.43,
+          "code": "AMZN"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 1.33,
+          "code": "GOOG"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 1.32,
+          "code": "GOOGL"
+        },
+        {
+          "name": "Diamondback Energy Inc",
+          "ratio": 1.2,
+          "code": "FANG"
+        },
+        {
+          "name": "华能国际电力股份",
+          "ratio": 1.15,
+          "code": "00902"
+        },
+        {
+          "name": "兖矿能源",
+          "ratio": 1.05,
+          "code": "01171"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 0.98,
+          "code": "NIO"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 0.96,
+          "code": "TSLA"
+        },
+        {
+          "name": "霍顿房屋",
+          "ratio": 0.89,
+          "code": "DHI"
+        },
+        {
+          "name": "Arista Networks Inc",
+          "ratio": 0.89,
+          "code": "ANET"
+        },
+        {
+          "name": "西方石油",
+          "ratio": 0.86,
+          "code": "OXY"
+        },
+        {
+          "name": "财捷",
+          "ratio": 0.84,
+          "code": "INTU"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 0.81,
+          "code": "NFLX"
+        },
+        {
+          "name": "Unity Software Inc",
+          "ratio": 0.8,
+          "code": "U"
+        },
+        {
+          "name": "雪佛龙",
+          "ratio": 0.72,
+          "code": "CVX"
+        },
+        {
+          "name": "Workday Inc-A",
+          "ratio": 0.62,
+          "code": "WDAY"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 0.61,
+          "code": "INTC"
+        },
+        {
+          "name": "Fabrinet",
+          "ratio": 0.43,
+          "code": "FN"
+        },
+        {
+          "name": "Coherent Corp",
+          "ratio": 0.37,
+          "code": "COHR"
+        }
+      ]
+    },
+    {
+      "date": "2023年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "腾讯控股",
+          "ratio": 7.41,
+          "code": "00700"
+        },
+        {
+          "name": "美团-W",
+          "ratio": 6.91,
+          "code": "03690"
+        },
+        {
+          "name": "阿里巴巴-SW",
+          "ratio": 6.77,
+          "code": "09988"
+        },
+        {
+          "name": "紫金矿业",
+          "ratio": 4.72,
+          "code": "02899"
+        },
+        {
+          "name": "京东集团-SW",
+          "ratio": 4.17,
+          "code": "09618"
+        },
+        {
+          "name": "洛阳钼业",
+          "ratio": 4.03,
+          "code": "03993"
+        },
+        {
+          "name": "快手-W",
+          "ratio": 3.99,
+          "code": "01024"
+        },
+        {
+          "name": "百度集团-SW",
+          "ratio": 3.92,
+          "code": "09888"
+        },
+        {
+          "name": "中国电信",
+          "ratio": 3.9,
+          "code": "00728"
+        },
+        {
+          "name": "中手游",
+          "ratio": 3.35,
+          "code": "00302"
+        }
+      ]
+    },
+    {
+      "date": "2022年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "美团-W",
+          "ratio": 6.81,
+          "code": "03690"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 5.29,
+          "code": "00700"
+        },
+        {
+          "name": "香港交易所",
+          "ratio": 4.15,
+          "code": "00388"
+        },
+        {
+          "name": "东方甄选",
+          "ratio": 3.43,
+          "code": "01797"
+        },
+        {
+          "name": "先声药业",
+          "ratio": 3.07,
+          "code": "02096"
+        },
+        {
+          "name": "美东汽车",
+          "ratio": 2.98,
+          "code": "01268"
+        },
+        {
+          "name": "新东方-S",
+          "ratio": 2.87,
+          "code": "09901"
+        },
+        {
+          "name": "李宁",
+          "ratio": 2.73,
+          "code": "02331"
+        },
+        {
+          "name": "中国海洋石油",
+          "ratio": 2.51,
+          "code": "00883"
+        },
+        {
+          "name": "滔搏",
+          "ratio": 2.49,
+          "code": "06110"
+        },
+        {
+          "name": "申洲国际",
+          "ratio": 2.21,
+          "code": "02313"
+        },
+        {
+          "name": "诺诚健华-B",
+          "ratio": 2.06,
+          "code": "09969"
+        },
+        {
+          "name": "哔哩哔哩-W",
+          "ratio": 1.88,
+          "code": "09626"
+        },
+        {
+          "name": "中教控股",
+          "ratio": 1.85,
+          "code": "00839"
+        },
+        {
+          "name": "中国联通",
+          "ratio": 1.82,
+          "code": "00762"
+        },
+        {
+          "name": "建发国际集团",
+          "ratio": 1.77,
+          "code": "01908"
+        },
+        {
+          "name": "海吉亚医疗",
+          "ratio": 1.7,
+          "code": "06078"
+        },
+        {
+          "name": "周大福",
+          "ratio": 1.64,
+          "code": "01929"
+        },
+        {
+          "name": "紫金矿业",
+          "ratio": 1.6,
+          "code": "02899"
+        },
+        {
+          "name": "荣昌生物-B",
+          "ratio": 1.56,
+          "code": "09995"
+        },
+        {
+          "name": "快手-W",
+          "ratio": 1.52,
+          "code": "01024"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 1.51,
+          "code": "00881"
+        },
+        {
+          "name": "金蝶国际",
+          "ratio": 1.47,
+          "code": "00268"
+        },
+        {
+          "name": "康龙化成",
+          "ratio": 1.41,
+          "code": "03759"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 1.24,
+          "code": "PDD"
+        },
+        {
+          "name": "阅文集团",
+          "ratio": 1.14,
+          "code": "00772"
+        },
+        {
+          "name": "金山软件",
+          "ratio": 0.82,
+          "code": "03888"
+        },
+        {
+          "name": "安踏体育",
+          "ratio": 0.77,
+          "code": "02020"
+        },
+        {
+          "name": "天能动力",
+          "ratio": 0.73,
+          "code": "00819"
+        },
+        {
+          "name": "绿叶制药",
+          "ratio": 0.72,
+          "code": "02186"
+        },
+        {
+          "name": "医思健康",
+          "ratio": 0.64,
+          "code": "02138"
+        },
+        {
+          "name": "颐海国际",
+          "ratio": 0.62,
+          "code": "01579"
+        },
+        {
+          "name": "华虹半导体",
+          "ratio": 0.62,
+          "code": "01347"
+        },
+        {
+          "name": "Sea Ltd ADR",
+          "ratio": 0.61,
+          "code": "SE"
+        },
+        {
+          "name": "昊海生物科技",
+          "ratio": 0.61,
+          "code": "06826"
+        },
+        {
+          "name": "海底捞",
+          "ratio": 0.59,
+          "code": "06862"
+        },
+        {
+          "name": "信达生物",
+          "ratio": 0.59,
+          "code": "01801"
+        },
+        {
+          "name": "时代天使",
+          "ratio": 0.59,
+          "code": "06699"
+        },
+        {
+          "name": "中国东方教育",
+          "ratio": 0.58,
+          "code": "00667"
+        },
+        {
+          "name": "德琪医药-B",
+          "ratio": 0.58,
+          "code": "06996"
+        },
+        {
+          "name": "心动公司",
+          "ratio": 0.58,
+          "code": "02400"
+        },
+        {
+          "name": "爱康医疗",
+          "ratio": 0.57,
+          "code": "01789"
+        },
+        {
+          "name": "锦欣生殖",
+          "ratio": 0.56,
+          "code": "01951"
+        },
+        {
+          "name": "启明医疗-B",
+          "ratio": 0.56,
+          "code": "02500"
+        },
+        {
+          "name": "四环医药",
+          "ratio": 0.55,
+          "code": "00460"
+        },
+        {
+          "name": "微创医疗",
+          "ratio": 0.55,
+          "code": "00853"
+        },
+        {
+          "name": "耐世特",
+          "ratio": 0.55,
+          "code": "01316"
+        },
+        {
+          "name": "高鑫零售",
+          "ratio": 0.55,
+          "code": "06808"
+        },
+        {
+          "name": "希望教育",
+          "ratio": 0.55,
+          "code": "01765"
+        },
+        {
+          "name": "敏华控股",
+          "ratio": 0.55,
+          "code": "01999"
+        },
+        {
+          "name": "中国飞鹤",
+          "ratio": 0.54,
+          "code": "06186"
+        },
+        {
+          "name": "康方生物",
+          "ratio": 0.54,
+          "code": "09926"
+        },
+        {
+          "name": "IGG",
+          "ratio": 0.54,
+          "code": "00799"
+        },
+        {
+          "name": "众安在线",
+          "ratio": 0.54,
+          "code": "06060"
+        },
+        {
+          "name": "中国铝业",
+          "ratio": 0.53,
+          "code": "02600"
+        },
+        {
+          "name": "维亚生物",
+          "ratio": 0.53,
+          "code": "01873"
+        },
+        {
+          "name": "瑞声科技",
+          "ratio": 0.53,
+          "code": "02018"
+        },
+        {
+          "name": "泡泡玛特",
+          "ratio": 0.52,
+          "code": "09992"
+        },
+        {
+          "name": "信义光能",
+          "ratio": 0.52,
+          "code": "00968"
+        },
+        {
+          "name": "明源云",
+          "ratio": 0.52,
+          "code": "00909"
+        },
+        {
+          "name": "丘钛科技",
+          "ratio": 0.52,
+          "code": "01478"
+        },
+        {
+          "name": "五矿资源",
+          "ratio": 0.51,
+          "code": "01208"
+        },
+        {
+          "name": "移卡",
+          "ratio": 0.51,
+          "code": "09923"
+        },
+        {
+          "name": "祖龙娱乐",
+          "ratio": 0.5,
+          "code": "09990"
+        },
+        {
+          "name": "朝聚眼科",
+          "ratio": 0.49,
+          "code": "02219"
+        },
+        {
+          "name": "新高教集团",
+          "ratio": 0.48,
+          "code": "02001"
+        },
+        {
+          "name": "小鹏汽车-W",
+          "ratio": 0.48,
+          "code": "09868"
+        },
+        {
+          "name": "阿里巴巴-SW",
+          "ratio": 0.47,
+          "code": "09988"
+        },
+        {
+          "name": "思摩尔国际",
+          "ratio": 0.46,
+          "code": "06969"
+        },
+        {
+          "name": "中远海能",
+          "ratio": 0.38,
+          "code": "01138"
+        },
+        {
+          "name": "中国金茂",
+          "ratio": 0.35,
+          "code": "00817"
+        },
+        {
+          "name": "金科服务",
+          "ratio": 0.34,
+          "code": "09666"
+        },
+        {
+          "name": "雅居乐集团",
+          "ratio": 0.31,
+          "code": "03383"
+        },
+        {
+          "name": "开拓药业-B",
+          "ratio": 0.3,
+          "code": "09939"
+        },
+        {
+          "name": "东阳光药",
+          "ratio": 0.29,
+          "code": "01558"
+        },
+        {
+          "name": "康希诺生物",
+          "ratio": 0.29,
+          "code": "06185"
+        },
+        {
+          "name": "平安好医生",
+          "ratio": 0.27,
+          "code": "01833"
+        },
+        {
+          "name": "君实生物",
+          "ratio": 0.26,
+          "code": "01877"
+        },
+        {
+          "name": "比亚迪股份",
+          "ratio": 0.24,
+          "code": "01211"
+        },
+        {
+          "name": "中手游",
+          "ratio": 0.18,
+          "code": "00302"
+        },
+        {
+          "name": "微盟集团",
+          "ratio": 0.18,
+          "code": "02013"
+        },
+        {
+          "name": "复锐医疗科技",
+          "ratio": 0.17,
+          "code": "01696"
+        },
+        {
+          "name": "昭衍新药",
+          "ratio": 0.16,
+          "code": "06127"
+        },
+        {
+          "name": "比亚迪电子",
+          "ratio": 0.16,
+          "code": "00285"
+        },
+        {
+          "name": "舜宇光学科技",
+          "ratio": 0.15,
+          "code": "02382"
+        },
+        {
+          "name": "呷哺呷哺",
+          "ratio": 0.15,
+          "code": "00520"
+        },
+        {
+          "name": "京东集团-SW",
+          "ratio": 0.06,
+          "code": "09618"
+        },
+        {
+          "name": "哈尔滨电气",
+          "ratio": 0.04,
+          "code": "01133"
+        },
+        {
+          "name": "上海复旦",
+          "ratio": 0.04,
+          "code": "01385"
+        },
+        {
+          "name": "太平洋航运",
+          "ratio": 0.03,
+          "code": "02343"
+        },
+        {
+          "name": "特海国际",
+          "ratio": 0.02,
+          "code": "09658"
+        }
+      ]
+    },
+    {
+      "date": "2022年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "上海复旦",
+          "ratio": 9.7,
+          "code": "01385"
+        },
+        {
+          "name": "中国海洋石油",
+          "ratio": 9.48,
+          "code": "00883"
+        },
+        {
+          "name": "兖矿能源",
+          "ratio": 9.47,
+          "code": "01171"
+        },
+        {
+          "name": "中远海能",
+          "ratio": 8.82,
+          "code": "01138"
+        },
+        {
+          "name": "中国神华",
+          "ratio": 8.64,
+          "code": "01088"
+        },
+        {
+          "name": "中煤能源",
+          "ratio": 6.12,
+          "code": "01898"
+        },
+        {
+          "name": "兖煤澳大利亚",
+          "ratio": 4.28,
+          "code": "03668"
+        },
+        {
+          "name": "海尔智家",
+          "ratio": 4.14,
+          "code": "06690"
+        },
+        {
+          "name": "中国移动",
+          "ratio": 3.68,
+          "code": "00941"
+        },
+        {
+          "name": "新东方在线",
+          "ratio": 3.62,
+          "code": "01797"
+        }
+      ]
+    },
+    {
+      "date": "2022年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "美团-W",
+          "ratio": 5.66,
+          "code": "03690"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 3.81,
+          "code": "00700"
+        },
+        {
+          "name": "协鑫科技",
+          "ratio": 3.47,
+          "code": "03800"
+        },
+        {
+          "name": "长城汽车",
+          "ratio": 3.25,
+          "code": "02333"
+        },
+        {
+          "name": "康龙化成",
+          "ratio": 3.22,
+          "code": "03759"
+        },
+        {
+          "name": "兖矿能源",
+          "ratio": 3.11,
+          "code": "01171"
+        },
+        {
+          "name": "福耀玻璃",
+          "ratio": 3.1,
+          "code": "03606"
+        },
+        {
+          "name": "赣锋锂业",
+          "ratio": 2.84,
+          "code": "01772"
+        },
+        {
+          "name": "华润啤酒",
+          "ratio": 2.68,
+          "code": "00291"
+        },
+        {
+          "name": "京东集团-SW",
+          "ratio": 2.5,
+          "code": "09618"
+        },
+        {
+          "name": "小鹏汽车-W",
+          "ratio": 2.37,
+          "code": "09868"
+        },
+        {
+          "name": "药明康德",
+          "ratio": 2.25,
+          "code": "02359"
+        },
+        {
+          "name": "碧桂园服务",
+          "ratio": 2.21,
+          "code": "06098"
+        },
+        {
+          "name": "招商银行",
+          "ratio": 1.97,
+          "code": "03968"
+        },
+        {
+          "name": "东岳集团",
+          "ratio": 1.91,
+          "code": "00189"
+        },
+        {
+          "name": "锦欣生殖",
+          "ratio": 1.91,
+          "code": "01951"
+        },
+        {
+          "name": "中国海外发展",
+          "ratio": 1.89,
+          "code": "00688"
+        },
+        {
+          "name": "中国移动",
+          "ratio": 1.8,
+          "code": "00941"
+        },
+        {
+          "name": "阿里巴巴-SW",
+          "ratio": 1.79,
+          "code": "09988"
+        },
+        {
+          "name": "耐世特",
+          "ratio": 1.61,
+          "code": "01316"
+        },
+        {
+          "name": "华润置地",
+          "ratio": 1.53,
+          "code": "01109"
+        },
+        {
+          "name": "香港交易所",
+          "ratio": 1.5,
+          "code": "00388"
+        },
+        {
+          "name": "中国海洋石油",
+          "ratio": 1.44,
+          "code": "00883"
+        },
+        {
+          "name": "汇丰控股",
+          "ratio": 1.43,
+          "code": "00005"
+        },
+        {
+          "name": "中国神华",
+          "ratio": 1.41,
+          "code": "01088"
+        },
+        {
+          "name": "敏实集团",
+          "ratio": 1.34,
+          "code": "00425"
+        },
+        {
+          "name": "JS环球生活",
+          "ratio": 1.32,
+          "code": "01691"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 1.26,
+          "code": "PDD"
+        },
+        {
+          "name": "海伦司",
+          "ratio": 1.23,
+          "code": "09869"
+        },
+        {
+          "name": "海底捞",
+          "ratio": 1.19,
+          "code": "06862"
+        },
+        {
+          "name": "友邦保险",
+          "ratio": 1.18,
+          "code": "01299"
+        },
+        {
+          "name": "九毛九",
+          "ratio": 1.17,
+          "code": "09922"
+        },
+        {
+          "name": "同程旅行",
+          "ratio": 1.06,
+          "code": "00780"
+        },
+        {
+          "name": "李宁",
+          "ratio": 1.01,
+          "code": "02331"
+        },
+        {
+          "name": "海尔智家",
+          "ratio": 1.01,
+          "code": "06690"
+        },
+        {
+          "name": "保利物业",
+          "ratio": 0.94,
+          "code": "06049"
+        },
+        {
+          "name": "泡泡玛特",
+          "ratio": 0.92,
+          "code": "09992"
+        },
+        {
+          "name": "思摩尔国际",
+          "ratio": 0.91,
+          "code": "06969"
+        },
+        {
+          "name": "中国软件国际",
+          "ratio": 0.89,
+          "code": "00354"
+        },
+        {
+          "name": "邮储银行",
+          "ratio": 0.87,
+          "code": "01658"
+        },
+        {
+          "name": "中海物业",
+          "ratio": 0.82,
+          "code": "02669"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 0.81,
+          "code": "00881"
+        },
+        {
+          "name": "旭辉永升服务",
+          "ratio": 0.76,
+          "code": "01995"
+        },
+        {
+          "name": "澳博控股",
+          "ratio": 0.69,
+          "code": "00880"
+        },
+        {
+          "name": "信义光能",
+          "ratio": 0.67,
+          "code": "00968"
+        },
+        {
+          "name": "时代电气",
+          "ratio": 0.67,
+          "code": "03898"
+        },
+        {
+          "name": "海吉亚医疗",
+          "ratio": 0.62,
+          "code": "06078"
+        },
+        {
+          "name": "蔚来",
+          "ratio": 0.59,
+          "code": "NIO"
+        },
+        {
+          "name": "招金矿业",
+          "ratio": 0.57,
+          "code": "01818"
+        },
+        {
+          "name": "青岛啤酒股份",
+          "ratio": 0.57,
+          "code": "00168"
+        },
+        {
+          "name": "腾讯音乐",
+          "ratio": 0.55,
+          "code": "TME"
+        },
+        {
+          "name": "理想汽车-W",
+          "ratio": 0.53,
+          "code": "02015"
+        },
+        {
+          "name": "中远海能",
+          "ratio": 0.52,
+          "code": "01138"
+        },
+        {
+          "name": "中国中铁",
+          "ratio": 0.51,
+          "code": "00390"
+        },
+        {
+          "name": "新特能源",
+          "ratio": 0.49,
+          "code": "01799"
+        },
+        {
+          "name": "贝壳",
+          "ratio": 0.49,
+          "code": "BEKE"
+        },
+        {
+          "name": "中航科工",
+          "ratio": 0.37,
+          "code": "02357"
+        },
+        {
+          "name": "华住",
+          "ratio": 0.29,
+          "code": "HTHT"
+        }
+      ]
+    },
+    {
+      "date": "2022年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "兖矿能源",
+          "ratio": 8.65,
+          "code": "01171"
+        },
+        {
+          "name": "紫金矿业",
+          "ratio": 6.31,
+          "code": "02899"
+        },
+        {
+          "name": "中国宏桥",
+          "ratio": 6.2,
+          "code": "01378"
+        },
+        {
+          "name": "中国移动",
+          "ratio": 4.85,
+          "code": "00941"
+        },
+        {
+          "name": "汇丰控股",
+          "ratio": 4.67,
+          "code": "00005"
+        },
+        {
+          "name": "中国神华",
+          "ratio": 4.38,
+          "code": "01088"
+        },
+        {
+          "name": "中国电力",
+          "ratio": 4.12,
+          "code": "02380"
+        },
+        {
+          "name": "华润置地",
+          "ratio": 3.74,
+          "code": "01109"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 3.48,
+          "code": "00700"
+        },
+        {
+          "name": "中国海洋石油",
+          "ratio": 3.37,
+          "code": "00883"
+        }
+      ]
+    },
+    {
+      "date": "2021年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "比亚迪股份",
+          "ratio": 6.89,
+          "code": "01211"
+        },
+        {
+          "name": "舜宇光学科技",
+          "ratio": 5.56,
+          "code": "02382"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 5.41,
+          "code": "00700"
+        },
+        {
+          "name": "赣锋锂业",
+          "ratio": 5.19,
+          "code": "01772"
+        },
+        {
+          "name": "工商银行",
+          "ratio": 3.6,
+          "code": "01398"
+        },
+        {
+          "name": "耐世特",
+          "ratio": 3.0,
+          "code": "01316"
+        },
+        {
+          "name": "华润电力",
+          "ratio": 2.84,
+          "code": "00836"
+        },
+        {
+          "name": "华润啤酒",
+          "ratio": 2.16,
+          "code": "00291"
+        },
+        {
+          "name": "昆仑能源",
+          "ratio": 1.92,
+          "code": "00135"
+        },
+        {
+          "name": "安踏体育",
+          "ratio": 1.63,
+          "code": "02020"
+        },
+        {
+          "name": "西维斯健康",
+          "ratio": 1.59,
+          "code": "CVS"
+        },
+        {
+          "name": "申洲国际",
+          "ratio": 1.55,
+          "code": "02313"
+        },
+        {
+          "name": "蒙牛乳业",
+          "ratio": 1.49,
+          "code": "02319"
+        },
+        {
+          "name": "华润置地",
+          "ratio": 1.48,
+          "code": "01109"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 1.44,
+          "code": "GOOGL"
+        },
+        {
+          "name": "雅迪控股",
+          "ratio": 1.43,
+          "code": "01585"
+        },
+        {
+          "name": "招商银行",
+          "ratio": 1.37,
+          "code": "03968"
+        },
+        {
+          "name": "阿特拉斯环球航空",
+          "ratio": 1.24,
+          "code": "AAWW"
+        },
+        {
+          "name": "联合健康",
+          "ratio": 1.18,
+          "code": "UNH"
+        },
+        {
+          "name": "康师傅控股",
+          "ratio": 1.17,
+          "code": "00322"
+        },
+        {
+          "name": "路易斯安那太平洋",
+          "ratio": 1.15,
+          "code": "LPX"
+        },
+        {
+          "name": "中国海外发展",
+          "ratio": 1.14,
+          "code": "00688"
+        },
+        {
+          "name": "李宁",
+          "ratio": 1.12,
+          "code": "02331"
+        },
+        {
+          "name": "丹纳赫",
+          "ratio": 1.08,
+          "code": "DHR"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 1.08,
+          "code": "NVDA"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 1.05,
+          "code": "AMD"
+        },
+        {
+          "name": "邮储银行",
+          "ratio": 1.03,
+          "code": "01658"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 1.02,
+          "code": "MU"
+        },
+        {
+          "name": "苹果",
+          "ratio": 0.99,
+          "code": "AAPL"
+        },
+        {
+          "name": "赛默飞世尔科技",
+          "ratio": 0.98,
+          "code": "TMO"
+        },
+        {
+          "name": "旭辉永升服务",
+          "ratio": 0.95,
+          "code": "01995"
+        },
+        {
+          "name": "敏实集团",
+          "ratio": 0.9,
+          "code": "00425"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 0.88,
+          "code": "NFLX"
+        },
+        {
+          "name": "中国移动",
+          "ratio": 0.88,
+          "code": "00941"
+        },
+        {
+          "name": "InMode Ltd",
+          "ratio": 0.78,
+          "code": "INMD"
+        },
+        {
+          "name": "信义玻璃",
+          "ratio": 0.77,
+          "code": "00868"
+        },
+        {
+          "name": "福耀玻璃",
+          "ratio": 0.76,
+          "code": "03606"
+        },
+        {
+          "name": "香港交易所",
+          "ratio": 0.73,
+          "code": "00388"
+        },
+        {
+          "name": "中海油田服务",
+          "ratio": 0.71,
+          "code": "02883"
+        },
+        {
+          "name": "长城汽车",
+          "ratio": 0.65,
+          "code": "02333"
+        },
+        {
+          "name": "辉瑞",
+          "ratio": 0.65,
+          "code": "PFE"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 0.61,
+          "code": "AMZN"
+        },
+        {
+          "name": "雪佛龙",
+          "ratio": 0.6,
+          "code": "CVX"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 0.58,
+          "code": "LRCX"
+        },
+        {
+          "name": "默沙东",
+          "ratio": 0.56,
+          "code": "MRK"
+        },
+        {
+          "name": "微软",
+          "ratio": 0.56,
+          "code": "MSFT"
+        },
+        {
+          "name": "中国生物制药",
+          "ratio": 0.51,
+          "code": "01177"
+        },
+        {
+          "name": "美团-W",
+          "ratio": 0.51,
+          "code": "03690"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.49,
+          "code": "META"
+        },
+        {
+          "name": "lululemon athletica inc",
+          "ratio": 0.46,
+          "code": "LULU"
+        },
+        {
+          "name": "香港中华煤气",
+          "ratio": 0.4,
+          "code": "00003"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 0.35,
+          "code": "AMAT"
+        },
+        {
+          "name": "时代电气",
+          "ratio": 0.3,
+          "code": "03898"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 0.29,
+          "code": "TXN"
+        },
+        {
+          "name": "洛阳钼业",
+          "ratio": 0.29,
+          "code": "03993"
+        },
+        {
+          "name": "协鑫科技",
+          "ratio": 0.27,
+          "code": "03800"
+        },
+        {
+          "name": "阿里巴巴-SW",
+          "ratio": 0.22,
+          "code": "09988"
+        },
+        {
+          "name": "中国石油股份",
+          "ratio": 0.1,
+          "code": "00857"
+        }
+      ]
+    },
+    {
+      "date": "2021年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "赣锋锂业",
+          "ratio": 5.74,
+          "code": "01772"
+        },
+        {
+          "name": "比亚迪股份",
+          "ratio": 4.49,
+          "code": "01211"
+        },
+        {
+          "name": "舜宇光学科技",
+          "ratio": 4.43,
+          "code": "02382"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 4.37,
+          "code": "00700"
+        },
+        {
+          "name": "华润电力",
+          "ratio": 3.93,
+          "code": "00836"
+        },
+        {
+          "name": "安踏体育",
+          "ratio": 3.84,
+          "code": "02020"
+        },
+        {
+          "name": "药明康德",
+          "ratio": 3.81,
+          "code": "02359"
+        },
+        {
+          "name": "工商银行",
+          "ratio": 3.3,
+          "code": "01398"
+        },
+        {
+          "name": "药明生物",
+          "ratio": 3.08,
+          "code": "02269"
+        },
+        {
+          "name": "昆仑能源",
+          "ratio": 3.0,
+          "code": "00135"
+        }
+      ]
+    },
+    {
+      "date": "2021年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "安踏体育",
+          "ratio": 4.92,
+          "code": "02020"
+        },
+        {
+          "name": "比亚迪股份",
+          "ratio": 4.36,
+          "code": "01211"
+        },
+        {
+          "name": "赣锋锂业",
+          "ratio": 3.97,
+          "code": "01772"
+        },
+        {
+          "name": "舜宇光学科技",
+          "ratio": 3.8,
+          "code": "02382"
+        },
+        {
+          "name": "敏华控股",
+          "ratio": 3.32,
+          "code": "01999"
+        },
+        {
+          "name": "工商银行",
+          "ratio": 3.15,
+          "code": "01398"
+        },
+        {
+          "name": "药明康德",
+          "ratio": 2.96,
+          "code": "02359"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 2.42,
+          "code": "00881"
+        },
+        {
+          "name": "InMode Ltd",
+          "ratio": 2.4,
+          "code": "INMD"
+        },
+        {
+          "name": "雅迪控股",
+          "ratio": 2.15,
+          "code": "01585"
+        },
+        {
+          "name": "敏实集团",
+          "ratio": 2.05,
+          "code": "00425"
+        },
+        {
+          "name": "昆仑能源",
+          "ratio": 2.02,
+          "code": "00135"
+        },
+        {
+          "name": "小米集团-W",
+          "ratio": 1.98,
+          "code": "01810"
+        },
+        {
+          "name": "旭辉永升服务",
+          "ratio": 1.98,
+          "code": "01995"
+        },
+        {
+          "name": "药明生物",
+          "ratio": 1.97,
+          "code": "02269"
+        },
+        {
+          "name": "中芯国际",
+          "ratio": 1.95,
+          "code": "00981"
+        },
+        {
+          "name": "招商银行",
+          "ratio": 1.86,
+          "code": "03968"
+        },
+        {
+          "name": "美团-W",
+          "ratio": 1.78,
+          "code": "03690"
+        },
+        {
+          "name": "李宁",
+          "ratio": 1.7,
+          "code": "02331"
+        },
+        {
+          "name": "复星医药",
+          "ratio": 1.69,
+          "code": "02196"
+        },
+        {
+          "name": "信义玻璃",
+          "ratio": 1.65,
+          "code": "00868"
+        },
+        {
+          "name": "青岛啤酒股份",
+          "ratio": 1.64,
+          "code": "00168"
+        },
+        {
+          "name": "Roblox Corp-A",
+          "ratio": 1.57,
+          "code": "RBLX"
+        },
+        {
+          "name": "康哲药业",
+          "ratio": 1.53,
+          "code": "00867"
+        },
+        {
+          "name": "塔吉特",
+          "ratio": 1.53,
+          "code": "TGT"
+        },
+        {
+          "name": "中国软件国际",
+          "ratio": 1.48,
+          "code": "00354"
+        },
+        {
+          "name": "中海油田服务",
+          "ratio": 1.42,
+          "code": "02883"
+        },
+        {
+          "name": "优然牧业",
+          "ratio": 1.26,
+          "code": "09858"
+        },
+        {
+          "name": "碧桂园服务",
+          "ratio": 1.03,
+          "code": "06098"
+        },
+        {
+          "name": "兖矿能源",
+          "ratio": 0.97,
+          "code": "01171"
+        },
+        {
+          "name": "维亚生物",
+          "ratio": 0.81,
+          "code": "01873"
+        },
+        {
+          "name": "金阳新能源",
+          "ratio": 0.81,
+          "code": "01121"
+        },
+        {
+          "name": "四环医药",
+          "ratio": 0.65,
+          "code": "00460"
+        },
+        {
+          "name": "阅文集团",
+          "ratio": 0.63,
+          "code": "00772"
+        },
+        {
+          "name": "金山软件",
+          "ratio": 0.61,
+          "code": "03888"
+        },
+        {
+          "name": "阿里巴巴-SW",
+          "ratio": 0.54,
+          "code": "09988"
+        },
+        {
+          "name": "海丰国际",
+          "ratio": 0.53,
+          "code": "01308"
+        },
+        {
+          "name": "汇丰控股",
+          "ratio": 0.51,
+          "code": "00005"
+        },
+        {
+          "name": "友邦保险",
+          "ratio": 0.47,
+          "code": "01299"
+        },
+        {
+          "name": "蒙牛乳业",
+          "ratio": 0.46,
+          "code": "02319"
+        },
+        {
+          "name": "中金公司",
+          "ratio": 0.34,
+          "code": "03908"
+        },
+        {
+          "name": "中国海洋石油",
+          "ratio": 0.33,
+          "code": "00883"
+        },
+        {
+          "name": "中国石油化工股份",
+          "ratio": 0.31,
+          "code": "00386"
+        },
+        {
+          "name": "中国电信",
+          "ratio": 0.28,
+          "code": "00728"
+        },
+        {
+          "name": "中国移动",
+          "ratio": 0.28,
+          "code": "00941"
+        },
+        {
+          "name": "中银香港",
+          "ratio": 0.11,
+          "code": "02388"
+        },
+        {
+          "name": "华润置地",
+          "ratio": 0.1,
+          "code": "01109"
+        }
+      ]
+    },
+    {
+      "date": "2021年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "腾讯控股",
+          "ratio": 8.42,
+          "code": "00700"
+        },
+        {
+          "name": "昆仑能源",
+          "ratio": 4.44,
+          "code": "00135"
+        },
+        {
+          "name": "工商银行",
+          "ratio": 4.38,
+          "code": "01398"
+        },
+        {
+          "name": "小米集团-W",
+          "ratio": 4.11,
+          "code": "01810"
+        },
+        {
+          "name": "雅迪控股",
+          "ratio": 3.54,
+          "code": "01585"
+        },
+        {
+          "name": "中海油田服务",
+          "ratio": 3.38,
+          "code": "02883"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 3.07,
+          "code": "00881"
+        },
+        {
+          "name": "耐世特",
+          "ratio": 3.04,
+          "code": "01316"
+        },
+        {
+          "name": "赣锋锂业",
+          "ratio": 3.03,
+          "code": "01772"
+        },
+        {
+          "name": "安踏体育",
+          "ratio": 2.95,
+          "code": "02020"
+        }
+      ]
+    },
+    {
+      "date": "2020年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "赣锋锂业",
+          "ratio": 7.13,
+          "code": "01772"
+        },
+        {
+          "name": "小米集团-W",
+          "ratio": 7.08,
+          "code": "01810"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 6.28,
+          "code": "00700"
+        },
+        {
+          "name": "比亚迪股份",
+          "ratio": 4.82,
+          "code": "01211"
+        },
+        {
+          "name": "敏华控股",
+          "ratio": 4.23,
+          "code": "01999"
+        },
+        {
+          "name": "耐世特",
+          "ratio": 3.44,
+          "code": "01316"
+        },
+        {
+          "name": "敏实集团",
+          "ratio": 3.39,
+          "code": "00425"
+        },
+        {
+          "name": "旭辉永升服务",
+          "ratio": 3.35,
+          "code": "01995"
+        },
+        {
+          "name": "工商银行",
+          "ratio": 3.28,
+          "code": "01398"
+        },
+        {
+          "name": "海螺水泥",
+          "ratio": 2.88,
+          "code": "00914"
+        },
+        {
+          "name": "中国人寿",
+          "ratio": 2.53,
+          "code": "02628"
+        },
+        {
+          "name": "思摩尔国际",
+          "ratio": 1.99,
+          "code": "06969"
+        },
+        {
+          "name": "青岛啤酒股份",
+          "ratio": 1.73,
+          "code": "00168"
+        },
+        {
+          "name": "比亚迪电子",
+          "ratio": 1.4,
+          "code": "00285"
+        },
+        {
+          "name": "中金公司",
+          "ratio": 1.39,
+          "code": "03908"
+        },
+        {
+          "name": "中国生物制药",
+          "ratio": 1.33,
+          "code": "01177"
+        },
+        {
+          "name": "美团-W",
+          "ratio": 1.22,
+          "code": "03690"
+        },
+        {
+          "name": "华宝国际",
+          "ratio": 1.14,
+          "code": "00336"
+        },
+        {
+          "name": "申洲国际",
+          "ratio": 1.08,
+          "code": "02313"
+        },
+        {
+          "name": "香港交易所",
+          "ratio": 1.01,
+          "code": "00388"
+        },
+        {
+          "name": "九毛九",
+          "ratio": 0.84,
+          "code": "09922"
+        },
+        {
+          "name": "金蝶国际",
+          "ratio": 0.82,
+          "code": "00268"
+        },
+        {
+          "name": "波司登",
+          "ratio": 0.75,
+          "code": "03998"
+        },
+        {
+          "name": "吉利汽车",
+          "ratio": 0.69,
+          "code": "00175"
+        },
+        {
+          "name": "微盟集团",
+          "ratio": 0.66,
+          "code": "02013"
+        },
+        {
+          "name": "药明生物",
+          "ratio": 0.61,
+          "code": "02269"
+        },
+        {
+          "name": "招商银行",
+          "ratio": 0.52,
+          "code": "03968"
+        },
+        {
+          "name": "美东汽车",
+          "ratio": 0.52,
+          "code": "01268"
+        },
+        {
+          "name": "紫金矿业",
+          "ratio": 0.52,
+          "code": "02899"
+        },
+        {
+          "name": "福莱特玻璃",
+          "ratio": 0.46,
+          "code": "06865"
+        },
+        {
+          "name": "心动公司",
+          "ratio": 0.33,
+          "code": "02400"
+        },
+        {
+          "name": "邮储银行",
+          "ratio": 0.26,
+          "code": "01658"
+        }
+      ]
+    },
+    {
+      "date": "2020年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "美团-W",
+          "ratio": 9.46,
+          "code": "03690"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 8.62,
+          "code": "00881"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 6.31,
+          "code": "00700"
+        },
+        {
+          "name": "长城汽车",
+          "ratio": 5.62,
+          "code": "02333"
+        },
+        {
+          "name": "海螺水泥",
+          "ratio": 5.41,
+          "code": "00914"
+        },
+        {
+          "name": "小米集团-W",
+          "ratio": 4.61,
+          "code": "01810"
+        },
+        {
+          "name": "福耀玻璃",
+          "ratio": 3.84,
+          "code": "03606"
+        },
+        {
+          "name": "中国人寿",
+          "ratio": 3.7,
+          "code": "02628"
+        },
+        {
+          "name": "安踏体育",
+          "ratio": 3.37,
+          "code": "02020"
+        },
+        {
+          "name": "新东方在线",
+          "ratio": 3.19,
+          "code": "01797"
+        }
+      ]
+    },
+    {
+      "date": "2020年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "中芯国际",
+          "ratio": 8.53,
+          "code": "00981"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 8.2,
+          "code": "00881"
+        },
+        {
+          "name": "美团-W",
+          "ratio": 8.17,
+          "code": "03690"
+        },
+        {
+          "name": "腾讯控股",
+          "ratio": 5.89,
+          "code": "00700"
+        },
+        {
+          "name": "阿里巴巴-SW",
+          "ratio": 5.37,
+          "code": "09988"
+        },
+        {
+          "name": "海螺水泥",
+          "ratio": 4.86,
+          "code": "00914"
+        },
+        {
+          "name": "舜宇光学科技",
+          "ratio": 3.71,
+          "code": "02382"
+        },
+        {
+          "name": "中国生物制药",
+          "ratio": 3.59,
+          "code": "01177"
+        },
+        {
+          "name": "安踏体育",
+          "ratio": 3.18,
+          "code": "02020"
+        },
+        {
+          "name": "新东方在线",
+          "ratio": 3.15,
+          "code": "01797"
+        },
+        {
+          "name": "恒安国际",
+          "ratio": 3.13,
+          "code": "01044"
+        },
+        {
+          "name": "长城汽车",
+          "ratio": 3.06,
+          "code": "02333"
+        },
+        {
+          "name": "福耀玻璃",
+          "ratio": 2.76,
+          "code": "03606"
+        },
+        {
+          "name": "金蝶国际",
+          "ratio": 2.7,
+          "code": "00268"
+        },
+        {
+          "name": "华电国际电力股份",
+          "ratio": 2.22,
+          "code": "01071"
+        },
+        {
+          "name": "爱康医疗",
+          "ratio": 2.05,
+          "code": "01789"
+        },
+        {
+          "name": "工商银行",
+          "ratio": 2.03,
+          "code": "01398"
+        },
+        {
+          "name": "康龙化成",
+          "ratio": 1.99,
+          "code": "03759"
+        },
+        {
+          "name": "碧桂园服务",
+          "ratio": 1.92,
+          "code": "06098"
+        },
+        {
+          "name": "青岛啤酒股份",
+          "ratio": 1.72,
+          "code": "00168"
+        },
+        {
+          "name": "中国软件国际",
+          "ratio": 1.41,
+          "code": "00354"
+        },
+        {
+          "name": "威高股份",
+          "ratio": 1.38,
+          "code": "01066"
+        },
+        {
+          "name": "九毛九",
+          "ratio": 1.33,
+          "code": "09922"
+        },
+        {
+          "name": "春立医疗",
+          "ratio": 1.32,
+          "code": "01858"
+        },
+        {
+          "name": "吉利汽车",
+          "ratio": 1.22,
+          "code": "00175"
+        },
+        {
+          "name": "方达控股",
+          "ratio": 1.2,
+          "code": "01521"
+        },
+        {
+          "name": "药明生物",
+          "ratio": 1.18,
+          "code": "02269"
+        },
+        {
+          "name": "中国重汽",
+          "ratio": 1.17,
+          "code": "03808"
+        },
+        {
+          "name": "华虹半导体",
+          "ratio": 1.12,
+          "code": "01347"
+        },
+        {
+          "name": "ACM Research Inc-A",
+          "ratio": 0.48,
+          "code": "ACMR"
+        },
+        {
+          "name": "石药集团",
+          "ratio": 0.15,
+          "code": "01093"
+        }
+      ]
+    },
+    {
+      "date": "2020年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "腾讯控股",
+          "ratio": 4.49,
+          "code": "00700"
+        },
+        {
+          "name": "工商银行",
+          "ratio": 3.9,
+          "code": "01398"
+        },
+        {
+          "name": "中升控股",
+          "ratio": 3.84,
+          "code": "00881"
+        },
+        {
+          "name": "恒安国际",
+          "ratio": 3.22,
+          "code": "01044"
+        },
+        {
+          "name": "海螺水泥",
+          "ratio": 3.18,
+          "code": "00914"
+        },
+        {
+          "name": "美团-W",
+          "ratio": 3.06,
+          "code": "03690"
+        },
+        {
+          "name": "阿里巴巴-SW",
+          "ratio": 2.96,
+          "code": "09988"
+        },
+        {
+          "name": "长城汽车",
+          "ratio": 2.94,
+          "code": "02333"
+        },
+        {
+          "name": "中芯国际",
+          "ratio": 2.93,
+          "code": "00981"
+        },
+        {
+          "name": "新东方在线",
+          "ratio": 2.87,
+          "code": "01797"
+        }
+      ]
+    }
+  ]
+}

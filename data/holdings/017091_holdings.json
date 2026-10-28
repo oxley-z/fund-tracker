@@ -1,47 +1,562 @@
-[
-  {
-    "date": "2026年3季度股票投资明细",
-    "holdings": [
-      {
-        "name": "苹果",
-        "ratio": 1.37
-      },
-      {
-        "name": "英伟达",
-        "ratio": 1.35
-      },
-      {
-        "name": "微软",
-        "ratio": 1.28
-      },
-      {
-        "name": "Meta Platforms Inc-A",
-        "ratio": 0.7
-      },
-      {
-        "name": "谷歌-A",
-        "ratio": 0.68
-      },
-      {
-        "name": "谷歌-C",
-        "ratio": 0.63
-      },
-      {
-        "name": "博通",
-        "ratio": 0.56
-      },
-      {
-        "name": "美光科技",
-        "ratio": 0.53
-      },
-      {
-        "name": "超威半导体",
-        "ratio": 0.44
-      },
-      {
-        "name": "英特尔",
-        "ratio": 0.28
-      }
-    ]
-  }
-]
+{
+  "_v": 2,
+  "probed_min_year": 2021,
+  "history_exhausted": true,
+  "periods": [
+    {
+      "date": "2026年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "苹果",
+          "ratio": 1.37,
+          "code": "AAPL"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 1.35,
+          "code": "NVDA"
+        },
+        {
+          "name": "微软",
+          "ratio": 1.28,
+          "code": "MSFT"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 0.7,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 0.68,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 0.63,
+          "code": "GOOG"
+        },
+        {
+          "name": "博通",
+          "ratio": 0.56,
+          "code": "AVGO"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 0.53,
+          "code": "MU"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 0.44,
+          "code": "AMD"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 0.28,
+          "code": "INTC"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 0.19,
+          "code": "PLTR"
+        }
+      ]
+    },
+    {
+      "date": "2023年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 10.41,
+          "code": "NVDA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 9.61,
+          "code": "META"
+        },
+        {
+          "name": "微软",
+          "ratio": 8.56,
+          "code": "MSFT"
+        },
+        {
+          "name": "微软",
+          "ratio": 8.55,
+          "code": "MSFT"
+        },
+        {
+          "name": "苹果",
+          "ratio": 8.54,
+          "code": "AAPL"
+        },
+        {
+          "name": "苹果",
+          "ratio": 8.09,
+          "code": "AAPL"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 7.57,
+          "code": "NVDA"
+        },
+        {
+          "name": "博通",
+          "ratio": 6.08,
+          "code": "AVGO"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 4.71,
+          "code": "GOOGL"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 4.7,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 4.69,
+          "code": "GOOG"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 4.37,
+          "code": "ADBE"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 4.3,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 4.23,
+          "code": "GOOG"
+        },
+        {
+          "name": "博通",
+          "ratio": 3.32,
+          "code": "AVGO"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 2.92,
+          "code": "AMD"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 2.71,
+          "code": "INTC"
+        },
+        {
+          "name": "财捷",
+          "ratio": 2.64,
+          "code": "INTU"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 2.54,
+          "code": "TXN"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 2.25,
+          "code": "ADBE"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 2.12,
+          "code": "AMAT"
+        },
+        {
+          "name": "高通",
+          "ratio": 2.02,
+          "code": "QCOM"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 1.61,
+          "code": "AMD"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 1.55,
+          "code": "LRCX"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 1.52,
+          "code": "ADI"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 1.44,
+          "code": "INTC"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 1.3,
+          "code": "MU"
+        },
+        {
+          "name": "派拓网络",
+          "ratio": 1.28,
+          "code": "PANW"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 1.18,
+          "code": "SNPS"
+        },
+        {
+          "name": "科磊",
+          "ratio": 1.16,
+          "code": "KLAC"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 1.12,
+          "code": "CDNS"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 1.0,
+          "code": "PDD"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 0.95,
+          "code": "ASML"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.9,
+          "code": "NXPI"
+        },
+        {
+          "name": "Workday Inc-A",
+          "ratio": 0.88,
+          "code": "WDAY"
+        },
+        {
+          "name": "防特网",
+          "ratio": 0.84,
+          "code": "FTNT"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 0.83,
+          "code": "MRVL"
+        },
+        {
+          "name": "欧特克",
+          "ratio": 0.8,
+          "code": "ADSK"
+        },
+        {
+          "name": "微芯科技",
+          "ratio": 0.73,
+          "code": "MCHP"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.72,
+          "code": "ON"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.63,
+          "code": "CRWD"
+        },
+        {
+          "name": "高知特",
+          "ratio": 0.61,
+          "code": "CTSH"
+        },
+        {
+          "name": "Atlassian Corp-A",
+          "ratio": 0.53,
+          "code": "TEAM"
+        },
+        {
+          "name": "GLOBALFOUNDRIES Inc",
+          "ratio": 0.53,
+          "code": "GFS"
+        },
+        {
+          "name": "Datadog Inc-A",
+          "ratio": 0.49,
+          "code": "DDOG"
+        },
+        {
+          "name": "安西斯",
+          "ratio": 0.47,
+          "code": "ANSS"
+        },
+        {
+          "name": "Zscaler Inc",
+          "ratio": 0.4,
+          "code": "ZS"
+        },
+        {
+          "name": "Zoom Video通讯",
+          "ratio": 0.31,
+          "code": "ZM"
+        }
+      ]
+    },
+    {
+      "date": "2023年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.82,
+          "code": "NVDA"
+        },
+        {
+          "name": "苹果",
+          "ratio": 9.62,
+          "code": "AAPL"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 9.53,
+          "code": "META"
+        },
+        {
+          "name": "微软",
+          "ratio": 9.11,
+          "code": "MSFT"
+        },
+        {
+          "name": "博通",
+          "ratio": 6.34,
+          "code": "AVGO"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 4.3,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 4.29,
+          "code": "GOOG"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 3.93,
+          "code": "ADBE"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 3.22,
+          "code": "AMD"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 2.87,
+          "code": "TXN"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 2.45,
+          "code": "INTC"
+        },
+        {
+          "name": "高通",
+          "ratio": 2.33,
+          "code": "QCOM"
+        },
+        {
+          "name": "财捷",
+          "ratio": 2.25,
+          "code": "INTU"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 2.13,
+          "code": "AMAT"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 1.71,
+          "code": "ADI"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 1.51,
+          "code": "LRCX"
+        },
+        {
+          "name": "派拓网络",
+          "ratio": 1.37,
+          "code": "PANW"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 1.21,
+          "code": "MU"
+        },
+        {
+          "name": "科磊",
+          "ratio": 1.17,
+          "code": "KLAC"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 1.16,
+          "code": "SNPS"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 1.12,
+          "code": "CDNS"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 1.11,
+          "code": "ASML"
+        },
+        {
+          "name": "防特网",
+          "ratio": 1.04,
+          "code": "FTNT"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.93,
+          "code": "NXPI"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 0.9,
+          "code": "MRVL"
+        },
+        {
+          "name": "微芯科技",
+          "ratio": 0.86,
+          "code": "MCHP"
+        },
+        {
+          "name": "Workday Inc-A",
+          "ratio": 0.82,
+          "code": "WDAY"
+        },
+        {
+          "name": "欧特克",
+          "ratio": 0.77,
+          "code": "ADSK"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 0.74,
+          "code": "PDD"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.72,
+          "code": "ON"
+        },
+        {
+          "name": "GLOBALFOUNDRIES Inc",
+          "ratio": 0.62,
+          "code": "GFS"
+        },
+        {
+          "name": "高知特",
+          "ratio": 0.58,
+          "code": "CTSH"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.58,
+          "code": "CRWD"
+        },
+        {
+          "name": "Datadog Inc-A",
+          "ratio": 0.51,
+          "code": "DDOG"
+        },
+        {
+          "name": "安西斯",
+          "ratio": 0.5,
+          "code": "ANSS"
+        },
+        {
+          "name": "Atlassian Corp-A",
+          "ratio": 0.45,
+          "code": "TEAM"
+        },
+        {
+          "name": "Zscaler Inc",
+          "ratio": 0.37,
+          "code": "ZS"
+        },
+        {
+          "name": "Zoom Video通讯",
+          "ratio": 0.3,
+          "code": "ZM"
+        }
+      ]
+    },
+    {
+      "date": "2023年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 11.39,
+          "code": "NVDA"
+        },
+        {
+          "name": "微软",
+          "ratio": 8.26,
+          "code": "MSFT"
+        },
+        {
+          "name": "苹果",
+          "ratio": 8.14,
+          "code": "AAPL"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 7.86,
+          "code": "META"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.48,
+          "code": "AVGO"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 3.78,
+          "code": "GOOG"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 3.7,
+          "code": "GOOGL"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 3.37,
+          "code": "ADBE"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 3.11,
+          "code": "TXN"
+        },
+        {
+          "name": "高通",
+          "ratio": 2.77,
+          "code": "QCOM"
+        }
+      ]
+    }
+  ]
+}

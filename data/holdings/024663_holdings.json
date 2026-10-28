@@ -1,23 +1,28 @@
-[
-  {
-    "date": "2026年2季度股票投资明细",
-    "holdings": [
-      {
-        "name": "新易盛",
-        "ratio": 0.01
-      },
-      {
-        "name": "中际旭创",
-        "ratio": 0.01
-      },
-      {
-        "name": "天孚通信",
-        "ratio": 0.01
-      },
-      {
-        "name": "江波龙",
-        "ratio": 0.01
-      }
-    ]
-  }
-]
+{
+  "_v": 2,
+  "probed_min_year": 2024,
+  "history_exhausted": true,
+  "periods": [
+    {
+      "date": "2026年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "新易盛",
+          "ratio": 0.01
+        },
+        {
+          "name": "中际旭创",
+          "ratio": 0.01
+        },
+        {
+          "name": "天孚通信",
+          "ratio": 0.01
+        },
+        {
+          "name": "江波龙",
+          "ratio": 0.01
+        }
+      ]
+    }
+  ]
+}

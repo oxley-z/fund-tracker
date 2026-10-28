@@ -1,182 +1,3367 @@
-[
-  {
-    "date": "2026年3季度股票投资明细",
-    "holdings": [
-      {
-        "name": "英伟达",
-        "ratio": 7.9
-      },
-      {
-        "name": "苹果",
-        "ratio": 6.98
-      },
-      {
-        "name": "微软",
-        "ratio": 5.47
-      },
-      {
-        "name": "美光科技",
-        "ratio": 4.77
-      },
-      {
-        "name": "超威半导体",
-        "ratio": 3.96
-      },
-      {
-        "name": "亚马逊",
-        "ratio": 3.86
-      },
-      {
-        "name": "Meta Platforms Inc-A",
-        "ratio": 3.1
-      },
-      {
-        "name": "谷歌-A",
-        "ratio": 2.9
-      },
-      {
-        "name": "谷歌-C",
-        "ratio": 2.7
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 2.68
-      }
-    ]
-  },
-  {
-    "date": "2026年2季度股票投资明细",
-    "holdings": [
-      {
-        "name": "英伟达",
-        "ratio": 7.16
-      },
-      {
-        "name": "苹果",
-        "ratio": 6.28
-      },
-      {
-        "name": "美光科技",
-        "ratio": 5.31
-      },
-      {
-        "name": "微软",
-        "ratio": 4.09
-      },
-      {
-        "name": "超威半导体",
-        "ratio": 3.86
-      },
-      {
-        "name": "亚马逊",
-        "ratio": 3.79
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 3.1
-      },
-      {
-        "name": "谷歌-A",
-        "ratio": 3.08
-      },
-      {
-        "name": "英特尔",
-        "ratio": 2.86
-      },
-      {
-        "name": "谷歌-C",
-        "ratio": 2.85
-      }
-    ]
-  },
-  {
-    "date": "2026年1季度股票投资明细",
-    "holdings": [
-      {
-        "name": "英伟达",
-        "ratio": 8.19
-      },
-      {
-        "name": "苹果",
-        "ratio": 7.2
-      },
-      {
-        "name": "微软",
-        "ratio": 5.31
-      },
-      {
-        "name": "亚马逊",
-        "ratio": 4.32
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 3.59
-      },
-      {
-        "name": "Meta Platforms Inc-A",
-        "ratio": 3.26
-      },
-      {
-        "name": "沃尔玛",
-        "ratio": 3.24
-      },
-      {
-        "name": "谷歌-A",
-        "ratio": 3.24
-      },
-      {
-        "name": "谷歌-C",
-        "ratio": 3.02
-      },
-      {
-        "name": "博通",
-        "ratio": 2.84
-      }
-    ]
-  },
-  {
-    "date": "2025年4季度股票投资明细",
-    "holdings": [
-      {
-        "name": "英伟达",
-        "ratio": 8.5
-      },
-      {
-        "name": "苹果",
-        "ratio": 7.54
-      },
-      {
-        "name": "微软",
-        "ratio": 6.75
-      },
-      {
-        "name": "亚马逊",
-        "ratio": 4.63
-      },
-      {
-        "name": "特斯拉",
-        "ratio": 3.73
-      },
-      {
-        "name": "Meta Platforms Inc-A",
-        "ratio": 3.64
-      },
-      {
-        "name": "谷歌-A",
-        "ratio": 3.42
-      },
-      {
-        "name": "谷歌-C",
-        "ratio": 3.18
-      },
-      {
-        "name": "博通",
-        "ratio": 3.07
-      },
-      {
-        "name": "Palantir Technologies Inc-A",
-        "ratio": 2.1
-      }
-    ]
-  }
-]
+{
+  "_v": 2,
+  "probed_min_year": 2019,
+  "history_exhausted": true,
+  "periods": [
+    {
+      "date": "2026年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 7.9,
+          "code": "NVDA"
+        },
+        {
+          "name": "苹果",
+          "ratio": 6.98,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 5.47,
+          "code": "MSFT"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 4.77,
+          "code": "MU"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 3.96,
+          "code": "AMD"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 3.86,
+          "code": "AMZN"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.1,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.9,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.7,
+          "code": "GOOG"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 2.68,
+          "code": "TSLA"
+        }
+      ]
+    },
+    {
+      "date": "2026年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 7.16,
+          "code": "NVDA"
+        },
+        {
+          "name": "苹果",
+          "ratio": 6.28,
+          "code": "AAPL"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 5.31,
+          "code": "MU"
+        },
+        {
+          "name": "微软",
+          "ratio": 4.09,
+          "code": "MSFT"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 3.86,
+          "code": "AMD"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 3.79,
+          "code": "AMZN"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.1,
+          "code": "TSLA"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 3.08,
+          "code": "GOOGL"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 2.86,
+          "code": "INTC"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.85,
+          "code": "GOOG"
+        },
+        {
+          "name": "博通",
+          "ratio": 2.65,
+          "code": "AVGO"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 2.46,
+          "code": "META"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 2.34,
+          "code": "AMAT"
+        },
+        {
+          "name": "沃尔玛",
+          "ratio": 2.25,
+          "code": "WMT"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 2.21,
+          "code": "LRCX"
+        },
+        {
+          "name": "思科",
+          "ratio": 1.89,
+          "code": "CSCO"
+        },
+        {
+          "name": "开市客",
+          "ratio": 1.69,
+          "code": "COST"
+        },
+        {
+          "name": "科磊",
+          "ratio": 1.61,
+          "code": "KLAC"
+        },
+        {
+          "name": "闪迪",
+          "ratio": 1.37,
+          "code": "SNDK"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 1.23,
+          "code": "NFLX"
+        },
+        {
+          "name": "派拓网络",
+          "ratio": 1.14,
+          "code": "PANW"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 1.11,
+          "code": "TXN"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 1.09,
+          "code": "PLTR"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 1.06,
+          "code": "MRVL"
+        },
+        {
+          "name": "Linde plc",
+          "ratio": 0.98,
+          "code": "LIN"
+        },
+        {
+          "name": "西部数据",
+          "ratio": 0.9,
+          "code": "WDC"
+        },
+        {
+          "name": "希捷科技",
+          "ratio": 0.88,
+          "code": "STX"
+        },
+        {
+          "name": "安进",
+          "ratio": 0.8,
+          "code": "AMGN"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.79,
+          "code": "QCOM"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.79,
+          "code": "CRWD"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.79,
+          "code": "ADI"
+        },
+        {
+          "name": "百事",
+          "ratio": 0.75,
+          "code": "PEP"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 0.74,
+          "code": "ASML"
+        },
+        {
+          "name": "T-Mobile US Inc",
+          "ratio": 0.74,
+          "code": "TMUS"
+        },
+        {
+          "name": "Applovin Corp-A",
+          "ratio": 0.64,
+          "code": "APP"
+        },
+        {
+          "name": "吉利德科学",
+          "ratio": 0.64,
+          "code": "GILD"
+        },
+        {
+          "name": "Arm Holdings plc ADR",
+          "ratio": 0.61,
+          "code": "ARM"
+        },
+        {
+          "name": "直觉外科",
+          "ratio": 0.57,
+          "code": "ISRG"
+        },
+        {
+          "name": "Shopify Inc-A",
+          "ratio": 0.57,
+          "code": "SHOP"
+        },
+        {
+          "name": "Booking Holdings",
+          "ratio": 0.56,
+          "code": "BKNG"
+        },
+        {
+          "name": "福泰制药",
+          "ratio": 0.51,
+          "code": "VRTX"
+        },
+        {
+          "name": "星巴克",
+          "ratio": 0.48,
+          "code": "SBUX"
+        },
+        {
+          "name": "防特网",
+          "ratio": 0.46,
+          "code": "FTNT"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 0.42,
+          "code": "CDNS"
+        },
+        {
+          "name": "万豪国际",
+          "ratio": 0.4,
+          "code": "MAR"
+        },
+        {
+          "name": "怪物饮料",
+          "ratio": 0.38,
+          "code": "MNST"
+        },
+        {
+          "name": "Constellation Energy Corp",
+          "ratio": 0.37,
+          "code": "CEG"
+        },
+        {
+          "name": "自动数据处理",
+          "ratio": 0.37,
+          "code": "ADP"
+        },
+        {
+          "name": "CSX运输",
+          "ratio": 0.36,
+          "code": "CSX"
+        },
+        {
+          "name": "康卡斯特",
+          "ratio": 0.36,
+          "code": "CMCSA"
+        },
+        {
+          "name": "Datadog Inc-A",
+          "ratio": 0.35,
+          "code": "DDOG"
+        },
+        {
+          "name": "MercadoLibre Inc",
+          "ratio": 0.35,
+          "code": "MELI"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 0.35,
+          "code": "SNPS"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 0.34,
+          "code": "ADBE"
+        },
+        {
+          "name": "Astera Labs Inc",
+          "ratio": 0.34,
+          "code": "ALAB"
+        },
+        {
+          "name": "奥莱利",
+          "ratio": 0.31,
+          "code": "ORLY"
+        },
+        {
+          "name": "DoorDash Inc-A",
+          "ratio": 0.31,
+          "code": "DASH"
+        },
+        {
+          "name": "泰瑞达",
+          "ratio": 0.31,
+          "code": "TER"
+        },
+        {
+          "name": "美国电力",
+          "ratio": 0.3,
+          "code": "AEP"
+        },
+        {
+          "name": "亿滋国际",
+          "ratio": 0.3,
+          "code": "MDLZ"
+        },
+        {
+          "name": "财捷",
+          "ratio": 0.29,
+          "code": "INTU"
+        },
+        {
+          "name": "霍尼韦尔",
+          "ratio": 0.29,
+          "code": "HON"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.29,
+          "code": "NXPI"
+        },
+        {
+          "name": "Honeywell Aerospace Inc",
+          "ratio": 0.29,
+          "code": "HONA"
+        },
+        {
+          "name": "罗斯百货",
+          "ratio": 0.28,
+          "code": "ROST"
+        },
+        {
+          "name": "信达思",
+          "ratio": 0.28,
+          "code": "CTAS"
+        },
+        {
+          "name": "Monolithic Power Systems Inc",
+          "ratio": 0.28,
+          "code": "MPWR"
+        },
+        {
+          "name": "华纳兄弟探索",
+          "ratio": 0.27,
+          "code": "WBD"
+        },
+        {
+          "name": "Lumentum Holdings Inc",
+          "ratio": 0.27,
+          "code": "LITE"
+        },
+        {
+          "name": "再生元制药",
+          "ratio": 0.26,
+          "code": "REGN"
+        },
+        {
+          "name": "帕卡",
+          "ratio": 0.26,
+          "code": "PCAR"
+        },
+        {
+          "name": "Nebius Group NV-A",
+          "ratio": 0.25,
+          "code": "NBIS"
+        },
+        {
+          "name": "爱彼迎",
+          "ratio": 0.24,
+          "code": "ABNB"
+        },
+        {
+          "name": "Rocket Lab Corp",
+          "ratio": 0.24,
+          "code": "RKLB"
+        },
+        {
+          "name": "快扣",
+          "ratio": 0.22,
+          "code": "FAST"
+        },
+        {
+          "name": "Baker Hughes Co-A",
+          "ratio": 0.22,
+          "code": "BKR"
+        },
+        {
+          "name": "艺电",
+          "ratio": 0.21,
+          "code": "EA"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 0.21,
+          "code": "PDD"
+        },
+        {
+          "name": "埃克西尔能源",
+          "ratio": 0.2,
+          "code": "XEL"
+        },
+        {
+          "name": "Diamondback Energy Inc",
+          "ratio": 0.2,
+          "code": "FANG"
+        },
+        {
+          "name": "微芯科技",
+          "ratio": 0.2,
+          "code": "MCHP"
+        },
+        {
+          "name": "Ferrovial NV",
+          "ratio": 0.2,
+          "code": "FER"
+        },
+        {
+          "name": "爱克斯龙电力",
+          "ratio": 0.19,
+          "code": "EXC"
+        },
+        {
+          "name": "Take-Two Interactive Software Inc",
+          "ratio": 0.19,
+          "code": "TTWO"
+        },
+        {
+          "name": "Axon Enterprise Inc",
+          "ratio": 0.18,
+          "code": "AXON"
+        },
+        {
+          "name": "Old Dominion Freight Line Inc",
+          "ratio": 0.18,
+          "code": "ODFL"
+        },
+        {
+          "name": "可口可乐欧洲太平洋合伙",
+          "ratio": 0.18,
+          "code": "CCEP"
+        },
+        {
+          "name": "CoreWeave Inc-A",
+          "ratio": 0.18,
+          "code": "CRWV"
+        },
+        {
+          "name": "Keurig Dr Pepper Inc",
+          "ratio": 0.18,
+          "code": "KDP"
+        },
+        {
+          "name": "IDEXX实验室",
+          "ratio": 0.17,
+          "code": "IDXX"
+        },
+        {
+          "name": "欧特克",
+          "ratio": 0.17,
+          "code": "ADSK"
+        },
+        {
+          "name": "Alnylam Pharmaceuticals Inc",
+          "ratio": 0.16,
+          "code": "ALNY"
+        },
+        {
+          "name": "PayPal Holdings Inc",
+          "ratio": 0.16,
+          "code": "PYPL"
+        },
+        {
+          "name": "沛齐",
+          "ratio": 0.14,
+          "code": "PAYX"
+        },
+        {
+          "name": "儒博实业",
+          "ratio": 0.14,
+          "code": "ROP"
+        },
+        {
+          "name": "汤森路透",
+          "ratio": 0.13,
+          "code": "TRI"
+        },
+        {
+          "name": "GE HealthCare Technologies Inc",
+          "ratio": 0.12,
+          "code": "GEHC"
+        },
+        {
+          "name": "Strategy Inc-A",
+          "ratio": 0.12,
+          "code": "MSTR"
+        },
+        {
+          "name": "卡夫亨氏",
+          "ratio": 0.11,
+          "code": "KHC"
+        },
+        {
+          "name": "科帕特",
+          "ratio": 0.11,
+          "code": "CPRT"
+        }
+      ]
+    },
+    {
+      "date": "2026年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 8.19,
+          "code": "NVDA"
+        },
+        {
+          "name": "苹果",
+          "ratio": 7.2,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 5.31,
+          "code": "MSFT"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.32,
+          "code": "AMZN"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.59,
+          "code": "TSLA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.26,
+          "code": "META"
+        },
+        {
+          "name": "沃尔玛",
+          "ratio": 3.24,
+          "code": "WMT"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 3.24,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 3.02,
+          "code": "GOOG"
+        },
+        {
+          "name": "博通",
+          "ratio": 2.84,
+          "code": "AVGO"
+        }
+      ]
+    },
+    {
+      "date": "2025年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 8.5,
+          "code": "NVDA"
+        },
+        {
+          "name": "苹果",
+          "ratio": 7.54,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 6.75,
+          "code": "MSFT"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.63,
+          "code": "AMZN"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.73,
+          "code": "TSLA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.64,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 3.42,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 3.18,
+          "code": "GOOG"
+        },
+        {
+          "name": "博通",
+          "ratio": 3.07,
+          "code": "AVGO"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 2.1,
+          "code": "PLTR"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 2.06,
+          "code": "NFLX"
+        },
+        {
+          "name": "开市客",
+          "ratio": 1.98,
+          "code": "COST"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 1.81,
+          "code": "AMD"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 1.66,
+          "code": "MU"
+        },
+        {
+          "name": "思科",
+          "ratio": 1.58,
+          "code": "CSCO"
+        },
+        {
+          "name": "T-Mobile US Inc",
+          "ratio": 1.18,
+          "code": "TMUS"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 1.11,
+          "code": "LRCX"
+        },
+        {
+          "name": "Applovin Corp-A",
+          "ratio": 1.07,
+          "code": "APP"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 1.06,
+          "code": "AMAT"
+        },
+        {
+          "name": "直觉外科",
+          "ratio": 1.04,
+          "code": "ISRG"
+        },
+        {
+          "name": "Linde plc",
+          "ratio": 1.03,
+          "code": "LIN"
+        },
+        {
+          "name": "Shopify Inc-A",
+          "ratio": 1.02,
+          "code": "SHOP"
+        },
+        {
+          "name": "百事",
+          "ratio": 1.02,
+          "code": "PEP"
+        },
+        {
+          "name": "财捷",
+          "ratio": 0.95,
+          "code": "INTU"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.95,
+          "code": "QCOM"
+        },
+        {
+          "name": "安进",
+          "ratio": 0.91,
+          "code": "AMGN"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 0.91,
+          "code": "INTC"
+        },
+        {
+          "name": "Booking Holdings",
+          "ratio": 0.9,
+          "code": "BKNG"
+        },
+        {
+          "name": "科磊",
+          "ratio": 0.83,
+          "code": "KLAC"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 0.82,
+          "code": "TXN"
+        },
+        {
+          "name": "吉利德科学",
+          "ratio": 0.79,
+          "code": "GILD"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 0.76,
+          "code": "ADBE"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.69,
+          "code": "ADI"
+        },
+        {
+          "name": "派拓网络",
+          "ratio": 0.67,
+          "code": "PANW"
+        },
+        {
+          "name": "霍尼韦尔",
+          "ratio": 0.64,
+          "code": "HON"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.61,
+          "code": "CRWD"
+        },
+        {
+          "name": "福泰制药",
+          "ratio": 0.6,
+          "code": "VRTX"
+        },
+        {
+          "name": "Constellation Energy Corp",
+          "ratio": 0.57,
+          "code": "CEG"
+        },
+        {
+          "name": "康卡斯特",
+          "ratio": 0.56,
+          "code": "CMCSA"
+        },
+        {
+          "name": "自动数据处理",
+          "ratio": 0.54,
+          "code": "ADP"
+        },
+        {
+          "name": "MercadoLibre Inc",
+          "ratio": 0.53,
+          "code": "MELI"
+        },
+        {
+          "name": "星巴克",
+          "ratio": 0.5,
+          "code": "SBUX"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 0.49,
+          "code": "ASML"
+        },
+        {
+          "name": "DoorDash Inc-A",
+          "ratio": 0.48,
+          "code": "DASH"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 0.45,
+          "code": "SNPS"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 0.44,
+          "code": "CDNS"
+        },
+        {
+          "name": "万豪国际",
+          "ratio": 0.43,
+          "code": "MAR"
+        },
+        {
+          "name": "再生元制药",
+          "ratio": 0.41,
+          "code": "REGN"
+        },
+        {
+          "name": "奥莱利",
+          "ratio": 0.4,
+          "code": "ORLY"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 0.39,
+          "code": "PDD"
+        },
+        {
+          "name": "信达思",
+          "ratio": 0.39,
+          "code": "CTAS"
+        },
+        {
+          "name": "怪物饮料",
+          "ratio": 0.39,
+          "code": "MNST"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 0.38,
+          "code": "MRVL"
+        },
+        {
+          "name": "华纳兄弟探索",
+          "ratio": 0.37,
+          "code": "WBD"
+        },
+        {
+          "name": "亿滋国际",
+          "ratio": 0.36,
+          "code": "MDLZ"
+        },
+        {
+          "name": "CSX运输",
+          "ratio": 0.35,
+          "code": "CSX"
+        },
+        {
+          "name": "欧特克",
+          "ratio": 0.33,
+          "code": "ADSK"
+        },
+        {
+          "name": "美国电力",
+          "ratio": 0.32,
+          "code": "AEP"
+        },
+        {
+          "name": "防特网",
+          "ratio": 0.31,
+          "code": "FTNT"
+        },
+        {
+          "name": "西部数据",
+          "ratio": 0.31,
+          "code": "WDC"
+        },
+        {
+          "name": "希捷科技",
+          "ratio": 0.3,
+          "code": "STX"
+        },
+        {
+          "name": "汤森路透",
+          "ratio": 0.3,
+          "code": "TRI"
+        },
+        {
+          "name": "罗斯百货",
+          "ratio": 0.3,
+          "code": "ROST"
+        },
+        {
+          "name": "爱彼迎",
+          "ratio": 0.3,
+          "code": "ABNB"
+        },
+        {
+          "name": "帕卡",
+          "ratio": 0.3,
+          "code": "PCAR"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.28,
+          "code": "NXPI"
+        },
+        {
+          "name": "PayPal Holdings Inc",
+          "ratio": 0.28,
+          "code": "PYPL"
+        },
+        {
+          "name": "IDEXX实验室",
+          "ratio": 0.28,
+          "code": "IDXX"
+        },
+        {
+          "name": "阿斯利康",
+          "ratio": 0.28,
+          "code": "AZN"
+        },
+        {
+          "name": "Alnylam Pharmaceuticals Inc",
+          "ratio": 0.27,
+          "code": "ALNY"
+        },
+        {
+          "name": "艺电",
+          "ratio": 0.26,
+          "code": "EA"
+        },
+        {
+          "name": "儒博实业",
+          "ratio": 0.25,
+          "code": "ROP"
+        },
+        {
+          "name": "Ferrovial SE",
+          "ratio": 0.25,
+          "code": "FER"
+        },
+        {
+          "name": "Take-Two Interactive Software Inc",
+          "ratio": 0.25,
+          "code": "TTWO"
+        },
+        {
+          "name": "快扣",
+          "ratio": 0.24,
+          "code": "FAST"
+        },
+        {
+          "name": "Workday Inc-A",
+          "ratio": 0.24,
+          "code": "WDAY"
+        },
+        {
+          "name": "Baker Hughes Co-A",
+          "ratio": 0.23,
+          "code": "BKR"
+        },
+        {
+          "name": "Axon Enterprise Inc",
+          "ratio": 0.23,
+          "code": "AXON"
+        },
+        {
+          "name": "Datadog Inc-A",
+          "ratio": 0.23,
+          "code": "DDOG"
+        },
+        {
+          "name": "爱克斯龙电力",
+          "ratio": 0.23,
+          "code": "EXC"
+        },
+        {
+          "name": "埃克西尔能源",
+          "ratio": 0.23,
+          "code": "XEL"
+        },
+        {
+          "name": "Monolithic Power Systems Inc",
+          "ratio": 0.22,
+          "code": "MPWR"
+        },
+        {
+          "name": "Diamondback Energy Inc",
+          "ratio": 0.22,
+          "code": "FANG"
+        },
+        {
+          "name": "可口可乐欧洲太平洋合伙",
+          "ratio": 0.22,
+          "code": "CCEP"
+        },
+        {
+          "name": "Strategy Inc-A",
+          "ratio": 0.21,
+          "code": "MSTR"
+        },
+        {
+          "name": "沛齐",
+          "ratio": 0.21,
+          "code": "PAYX"
+        },
+        {
+          "name": "高知特",
+          "ratio": 0.21,
+          "code": "CTSH"
+        },
+        {
+          "name": "Keurig Dr Pepper Inc",
+          "ratio": 0.2,
+          "code": "KDP"
+        },
+        {
+          "name": "科帕特",
+          "ratio": 0.2,
+          "code": "CPRT"
+        },
+        {
+          "name": "GE HealthCare Technologies Inc",
+          "ratio": 0.19,
+          "code": "GEHC"
+        },
+        {
+          "name": "Insmed Inc",
+          "ratio": 0.19,
+          "code": "INSM"
+        },
+        {
+          "name": "Zscaler Inc",
+          "ratio": 0.19,
+          "code": "ZS"
+        },
+        {
+          "name": "微芯科技",
+          "ratio": 0.18,
+          "code": "MCHP"
+        },
+        {
+          "name": "Old Dominion Freight Line Inc",
+          "ratio": 0.17,
+          "code": "ODFL"
+        },
+        {
+          "name": "Verisk分析",
+          "ratio": 0.16,
+          "code": "VRSK"
+        },
+        {
+          "name": "卡夫亨氏",
+          "ratio": 0.15,
+          "code": "KHC"
+        },
+        {
+          "name": "科斯塔",
+          "ratio": 0.15,
+          "code": "CSGP"
+        },
+        {
+          "name": "Atlassian Corp-A",
+          "ratio": 0.14,
+          "code": "TEAM"
+        },
+        {
+          "name": "特许通讯",
+          "ratio": 0.14,
+          "code": "CHTR"
+        },
+        {
+          "name": "德康医疗",
+          "ratio": 0.13,
+          "code": "DXCM"
+        }
+      ]
+    },
+    {
+      "date": "2025年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 9.29,
+          "code": "NVDA"
+        },
+        {
+          "name": "微软",
+          "ratio": 7.86,
+          "code": "MSFT"
+        },
+        {
+          "name": "苹果",
+          "ratio": 7.76,
+          "code": "AAPL"
+        },
+        {
+          "name": "博通",
+          "ratio": 5.24,
+          "code": "AVGO"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.76,
+          "code": "AMZN"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.3,
+          "code": "TSLA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.26,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.89,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.71,
+          "code": "GOOG"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 2.56,
+          "code": "NFLX"
+        }
+      ]
+    },
+    {
+      "date": "2025年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "英伟达",
+          "ratio": 8.61,
+          "code": "NVDA"
+        },
+        {
+          "name": "微软",
+          "ratio": 8.26,
+          "code": "MSFT"
+        },
+        {
+          "name": "苹果",
+          "ratio": 6.85,
+          "code": "AAPL"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 5.2,
+          "code": "AMZN"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.79,
+          "code": "AVGO"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.58,
+          "code": "META"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 3.13,
+          "code": "NFLX"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 2.58,
+          "code": "TSLA"
+        },
+        {
+          "name": "开市客",
+          "ratio": 2.41,
+          "code": "COST"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.29,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.16,
+          "code": "GOOG"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 1.7,
+          "code": "PLTR"
+        },
+        {
+          "name": "思科",
+          "ratio": 1.51,
+          "code": "CSCO"
+        },
+        {
+          "name": "T-Mobile US Inc",
+          "ratio": 1.49,
+          "code": "TMUS"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 1.26,
+          "code": "AMD"
+        },
+        {
+          "name": "Linde plc",
+          "ratio": 1.21,
+          "code": "LIN"
+        },
+        {
+          "name": "财捷",
+          "ratio": 1.21,
+          "code": "INTU"
+        },
+        {
+          "name": "直觉外科",
+          "ratio": 1.07,
+          "code": "ISRG"
+        },
+        {
+          "name": "Booking Holdings",
+          "ratio": 1.04,
+          "code": "BKNG"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 1.04,
+          "code": "TXN"
+        },
+        {
+          "name": "百事",
+          "ratio": 1.0,
+          "code": "PEP"
+        },
+        {
+          "name": "高通",
+          "ratio": 0.96,
+          "code": "QCOM"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 0.91,
+          "code": "ADBE"
+        },
+        {
+          "name": "安进",
+          "ratio": 0.83,
+          "code": "AMGN"
+        },
+        {
+          "name": "霍尼韦尔(US)",
+          "ratio": 0.82,
+          "code": "HON"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 0.81,
+          "code": "AMAT"
+        },
+        {
+          "name": "Shopify Inc-A",
+          "ratio": 0.77,
+          "code": "SHOP"
+        },
+        {
+          "name": "吉利德科学",
+          "ratio": 0.76,
+          "code": "GILD"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 0.76,
+          "code": "MU"
+        },
+        {
+          "name": "派拓网络",
+          "ratio": 0.75,
+          "code": "PANW"
+        },
+        {
+          "name": "康卡斯特",
+          "ratio": 0.73,
+          "code": "CMCSA"
+        },
+        {
+          "name": "MercadoLibre Inc",
+          "ratio": 0.73,
+          "code": "MELI"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.7,
+          "code": "CRWD"
+        },
+        {
+          "name": "自动数据处理",
+          "ratio": 0.69,
+          "code": "ADP"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 0.68,
+          "code": "LRCX"
+        },
+        {
+          "name": "科磊",
+          "ratio": 0.65,
+          "code": "KLAC"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.65,
+          "code": "ADI"
+        },
+        {
+          "name": "福泰制药",
+          "ratio": 0.63,
+          "code": "VRTX"
+        },
+        {
+          "name": "Applovin Corp-A",
+          "ratio": 0.59,
+          "code": "APP"
+        },
+        {
+          "name": "星巴克",
+          "ratio": 0.57,
+          "code": "SBUX"
+        },
+        {
+          "name": "Strategy Inc-A",
+          "ratio": 0.56,
+          "code": "MSTR"
+        },
+        {
+          "name": "Constellation Energy Corp",
+          "ratio": 0.56,
+          "code": "CEG"
+        },
+        {
+          "name": "DoorDash Inc-A",
+          "ratio": 0.54,
+          "code": "DASH"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 0.54,
+          "code": "INTC"
+        },
+        {
+          "name": "信达思",
+          "ratio": 0.49,
+          "code": "CTAS"
+        },
+        {
+          "name": "亿滋国际",
+          "ratio": 0.48,
+          "code": "MDLZ"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 0.46,
+          "code": "CDNS"
+        },
+        {
+          "name": "防特网",
+          "ratio": 0.44,
+          "code": "FTNT"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 0.44,
+          "code": "SNPS"
+        },
+        {
+          "name": "奥莱利",
+          "ratio": 0.42,
+          "code": "ORLY"
+        },
+        {
+          "name": "万豪国际",
+          "ratio": 0.41,
+          "code": "MAR"
+        },
+        {
+          "name": "PayPal Holdings Inc",
+          "ratio": 0.4,
+          "code": "PYPL"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 0.39,
+          "code": "ASML"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 0.38,
+          "code": "PDD"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 0.37,
+          "code": "MRVL"
+        },
+        {
+          "name": "欧特克",
+          "ratio": 0.36,
+          "code": "ADSK"
+        },
+        {
+          "name": "Axon Enterprise Inc",
+          "ratio": 0.35,
+          "code": "AXON"
+        },
+        {
+          "name": "CSX运输",
+          "ratio": 0.34,
+          "code": "CSX"
+        },
+        {
+          "name": "怪物饮料",
+          "ratio": 0.34,
+          "code": "MNST"
+        },
+        {
+          "name": "儒博实业",
+          "ratio": 0.33,
+          "code": "ROP"
+        },
+        {
+          "name": "特许通讯",
+          "ratio": 0.32,
+          "code": "CHTR"
+        },
+        {
+          "name": "爱彼迎",
+          "ratio": 0.31,
+          "code": "ABNB"
+        },
+        {
+          "name": "再生元制药",
+          "ratio": 0.31,
+          "code": "REGN"
+        },
+        {
+          "name": "美国电力",
+          "ratio": 0.3,
+          "code": "AEP"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.3,
+          "code": "NXPI"
+        },
+        {
+          "name": "沛齐",
+          "ratio": 0.29,
+          "code": "PAYX"
+        },
+        {
+          "name": "Workday Inc-A",
+          "ratio": 0.28,
+          "code": "WDAY"
+        },
+        {
+          "name": "帕卡",
+          "ratio": 0.27,
+          "code": "PCAR"
+        },
+        {
+          "name": "Zscaler Inc",
+          "ratio": 0.27,
+          "code": "ZS"
+        },
+        {
+          "name": "快扣",
+          "ratio": 0.26,
+          "code": "FAST"
+        },
+        {
+          "name": "科帕特",
+          "ratio": 0.26,
+          "code": "CPRT"
+        },
+        {
+          "name": "Keurig Dr Pepper Inc",
+          "ratio": 0.25,
+          "code": "KDP"
+        },
+        {
+          "name": "Take-Two Interactive Software Inc",
+          "ratio": 0.24,
+          "code": "TTWO"
+        },
+        {
+          "name": "爱克斯龙电力",
+          "ratio": 0.24,
+          "code": "EXC"
+        },
+        {
+          "name": "Verisk分析",
+          "ratio": 0.24,
+          "code": "VRSK"
+        },
+        {
+          "name": "IDEXX实验室",
+          "ratio": 0.24,
+          "code": "IDXX"
+        },
+        {
+          "name": "Datadog Inc-A",
+          "ratio": 0.24,
+          "code": "DDOG"
+        },
+        {
+          "name": "可口可乐欧洲太平洋合伙(US)",
+          "ratio": 0.23,
+          "code": "CCEP"
+        },
+        {
+          "name": "罗斯百货",
+          "ratio": 0.23,
+          "code": "ROST"
+        },
+        {
+          "name": "阿斯利康(US ADR)",
+          "ratio": 0.23,
+          "code": "AZN"
+        },
+        {
+          "name": "Diamondback Energy Inc",
+          "ratio": 0.22,
+          "code": "FANG"
+        },
+        {
+          "name": "艺电",
+          "ratio": 0.22,
+          "code": "EA"
+        },
+        {
+          "name": "埃克西尔能源",
+          "ratio": 0.22,
+          "code": "XEL"
+        },
+        {
+          "name": "高知特",
+          "ratio": 0.21,
+          "code": "CTSH"
+        },
+        {
+          "name": "Baker Hughes Co-A",
+          "ratio": 0.21,
+          "code": "BKR"
+        },
+        {
+          "name": "微芯科技",
+          "ratio": 0.21,
+          "code": "MCHP"
+        },
+        {
+          "name": "Old Dominion Freight Line Inc",
+          "ratio": 0.19,
+          "code": "ODFL"
+        },
+        {
+          "name": "德康医疗",
+          "ratio": 0.19,
+          "code": "DXCM"
+        },
+        {
+          "name": "GE HealthCare Technologies Inc",
+          "ratio": 0.19,
+          "code": "GEHC"
+        },
+        {
+          "name": "科斯塔",
+          "ratio": 0.19,
+          "code": "CSGP"
+        },
+        {
+          "name": "Atlassian Corp-A",
+          "ratio": 0.18,
+          "code": "TEAM"
+        },
+        {
+          "name": "The Trade Desk Inc-A",
+          "ratio": 0.18,
+          "code": "TTD"
+        },
+        {
+          "name": "安西斯",
+          "ratio": 0.17,
+          "code": "ANSS"
+        },
+        {
+          "name": "卡夫亨氏",
+          "ratio": 0.17,
+          "code": "KHC"
+        },
+        {
+          "name": "华纳兄弟探索",
+          "ratio": 0.16,
+          "code": "WBD"
+        },
+        {
+          "name": "lululemon athletica inc",
+          "ratio": 0.15,
+          "code": "LULU"
+        },
+        {
+          "name": "CDW Corp",
+          "ratio": 0.13,
+          "code": "CDW"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.12,
+          "code": "ON"
+        },
+        {
+          "name": "Arm Holdings plc ADR",
+          "ratio": 0.12,
+          "code": "ARM"
+        },
+        {
+          "name": "GLOBALFOUNDRIES Inc",
+          "ratio": 0.12,
+          "code": "GFS"
+        }
+      ]
+    },
+    {
+      "date": "2025年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "苹果",
+          "ratio": 8.89,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 7.39,
+          "code": "MSFT"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 7.03,
+          "code": "NVDA"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 5.3,
+          "code": "AMZN"
+        },
+        {
+          "name": "博通",
+          "ratio": 3.42,
+          "code": "AVGO"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.33,
+          "code": "META"
+        },
+        {
+          "name": "开市客",
+          "ratio": 2.73,
+          "code": "COST"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 2.6,
+          "code": "NFLX"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 2.49,
+          "code": "TSLA"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.39,
+          "code": "GOOGL"
+        }
+      ]
+    },
+    {
+      "date": "2024年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "苹果",
+          "ratio": 9.12,
+          "code": "AAPL"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 7.92,
+          "code": "NVDA"
+        },
+        {
+          "name": "微软",
+          "ratio": 7.55,
+          "code": "MSFT"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 5.56,
+          "code": "AMZN"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.32,
+          "code": "AVGO"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.53,
+          "code": "TSLA"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.08,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.67,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.54,
+          "code": "GOOG"
+        },
+        {
+          "name": "开市客",
+          "ratio": 2.41,
+          "code": "COST"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 2.26,
+          "code": "NFLX"
+        },
+        {
+          "name": "T-Mobile US Inc",
+          "ratio": 1.52,
+          "code": "TMUS"
+        },
+        {
+          "name": "思科",
+          "ratio": 1.4,
+          "code": "CSCO"
+        },
+        {
+          "name": "百事",
+          "ratio": 1.24,
+          "code": "PEP"
+        },
+        {
+          "name": "Linde plc",
+          "ratio": 1.18,
+          "code": "LIN"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 1.16,
+          "code": "AMD"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 1.16,
+          "code": "ADBE"
+        },
+        {
+          "name": "直觉外科",
+          "ratio": 1.1,
+          "code": "ISRG"
+        },
+        {
+          "name": "财捷",
+          "ratio": 1.04,
+          "code": "INTU"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 1.01,
+          "code": "TXN"
+        },
+        {
+          "name": "高通",
+          "ratio": 1.01,
+          "code": "QCOM"
+        },
+        {
+          "name": "Palantir Technologies Inc-A",
+          "ratio": 0.98,
+          "code": "PLTR"
+        },
+        {
+          "name": "Booking Holdings",
+          "ratio": 0.98,
+          "code": "BKNG"
+        },
+        {
+          "name": "霍尼韦尔(US)",
+          "ratio": 0.87,
+          "code": "HON"
+        },
+        {
+          "name": "康卡斯特",
+          "ratio": 0.85,
+          "code": "CMCSA"
+        },
+        {
+          "name": "安进",
+          "ratio": 0.83,
+          "code": "AMGN"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 0.79,
+          "code": "AMAT"
+        },
+        {
+          "name": "派拓网络",
+          "ratio": 0.71,
+          "code": "PANW"
+        },
+        {
+          "name": "自动数据处理",
+          "ratio": 0.71,
+          "code": "ADP"
+        },
+        {
+          "name": "吉利德科学",
+          "ratio": 0.68,
+          "code": "GILD"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.62,
+          "code": "ADI"
+        },
+        {
+          "name": "福泰制药",
+          "ratio": 0.61,
+          "code": "VRTX"
+        },
+        {
+          "name": "星巴克",
+          "ratio": 0.61,
+          "code": "SBUX"
+        },
+        {
+          "name": "Applovin Corp-A",
+          "ratio": 0.57,
+          "code": "APP"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 0.57,
+          "code": "MRVL"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 0.56,
+          "code": "MU"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 0.55,
+          "code": "LRCX"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 0.51,
+          "code": "INTC"
+        },
+        {
+          "name": "MercadoLibre Inc",
+          "ratio": 0.51,
+          "code": "MELI"
+        },
+        {
+          "name": "PayPal Holdings Inc",
+          "ratio": 0.51,
+          "code": "PYPL"
+        },
+        {
+          "name": "科磊",
+          "ratio": 0.5,
+          "code": "KLAC"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 0.49,
+          "code": "CDNS"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.47,
+          "code": "CRWD"
+        },
+        {
+          "name": "亿滋国际",
+          "ratio": 0.47,
+          "code": "MDLZ"
+        },
+        {
+          "name": "万豪国际",
+          "ratio": 0.46,
+          "code": "MAR"
+        },
+        {
+          "name": "再生元制药",
+          "ratio": 0.46,
+          "code": "REGN"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 0.44,
+          "code": "SNPS"
+        },
+        {
+          "name": "信达思",
+          "ratio": 0.44,
+          "code": "CTAS"
+        },
+        {
+          "name": "防特网",
+          "ratio": 0.43,
+          "code": "FTNT"
+        },
+        {
+          "name": "Constellation Energy Corp",
+          "ratio": 0.41,
+          "code": "CEG"
+        },
+        {
+          "name": "奥莱利",
+          "ratio": 0.41,
+          "code": "ORLY"
+        },
+        {
+          "name": "DoorDash Inc-A",
+          "ratio": 0.39,
+          "code": "DASH"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 0.38,
+          "code": "PDD"
+        },
+        {
+          "name": "欧特克",
+          "ratio": 0.38,
+          "code": "ADSK"
+        },
+        {
+          "name": "CSX运输",
+          "ratio": 0.37,
+          "code": "CSX"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 0.36,
+          "code": "ASML"
+        },
+        {
+          "name": "爱彼迎",
+          "ratio": 0.34,
+          "code": "ABNB"
+        },
+        {
+          "name": "儒博实业",
+          "ratio": 0.33,
+          "code": "ROP"
+        },
+        {
+          "name": "科帕特",
+          "ratio": 0.33,
+          "code": "CPRT"
+        },
+        {
+          "name": "Workday Inc-A",
+          "ratio": 0.33,
+          "code": "WDAY"
+        },
+        {
+          "name": "帕卡",
+          "ratio": 0.32,
+          "code": "PCAR"
+        },
+        {
+          "name": "MicroStrategy Inc-A",
+          "ratio": 0.31,
+          "code": "MSTR"
+        },
+        {
+          "name": "The Trade Desk Inc-A",
+          "ratio": 0.31,
+          "code": "TTD"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.31,
+          "code": "NXPI"
+        },
+        {
+          "name": "怪物饮料",
+          "ratio": 0.3,
+          "code": "MNST"
+        },
+        {
+          "name": "沛齐",
+          "ratio": 0.3,
+          "code": "PAYX"
+        },
+        {
+          "name": "罗斯百货",
+          "ratio": 0.3,
+          "code": "ROST"
+        },
+        {
+          "name": "美国电力",
+          "ratio": 0.29,
+          "code": "AEP"
+        },
+        {
+          "name": "特许通讯",
+          "ratio": 0.29,
+          "code": "CHTR"
+        },
+        {
+          "name": "Diamondback Energy Inc",
+          "ratio": 0.28,
+          "code": "FANG"
+        },
+        {
+          "name": "Axon Enterprise Inc",
+          "ratio": 0.27,
+          "code": "AXON"
+        },
+        {
+          "name": "lululemon athletica inc",
+          "ratio": 0.27,
+          "code": "LULU"
+        },
+        {
+          "name": "Datadog Inc-A",
+          "ratio": 0.27,
+          "code": "DDOG"
+        },
+        {
+          "name": "Keurig Dr Pepper Inc",
+          "ratio": 0.26,
+          "code": "KDP"
+        },
+        {
+          "name": "快扣",
+          "ratio": 0.24,
+          "code": "FAST"
+        },
+        {
+          "name": "Baker Hughes Co-A",
+          "ratio": 0.24,
+          "code": "BKR"
+        },
+        {
+          "name": "Atlassian Corp-A",
+          "ratio": 0.23,
+          "code": "TEAM"
+        },
+        {
+          "name": "Verisk分析",
+          "ratio": 0.23,
+          "code": "VRSK"
+        },
+        {
+          "name": "埃克西尔能源",
+          "ratio": 0.23,
+          "code": "XEL"
+        },
+        {
+          "name": "艺电",
+          "ratio": 0.23,
+          "code": "EA"
+        },
+        {
+          "name": "阿斯利康(US ADR)",
+          "ratio": 0.23,
+          "code": "AZN"
+        },
+        {
+          "name": "高知特",
+          "ratio": 0.23,
+          "code": "CTSH"
+        },
+        {
+          "name": "爱克斯龙电力",
+          "ratio": 0.22,
+          "code": "EXC"
+        },
+        {
+          "name": "Old Dominion Freight Line Inc",
+          "ratio": 0.22,
+          "code": "ODFL"
+        },
+        {
+          "name": "卡夫亨氏",
+          "ratio": 0.22,
+          "code": "KHC"
+        },
+        {
+          "name": "GE HealthCare Technologies Inc",
+          "ratio": 0.21,
+          "code": "GEHC"
+        },
+        {
+          "name": "可口可乐欧洲太平洋合伙(US)",
+          "ratio": 0.21,
+          "code": "CCEP"
+        },
+        {
+          "name": "IDEXX实验室",
+          "ratio": 0.2,
+          "code": "IDXX"
+        },
+        {
+          "name": "Take-Two Interactive Software Inc",
+          "ratio": 0.19,
+          "code": "TTWO"
+        },
+        {
+          "name": "微芯科技",
+          "ratio": 0.18,
+          "code": "MCHP"
+        },
+        {
+          "name": "德康医疗",
+          "ratio": 0.18,
+          "code": "DXCM"
+        },
+        {
+          "name": "安西斯",
+          "ratio": 0.17,
+          "code": "ANSS"
+        },
+        {
+          "name": "科斯塔",
+          "ratio": 0.17,
+          "code": "CSGP"
+        },
+        {
+          "name": "Zscaler Inc",
+          "ratio": 0.16,
+          "code": "ZS"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.16,
+          "code": "ON"
+        },
+        {
+          "name": "华纳兄弟探索",
+          "ratio": 0.15,
+          "code": "WBD"
+        },
+        {
+          "name": "GLOBALFOUNDRIES Inc",
+          "ratio": 0.14,
+          "code": "GFS"
+        },
+        {
+          "name": "CDW Corp",
+          "ratio": 0.14,
+          "code": "CDW"
+        },
+        {
+          "name": "生化基因",
+          "ratio": 0.13,
+          "code": "BIIB"
+        },
+        {
+          "name": "MongoDB Inc-A",
+          "ratio": 0.1,
+          "code": "MDB"
+        }
+      ]
+    },
+    {
+      "date": "2024年3季度股票投资明细",
+      "holdings": [
+        {
+          "name": "苹果",
+          "ratio": 8.43,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 7.61,
+          "code": "MSFT"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 7.09,
+          "code": "NVDA"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.91,
+          "code": "AVGO"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 4.74,
+          "code": "META"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.66,
+          "code": "AMZN"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.01,
+          "code": "TSLA"
+        },
+        {
+          "name": "开市客",
+          "ratio": 2.42,
+          "code": "COST"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.31,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.22,
+          "code": "GOOG"
+        }
+      ]
+    },
+    {
+      "date": "2024年2季度股票投资明细",
+      "holdings": [
+        {
+          "name": "微软",
+          "ratio": 7.82,
+          "code": "MSFT"
+        },
+        {
+          "name": "苹果",
+          "ratio": 7.61,
+          "code": "AAPL"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 7.16,
+          "code": "NVDA"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.74,
+          "code": "AMZN"
+        },
+        {
+          "name": "博通",
+          "ratio": 4.52,
+          "code": "AVGO"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 4.14,
+          "code": "META"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.52,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.43,
+          "code": "GOOG"
+        },
+        {
+          "name": "开市客",
+          "ratio": 2.29,
+          "code": "COST"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 2.25,
+          "code": "TSLA"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 1.77,
+          "code": "NFLX"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 1.59,
+          "code": "AMD"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 1.51,
+          "code": "ADBE"
+        },
+        {
+          "name": "百事",
+          "ratio": 1.38,
+          "code": "PEP"
+        },
+        {
+          "name": "高通",
+          "ratio": 1.35,
+          "code": "QCOM"
+        },
+        {
+          "name": "Linde plc",
+          "ratio": 1.28,
+          "code": "LIN"
+        },
+        {
+          "name": "T-Mobile US Inc",
+          "ratio": 1.26,
+          "code": "TMUS"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 1.19,
+          "code": "AMAT"
+        },
+        {
+          "name": "思科",
+          "ratio": 1.16,
+          "code": "CSCO"
+        },
+        {
+          "name": "财捷",
+          "ratio": 1.12,
+          "code": "INTU"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 1.08,
+          "code": "TXN"
+        },
+        {
+          "name": "安进",
+          "ratio": 1.02,
+          "code": "AMGN"
+        },
+        {
+          "name": "直觉外科",
+          "ratio": 0.96,
+          "code": "ISRG"
+        },
+        {
+          "name": "康卡斯特",
+          "ratio": 0.93,
+          "code": "CMCSA"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 0.89,
+          "code": "MU"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 0.85,
+          "code": "LRCX"
+        },
+        {
+          "name": "霍尼韦尔(US)",
+          "ratio": 0.85,
+          "code": "HON"
+        },
+        {
+          "name": "Booking Holdings",
+          "ratio": 0.81,
+          "code": "BKNG"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 0.8,
+          "code": "INTC"
+        },
+        {
+          "name": "福泰制药",
+          "ratio": 0.73,
+          "code": "VRTX"
+        },
+        {
+          "name": "再生元制药",
+          "ratio": 0.69,
+          "code": "REGN"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.69,
+          "code": "ADI"
+        },
+        {
+          "name": "科磊",
+          "ratio": 0.68,
+          "code": "KLAC"
+        },
+        {
+          "name": "派拓网络",
+          "ratio": 0.67,
+          "code": "PANW"
+        },
+        {
+          "name": "自动数据处理",
+          "ratio": 0.59,
+          "code": "ADP"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 0.56,
+          "code": "ASML"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 0.56,
+          "code": "SNPS"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 0.54,
+          "code": "PDD"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.54,
+          "code": "CRWD"
+        },
+        {
+          "name": "星巴克",
+          "ratio": 0.54,
+          "code": "SBUX"
+        },
+        {
+          "name": "亿滋国际",
+          "ratio": 0.53,
+          "code": "MDLZ"
+        },
+        {
+          "name": "吉利德科学",
+          "ratio": 0.52,
+          "code": "GILD"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 0.51,
+          "code": "CDNS"
+        },
+        {
+          "name": "MercadoLibre Inc",
+          "ratio": 0.51,
+          "code": "MELI"
+        },
+        {
+          "name": "信达思",
+          "ratio": 0.43,
+          "code": "CTAS"
+        },
+        {
+          "name": "万豪国际",
+          "ratio": 0.42,
+          "code": "MAR"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.42,
+          "code": "NXPI"
+        },
+        {
+          "name": "爱彼迎",
+          "ratio": 0.41,
+          "code": "ABNB"
+        },
+        {
+          "name": "CSX运输",
+          "ratio": 0.4,
+          "code": "CSX"
+        },
+        {
+          "name": "Constellation Energy Corp",
+          "ratio": 0.38,
+          "code": "CEG"
+        },
+        {
+          "name": "奥莱利",
+          "ratio": 0.38,
+          "code": "ORLY"
+        },
+        {
+          "name": "PayPal Holdings Inc",
+          "ratio": 0.37,
+          "code": "PYPL"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 0.37,
+          "code": "MRVL"
+        },
+        {
+          "name": "儒博实业",
+          "ratio": 0.37,
+          "code": "ROP"
+        },
+        {
+          "name": "帕卡",
+          "ratio": 0.33,
+          "code": "PCAR"
+        },
+        {
+          "name": "欧特克",
+          "ratio": 0.32,
+          "code": "ADSK"
+        },
+        {
+          "name": "科帕特",
+          "ratio": 0.32,
+          "code": "CPRT"
+        },
+        {
+          "name": "怪物饮料",
+          "ratio": 0.32,
+          "code": "MNST"
+        },
+        {
+          "name": "微芯科技",
+          "ratio": 0.3,
+          "code": "MCHP"
+        },
+        {
+          "name": "罗斯百货",
+          "ratio": 0.3,
+          "code": "ROST"
+        },
+        {
+          "name": "Workday Inc-A",
+          "ratio": 0.29,
+          "code": "WDAY"
+        },
+        {
+          "name": "美国电力",
+          "ratio": 0.28,
+          "code": "AEP"
+        },
+        {
+          "name": "防特网",
+          "ratio": 0.28,
+          "code": "FTNT"
+        },
+        {
+          "name": "Moderna Inc",
+          "ratio": 0.28,
+          "code": "MRNA"
+        },
+        {
+          "name": "阿斯利康(US ADR)",
+          "ratio": 0.28,
+          "code": "AZN"
+        },
+        {
+          "name": "Keurig Dr Pepper Inc",
+          "ratio": 0.28,
+          "code": "KDP"
+        },
+        {
+          "name": "德康医疗",
+          "ratio": 0.27,
+          "code": "DXCM"
+        },
+        {
+          "name": "The Trade Desk Inc-A",
+          "ratio": 0.26,
+          "code": "TTD"
+        },
+        {
+          "name": "特许通讯",
+          "ratio": 0.26,
+          "code": "CHTR"
+        },
+        {
+          "name": "沛齐",
+          "ratio": 0.26,
+          "code": "PAYX"
+        },
+        {
+          "name": "DoorDash Inc-A",
+          "ratio": 0.25,
+          "code": "DASH"
+        },
+        {
+          "name": "IDEXX实验室",
+          "ratio": 0.25,
+          "code": "IDXX"
+        },
+        {
+          "name": "Datadog Inc-A",
+          "ratio": 0.24,
+          "code": "DDOG"
+        },
+        {
+          "name": "卡夫亨氏",
+          "ratio": 0.24,
+          "code": "KHC"
+        },
+        {
+          "name": "Verisk分析",
+          "ratio": 0.23,
+          "code": "VRSK"
+        },
+        {
+          "name": "Old Dominion Freight Line Inc",
+          "ratio": 0.23,
+          "code": "ODFL"
+        },
+        {
+          "name": "艺电",
+          "ratio": 0.23,
+          "code": "EA"
+        },
+        {
+          "name": "lululemon athletica inc",
+          "ratio": 0.22,
+          "code": "LULU"
+        },
+        {
+          "name": "快扣",
+          "ratio": 0.22,
+          "code": "FAST"
+        },
+        {
+          "name": "Diamondback Energy Inc",
+          "ratio": 0.22,
+          "code": "FANG"
+        },
+        {
+          "name": "GE HealthCare Technologies Inc",
+          "ratio": 0.22,
+          "code": "GEHC"
+        },
+        {
+          "name": "Baker Hughes Co-A",
+          "ratio": 0.21,
+          "code": "BKR"
+        },
+        {
+          "name": "爱克斯龙电力",
+          "ratio": 0.21,
+          "code": "EXC"
+        },
+        {
+          "name": "高知特",
+          "ratio": 0.21,
+          "code": "CTSH"
+        },
+        {
+          "name": "生化基因",
+          "ratio": 0.2,
+          "code": "BIIB"
+        },
+        {
+          "name": "可口可乐欧洲太平洋合伙(US)",
+          "ratio": 0.2,
+          "code": "CCEP"
+        },
+        {
+          "name": "科斯塔",
+          "ratio": 0.18,
+          "code": "CSGP"
+        },
+        {
+          "name": "CDW Corp",
+          "ratio": 0.18,
+          "code": "CDW"
+        },
+        {
+          "name": "埃克西尔能源",
+          "ratio": 0.18,
+          "code": "XEL"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.18,
+          "code": "ON"
+        },
+        {
+          "name": "Zscaler Inc",
+          "ratio": 0.18,
+          "code": "ZS"
+        },
+        {
+          "name": "安西斯",
+          "ratio": 0.17,
+          "code": "ANSS"
+        },
+        {
+          "name": "Atlassian Corp-A",
+          "ratio": 0.17,
+          "code": "TEAM"
+        },
+        {
+          "name": "GLOBALFOUNDRIES Inc",
+          "ratio": 0.17,
+          "code": "GFS"
+        },
+        {
+          "name": "Take-Two Interactive Software Inc",
+          "ratio": 0.16,
+          "code": "TTWO"
+        },
+        {
+          "name": "美元树",
+          "ratio": 0.14,
+          "code": "DLTR"
+        },
+        {
+          "name": "Arm Holdings plc ADR",
+          "ratio": 0.12,
+          "code": "ARM"
+        },
+        {
+          "name": "MongoDB Inc-A",
+          "ratio": 0.11,
+          "code": "MDB"
+        },
+        {
+          "name": "华纳兄弟探索",
+          "ratio": 0.11,
+          "code": "WBD"
+        },
+        {
+          "name": "Illumina Inc",
+          "ratio": 0.1,
+          "code": "ILMN"
+        }
+      ]
+    },
+    {
+      "date": "2024年1季度股票投资明细",
+      "holdings": [
+        {
+          "name": "微软",
+          "ratio": 7.72,
+          "code": "MSFT"
+        },
+        {
+          "name": "苹果",
+          "ratio": 6.54,
+          "code": "AAPL"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 5.58,
+          "code": "NVDA"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.63,
+          "code": "AMZN"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 4.2,
+          "code": "META"
+        },
+        {
+          "name": "博通",
+          "ratio": 3.92,
+          "code": "AVGO"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.2,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.13,
+          "code": "GOOG"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 2.09,
+          "code": "TSLA"
+        },
+        {
+          "name": "开市客",
+          "ratio": 2.07,
+          "code": "COST"
+        }
+      ]
+    },
+    {
+      "date": "2023年4季度股票投资明细",
+      "holdings": [
+        {
+          "name": "苹果",
+          "ratio": 8.36,
+          "code": "AAPL"
+        },
+        {
+          "name": "微软",
+          "ratio": 7.76,
+          "code": "MSFT"
+        },
+        {
+          "name": "亚马逊",
+          "ratio": 4.39,
+          "code": "AMZN"
+        },
+        {
+          "name": "博通",
+          "ratio": 3.74,
+          "code": "AVGO"
+        },
+        {
+          "name": "Meta Platforms Inc-A",
+          "ratio": 3.45,
+          "code": "META"
+        },
+        {
+          "name": "英伟达",
+          "ratio": 3.37,
+          "code": "NVDA"
+        },
+        {
+          "name": "特斯拉",
+          "ratio": 3.33,
+          "code": "TSLA"
+        },
+        {
+          "name": "谷歌-A",
+          "ratio": 2.31,
+          "code": "GOOGL"
+        },
+        {
+          "name": "谷歌-C",
+          "ratio": 2.25,
+          "code": "GOOG"
+        },
+        {
+          "name": "开市客",
+          "ratio": 2.11,
+          "code": "COST"
+        },
+        {
+          "name": "奥多比",
+          "ratio": 1.97,
+          "code": "ADBE"
+        },
+        {
+          "name": "百事",
+          "ratio": 1.66,
+          "code": "PEP"
+        },
+        {
+          "name": "超威半导体",
+          "ratio": 1.65,
+          "code": "AMD"
+        },
+        {
+          "name": "奈飞",
+          "ratio": 1.53,
+          "code": "NFLX"
+        },
+        {
+          "name": "思科",
+          "ratio": 1.46,
+          "code": "CSCO"
+        },
+        {
+          "name": "英特尔",
+          "ratio": 1.44,
+          "code": "INTC"
+        },
+        {
+          "name": "T-Mobile US Inc",
+          "ratio": 1.3,
+          "code": "TMUS"
+        },
+        {
+          "name": "康卡斯特",
+          "ratio": 1.27,
+          "code": "CMCSA"
+        },
+        {
+          "name": "财捷",
+          "ratio": 1.24,
+          "code": "INTU"
+        },
+        {
+          "name": "高通",
+          "ratio": 1.14,
+          "code": "QCOM"
+        },
+        {
+          "name": "德州仪器",
+          "ratio": 1.08,
+          "code": "TXN"
+        },
+        {
+          "name": "安进",
+          "ratio": 1.07,
+          "code": "AMGN"
+        },
+        {
+          "name": "霍尼韦尔(US)",
+          "ratio": 0.98,
+          "code": "HON"
+        },
+        {
+          "name": "应用材料",
+          "ratio": 0.97,
+          "code": "AMAT"
+        },
+        {
+          "name": "Booking Holdings",
+          "ratio": 0.93,
+          "code": "BKNG"
+        },
+        {
+          "name": "直觉外科",
+          "ratio": 0.85,
+          "code": "ISRG"
+        },
+        {
+          "name": "星巴克",
+          "ratio": 0.78,
+          "code": "SBUX"
+        },
+        {
+          "name": "福泰制药",
+          "ratio": 0.75,
+          "code": "VRTX"
+        },
+        {
+          "name": "拉姆研究",
+          "ratio": 0.74,
+          "code": "LRCX"
+        },
+        {
+          "name": "吉利德科学",
+          "ratio": 0.71,
+          "code": "GILD"
+        },
+        {
+          "name": "拼多多",
+          "ratio": 0.71,
+          "code": "PDD"
+        },
+        {
+          "name": "亚德诺",
+          "ratio": 0.7,
+          "code": "ADI"
+        },
+        {
+          "name": "亿滋国际",
+          "ratio": 0.69,
+          "code": "MDLZ"
+        },
+        {
+          "name": "自动数据处理",
+          "ratio": 0.68,
+          "code": "ADP"
+        },
+        {
+          "name": "美光科技",
+          "ratio": 0.68,
+          "code": "MU"
+        },
+        {
+          "name": "派拓网络",
+          "ratio": 0.66,
+          "code": "PANW"
+        },
+        {
+          "name": "再生元制药",
+          "ratio": 0.64,
+          "code": "REGN"
+        },
+        {
+          "name": "科磊",
+          "ratio": 0.58,
+          "code": "KLAC"
+        },
+        {
+          "name": "MercadoLibre Inc",
+          "ratio": 0.58,
+          "code": "MELI"
+        },
+        {
+          "name": "新思科技",
+          "ratio": 0.57,
+          "code": "SNPS"
+        },
+        {
+          "name": "铿腾电子",
+          "ratio": 0.53,
+          "code": "CDNS"
+        },
+        {
+          "name": "CSX运输",
+          "ratio": 0.49,
+          "code": "CSX"
+        },
+        {
+          "name": "阿斯麦",
+          "ratio": 0.48,
+          "code": "ASML"
+        },
+        {
+          "name": "万豪国际",
+          "ratio": 0.47,
+          "code": "MAR"
+        },
+        {
+          "name": "PayPal Holdings Inc",
+          "ratio": 0.47,
+          "code": "PYPL"
+        },
+        {
+          "name": "lululemon athletica inc",
+          "ratio": 0.46,
+          "code": "LULU"
+        },
+        {
+          "name": "信达思",
+          "ratio": 0.44,
+          "code": "CTAS"
+        },
+        {
+          "name": "儒博实业",
+          "ratio": 0.43,
+          "code": "ROP"
+        },
+        {
+          "name": "爱彼迎",
+          "ratio": 0.43,
+          "code": "ABNB"
+        },
+        {
+          "name": "恩智浦半导体",
+          "ratio": 0.42,
+          "code": "NXPI"
+        },
+        {
+          "name": "怪物饮料",
+          "ratio": 0.42,
+          "code": "MNST"
+        },
+        {
+          "name": "CrowdStrike Holdings Inc-A",
+          "ratio": 0.41,
+          "code": "CRWD"
+        },
+        {
+          "name": "特许通讯",
+          "ratio": 0.41,
+          "code": "CHTR"
+        },
+        {
+          "name": "Workday Inc-A",
+          "ratio": 0.4,
+          "code": "WDAY"
+        },
+        {
+          "name": "奥莱利",
+          "ratio": 0.4,
+          "code": "ORLY"
+        },
+        {
+          "name": "欧特克",
+          "ratio": 0.37,
+          "code": "ADSK"
+        },
+        {
+          "name": "迈威尔科技",
+          "ratio": 0.37,
+          "code": "MRVL"
+        },
+        {
+          "name": "帕卡",
+          "ratio": 0.36,
+          "code": "PCAR"
+        },
+        {
+          "name": "微芯科技",
+          "ratio": 0.35,
+          "code": "MCHP"
+        },
+        {
+          "name": "德康医疗",
+          "ratio": 0.34,
+          "code": "DXCM"
+        },
+        {
+          "name": "科帕特",
+          "ratio": 0.34,
+          "code": "CPRT"
+        },
+        {
+          "name": "罗斯百货",
+          "ratio": 0.33,
+          "code": "ROST"
+        },
+        {
+          "name": "Keurig Dr Pepper Inc",
+          "ratio": 0.33,
+          "code": "KDP"
+        },
+        {
+          "name": "IDEXX实验室",
+          "ratio": 0.32,
+          "code": "IDXX"
+        },
+        {
+          "name": "卡夫亨氏",
+          "ratio": 0.32,
+          "code": "KHC"
+        },
+        {
+          "name": "防特网",
+          "ratio": 0.32,
+          "code": "FTNT"
+        },
+        {
+          "name": "Old Dominion Freight Line Inc",
+          "ratio": 0.32,
+          "code": "ODFL"
+        },
+        {
+          "name": "沛齐",
+          "ratio": 0.31,
+          "code": "PAYX"
+        },
+        {
+          "name": "美国电力",
+          "ratio": 0.3,
+          "code": "AEP"
+        },
+        {
+          "name": "阿斯利康(US ADR)",
+          "ratio": 0.28,
+          "code": "AZN"
+        },
+        {
+          "name": "Constellation Energy Corp",
+          "ratio": 0.27,
+          "code": "CEG"
+        },
+        {
+          "name": "高知特",
+          "ratio": 0.27,
+          "code": "CTSH"
+        },
+        {
+          "name": "快扣",
+          "ratio": 0.27,
+          "code": "FAST"
+        },
+        {
+          "name": "艺电",
+          "ratio": 0.27,
+          "code": "EA"
+        },
+        {
+          "name": "DoorDash Inc-A",
+          "ratio": 0.26,
+          "code": "DASH"
+        },
+        {
+          "name": "Atlassian Corp-A",
+          "ratio": 0.26,
+          "code": "TEAM"
+        },
+        {
+          "name": "Datadog Inc-A",
+          "ratio": 0.26,
+          "code": "DDOG"
+        },
+        {
+          "name": "生化基因",
+          "ratio": 0.26,
+          "code": "BIIB"
+        },
+        {
+          "name": "科斯塔",
+          "ratio": 0.26,
+          "code": "CSGP"
+        },
+        {
+          "name": "Moderna Inc",
+          "ratio": 0.26,
+          "code": "MRNA"
+        },
+        {
+          "name": "安森美半导体",
+          "ratio": 0.25,
+          "code": "ON"
+        },
+        {
+          "name": "爱克斯龙电力",
+          "ratio": 0.25,
+          "code": "EXC"
+        },
+        {
+          "name": "GE HealthCare Technologies Inc",
+          "ratio": 0.25,
+          "code": "GEHC"
+        },
+        {
+          "name": "Verisk分析",
+          "ratio": 0.25,
+          "code": "VRSK"
+        },
+        {
+          "name": "Baker Hughes Co-A",
+          "ratio": 0.25,
+          "code": "BKR"
+        },
+        {
+          "name": "埃克西尔能源",
+          "ratio": 0.25,
+          "code": "XEL"
+        },
+        {
+          "name": "Zscaler Inc",
+          "ratio": 0.23,
+          "code": "ZS"
+        },
+        {
+          "name": "GLOBALFOUNDRIES Inc",
+          "ratio": 0.23,
+          "code": "GFS"
+        },
+        {
+          "name": "The Trade Desk Inc-A",
+          "ratio": 0.23,
+          "code": "TTD"
+        },
+        {
+          "name": "CDW Corp",
+          "ratio": 0.21,
+          "code": "CDW"
+        },
+        {
+          "name": "MongoDB Inc-A",
+          "ratio": 0.21,
+          "code": "MDB"
+        },
+        {
+          "name": "可口可乐欧洲太平洋合伙(US)",
+          "ratio": 0.21,
+          "code": "CCEP"
+        },
+        {
+          "name": "安西斯",
+          "ratio": 0.21,
+          "code": "ANSS"
+        },
+        {
+          "name": "美元树",
+          "ratio": 0.21,
+          "code": "DLTR"
+        },
+        {
+          "name": "Diamondback Energy Inc",
+          "ratio": 0.2,
+          "code": "FANG"
+        },
+        {
+          "name": "华纳兄弟探索",
+          "ratio": 0.2,
+          "code": "WBD"
+        },
+        {
+          "name": "Take-Two Interactive Software Inc",
+          "ratio": 0.19,
+          "code": "TTWO"
+        },
+        {
+          "name": "Splunk Inc",
+          "ratio": 0.18,
+          "code": "SPLK"
+        },
+        {
+          "name": "Illumina Inc",
+          "ratio": 0.16,
+          "code": "ILMN"
+        },
+        {
+          "name": "沃尔格林-联合博姿",
+          "ratio": 0.16,
+          "code": "WBA"
+        }
+      ]
+    }
+  ]
+}
