@@ -1872,10 +1872,12 @@ def fetch_macro_history():
 # 说明：年报/中报正文开头有目录，目录条目与正文章节标题完全同名，
 #       因此不能简单 find() 首个命中位置，必须跳过目录条目再定位正文表格。
 # ==============================================================================
-COUNTRY_CACHE_VERSION = 4          # v4：改为保留最近 4 个季度（QDII 对比页要用 4 期）
-HOLDER_CACHE_VERSION = 2           # v2：缓存结构改为多期 periods
-COUNTRY_PERIODS_KEEP = 4           # 国家/地区分布保留期数
-HOLDINGS_PERIODS_KEEP = 4          # 明细页主列展示期数（4 个季度并排）
+COUNTRY_CACHE_VERSION = 5          # v5：抓取深度提到 8 期（详情浮窗季度条要展示 8 列）
+HOLDER_CACHE_VERSION = 4           # v4：期数上限 8 -> 40（接口一次返回全部历年节点，不额外花请求）
+COUNTRY_PERIODS_KEEP = 4           # QDII 对比页的季度列数
+COUNTRY_FETCH_PERIODS = 8          # 国家/地区抓取深度（逐份公告抓取，成本高，只取近 8 期）
+HOLDER_PERIODS_KEEP = 40           # 持有人结构保留期数（半年报/年报节点，40 期约 20 年）
+HOLDINGS_PERIODS_KEEP = 8          # 详情浮窗顶部季度条展示的季度数（容器放不下时横向滚动）
 HOLDINGS_MAX_PERIODS = 120         # 缓存保留的季度上限（回溯全历史，仅作防爆保护）
 HOLDINGS_MIN_YEAR = 2004           # 历史回溯最早年份（境内基金最早 2001 年前后成立）
 HOLDINGS_CACHE_SCHEMA = 2          # v2：dict 结构（probed_min_year + 全量持仓 periods）
@@ -1963,6 +1965,21 @@ def _ratio_value(text):
         return round(float(cleaned), 2)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _minify_frag(html_text):
+    """压掉 HTML 片段里「标签之间」的纯空白文本节点。
+
+    详情浮窗的季度条 HTML 有 45% 是模板的缩进和换行；季度列从 4 增到 8 后
+    这些空白会把 fund_dashboard_details.js 顶到 5.8MB。合并后体积降约 42%，
+    比 4 列时的产物还小。
+
+    安全性：片段内所有相邻元素都由 flex / grid + gap 布局（.chart-controls、
+    .quarter-label、.stock-item、.fund-annual-stats 等），不依赖标签间的空白
+    来产生间距，因此压缩不影响渲染。注意只处理「纯空白」文本节点，
+    像「暂无持仓披露数据」这类真实文本不会被改动。
+    """
+    return re.sub(r">\s+<", "><", str(html_text or "")).strip()
 
 
 def _with_country_periods(result):
@@ -2298,13 +2315,15 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
             if candidates:
                 candidates.sort(key=lambda x: x["date"], reverse=True)
 
-                # 收集最近 4 个「不同报告期」的国家分布（QDII 对比页需要 4 期）。
+                # 收集最近 N 个「不同报告期」的国家分布（详情浮窗季度条需要 8 期）。
                 # 同一报告期可能同时存在季报与中报/年报（如 2026Q2 有中报和第 2 季度报告），
                 # 按 (年, 季度) 去重，且按发布日期倒序，因此优先取内容更全的中报/年报。
                 periods, seen_periods = [], set()
                 # PDF 兜底成本高（下载整份报告 + pypdf 解析），每只基金最多用 3 次
                 pdf_budget = 3
-                for cand in candidates[:8]:
+                # 多取几个候选：候选里有同一报告期的季报/中报，去重后会少，
+                # 想凑够 COUNTRY_FETCH_PERIODS 个不同报告期得留出冗余。
+                for cand in candidates[:COUNTRY_FETCH_PERIODS + 4]:
                     period_key = _report_period_key(cand["title"])
                     if period_key and period_key in seen_periods:
                         continue
@@ -2356,8 +2375,17 @@ def fetch_fund_country_distribution(opener, code, is_qdii=False):
                             "countries": c_list,
                             "total": total_ratio,
                         })
-                        if len(periods) >= COUNTRY_PERIODS_KEEP:
+                        if len(periods) >= COUNTRY_FETCH_PERIODS:
                             break
+
+                # ★ 与旧缓存合并：本次只抓到少数几期（接口抽风 / PDF 解析失败）时，
+                #   用旧缓存补上缺失的更早期次，避免把已有数据越抓越少。
+                if periods and stale_cache and stale_cache.get("periods"):
+                    have = {str(p.get("date")) for p in periods}
+                    for old in stale_cache["periods"]:
+                        if str(old.get("date")) not in have:
+                            periods.append(old)
+                    periods = periods[:COUNTRY_FETCH_PERIODS]
 
                 if periods:
                     latest = periods[0]
@@ -2561,7 +2589,7 @@ def fetch_fund_holder_structure(opener, code):
         return None
 
     periods.sort(key=lambda x: x["date"], reverse=True)
-    periods = periods[:3]
+    periods = periods[:HOLDER_PERIODS_KEEP]
     latest = periods[0]
     result = {
         "date": latest["date"],
@@ -5018,6 +5046,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     nav_data_json = {}
     fund_names_json = {}
     holding_detail_data_json = {}
+    # 首屏 8 列之外的更早季度：单独成文件，点「加载更早季度」时才拉，
+    # 否则把 135 只基金的全部历史季度都内联会让 details.js 涨到 8MB+。
+    holding_detail_more_json = {}
     # 全历史持仓明细（结构化），与上面的 HTML 一起写进 details.js，
     # 供「详细」浮窗按季度查看全部持仓并支持切换历史季度。
     full_holdings_data_json = {}
@@ -5189,7 +5220,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 key=lambda x: (_parse_holdings_quarter(x.get('date')) or (0, 0)),
                 reverse=True,
             )
-            display_holdings = sorted_holdings[:HOLDINGS_PERIODS_KEEP]
+            # 这里要为「全部历史季度」建列：首屏只内联最近 HOLDINGS_PERIODS_KEEP 列，
+            # 更早的季度进 fund_dashboard_details_more.js，点「加载更早季度」时再拉。
+            # 全塞进首屏的话，135 只基金 × 平均 21 列会让 details.js 涨到 8MB+。
+            display_holdings = sorted_holdings
             for period in sorted_holdings:
                 q_label = _period_label(period.get('date'))
                 if not q_label or q_label in full_holdings_by_quarter:
@@ -5283,7 +5317,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         # 持有人结构是半年报节点（只有 06-30 / 12-31），国家分布是季报节点，
         # 两者与持仓季度往往对不上，按顺序填会把 2026Q2 的数据塞到 2026Q3 那一列。
         # 现在改为「列 = 季度」，每格只放本季度的数据，没有就显示「本季度未披露」。
-        PIE_PERIOD_COUNT = 4
+        # 列数必须与持仓卡数量一致：列锚点来自 display_holdings，
+        # 两处取不同的上限会导致饼图列和持仓卡错位。
+        PIE_PERIOD_COUNT = HOLDINGS_PERIODS_KEEP
 
         holder_data = r.get("holder_struct") or {}
         holder_periods = holder_data.get("periods") or []
@@ -5345,7 +5381,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 # ETF 联接基金的地区配置饼图会整块消失
                 column_quarters = (real_quarters[:PIE_PERIOD_COUNT - 1]
                                    + other_labels[:1])
-        column_quarters = column_quarters[:PIE_PERIOD_COUNT]
+        # 注意：有持仓时不再截断，column_quarters 保留全部历史季度，
+        # 由下面的 head/more 拆分决定哪些内联、哪些按需加载。
 
         # 持仓卡按季度建索引，便于严格对齐
         holdings_card_by_quarter = {}
@@ -5430,7 +5467,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 </div>
             </div>
             """)
-        holdings_html = "".join(quarter_columns)
+        # 首屏内联最近 HOLDINGS_PERIODS_KEEP 列；更早的季度单独成文件按需加载
+        head_columns = quarter_columns[:HOLDINGS_PERIODS_KEEP]
+        more_columns = quarter_columns[HOLDINGS_PERIODS_KEEP:]
+        holdings_html = "".join(head_columns)
+        more_holdings_html = _minify_frag("".join(more_columns))
+        # 首屏里多出来的「加载更早季度」占位列由 JS 追加，不占服务端 HTML
+        head_col_count = max(len(head_columns), 1)
 
         # ===== ★ 构建年度收益 HTML（热力图 + 统计栏）=====
         annual_returns = r.get('annual_returns', {}) or {}
@@ -5537,10 +5580,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         </div>
         """
 
-        holding_detail_data_json[r['code']] = f"""
+        holding_detail_data_json[r['code']] = _minify_frag(f"""
             <div class="holdings-wrapper">
                 <div class="quarters-panel">
-                    <div class="holdings-container" style="--qcols: {max(len(column_quarters), 1)};">
+                    <div class="holdings-container" style="--qcols: {head_col_count};"
+                         data-more="{len(more_columns)}" data-total="{len(column_quarters)}">
                         {holdings_html}
                     </div>
                 </div>
@@ -5548,7 +5592,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     {chart_html}
                 </div>
             </div>
-        """
+        """)
+        if more_holdings_html:
+            holding_detail_more_json[r['code']] = more_holdings_html
         if full_holdings_by_quarter:
             full_holdings_data_json[r['code']] = full_holdings_by_quarter
 
@@ -5572,20 +5618,32 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         + json.dumps(full_holdings_data_json, ensure_ascii=False, separators=(",", ":"))
         + ";"
     )
+    # 更早季度（首屏 8 列之外）同样单独成文件，点「加载更早季度」时才拉。
+    # 全站合计约 4.5MB，但只有真的要看历史时才下载，不影响首屏。
+    detail_more_script = (
+        "window.__FUND_DETAIL_MORE__="
+        + json.dumps(holding_detail_more_json, ensure_ascii=False, separators=(",", ":"))
+        + ";"
+    )
     holding_detail_version = hashlib.sha256(
         holding_detail_script.encode("utf-8")
     ).hexdigest()[:12]
     full_holdings_version = hashlib.sha256(
         full_holdings_script.encode("utf-8")
     ).hexdigest()[:12]
+    detail_more_version = hashlib.sha256(
+        detail_more_script.encode("utf-8")
+    ).hexdigest()[:12]
     nav_data_asset = f"fund_dashboard_data.js?v={nav_data_version}"
     holding_detail_asset = f"fund_dashboard_details.js?v={holding_detail_version}"
     full_holdings_asset = f"fund_dashboard_full_holdings.js?v={full_holdings_version}"
+    detail_more_asset = f"fund_dashboard_details_more.js?v={detail_more_version}"
     output_path = os.path.abspath(filename)
     output_dir = os.path.dirname(output_path)
     nav_data_output = os.path.join(output_dir, "fund_dashboard_data.js")
     holding_detail_output = os.path.join(output_dir, "fund_dashboard_details.js")
     full_holdings_output = os.path.join(output_dir, "fund_dashboard_full_holdings.js")
+    detail_more_output = os.path.join(output_dir, "fund_dashboard_details_more.js")
 
     def _atomic_write(target, content):
         temp_target = target + ".tmp"
@@ -8024,7 +8082,34 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         /* 四张季度卡独占整行；折线图换行到下方全宽 */
         .quarters-panel {{ flex: 1 1 100%; width: 100%; display: flex; flex-direction: column; gap: 8px; min-width: 0; }}
         .right-chart-wrapper {{ flex: 1 1 100%; width: 100%; min-width: 0; min-height: 280px; }}
-        .holdings-container {{ display: grid; grid-template-columns: repeat(var(--qcols, 3), minmax(0, 1fr)); gap: 8px; align-items: stretch; min-width: 0; }}
+        /* 季度条：容器放不下时横向滚动，右侧可继续看到更早的季度。
+           用 minmax(300px, 1fr) 而不是 minmax(0, 1fr)：
+           列数少时各列仍等比撑满（与原来观感一致），列数多时每列固定 300px、
+           超出部分横向滚动，不会把每列压到看不清。
+           注意：下方「年度收益率 + 折线图」在 .right-chart-wrapper 里，
+           是独立的 flex 行，这里的滚动条不会改变它的大小。 */
+        .holdings-container {{
+            display: grid;
+            grid-template-columns: repeat(var(--qcols, 3), minmax(300px, 1fr));
+            gap: 8px; align-items: stretch; min-width: 0;
+            overflow-x: auto; overflow-y: hidden;
+            padding: 4px 4px 8px;   /* 给卡片阴影和横向滚动条留空间 */
+            scrollbar-width: thin;
+        }}
+        /* 「加载更早季度」占位列（首屏 8 列之后按需加载） */
+        .quarter-more-col {{
+            display: flex; align-items: center; justify-content: center;
+            min-height: 140px;
+        }}
+        .quarter-more-btn {{
+            width: 100%; max-width: 190px; padding: 20px 10px;
+            border: 1px dashed var(--border); border-radius: 8px;
+            background: transparent; color: var(--link-color);
+            font-size: 12px; line-height: 1.7; cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }}
+        .quarter-more-btn:hover:not(:disabled) {{ border-color: var(--link-color); background: var(--hover-bg); }}
+        .quarter-more-btn:disabled {{ opacity: 0.6; cursor: default; }}
         /* 每个季度列：上=持仓明细，下=左持有人 / 右国家地区 */
         .quarter-column {{ min-width: 0; display: flex; flex-direction: column; gap: 8px; }}
         /* 非 QDII：没有国家/地区配置，持有人饼图独占整列（更宽更大） */
@@ -8367,11 +8452,26 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             overflow-y: auto;
             overscroll-behavior: contain;
         }}
-        /* 季度切换条 */
+        /* 季度切换条：两侧翻页按钮 + 中间可横向滚动的 chips */
         .hd-quarter-bar {{
-            display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 8px;
+            display: flex; align-items: center; gap: 6px; padding: 2px 0 8px;
             border-bottom: 1px solid var(--border); flex: none;
-            scrollbar-width: thin;
+        }}
+        .hd-nav {{
+            flex: none; width: 20px; height: 20px; padding: 0; line-height: 1;
+            border-radius: 50%; border: 1px solid var(--border);
+            background: transparent; color: var(--footer-text); cursor: pointer;
+            font-size: 13px; display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s;
+        }}
+        .hd-nav:hover:not(:disabled) {{ border-color: var(--link-color); color: var(--link-color); }}
+        .hd-nav:disabled {{ opacity: 0.3; cursor: default; }}
+        .hd-chips {{
+            display: flex; gap: 6px; overflow-x: auto; flex: 1 1 auto;
+            /* flex 项的 min-width 默认是 auto（按内容撑开），不设 0 的话
+               chips 会把整行撑爆而不是在容器内横向滚动 */
+            min-width: 0;
+            scrollbar-width: thin; padding-bottom: 2px;
         }}
         .hd-quarter-chip {{
             flex: none; font-size: 11px; line-height: 1.7; padding: 1px 9px;
@@ -8388,6 +8488,18 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             font-size: 11px; color: var(--footer-text); flex: none;
         }}
         .hd-summary b {{ color: var(--text); font-size: 12px; }}
+        /* 增减仓统计胶囊 */
+        .hd-stats {{ display: flex; flex-wrap: wrap; gap: 6px; flex: none; }}
+        .hd-stat {{
+            font-size: 10px; line-height: 1.8; padding: 0 7px; border-radius: 9px;
+            border: 1px solid var(--border); color: var(--footer-text); white-space: nowrap;
+        }}
+        .hd-stat b {{ font-weight: 600; font-size: 11px; }}
+        .hd-stat.s-new {{ border-color: #1a73e8; color: #1a73e8; }}
+        .hd-stat.s-up {{ border-color: #d93025; color: #d93025; }}
+        .hd-stat.s-down {{ border-color: #188038; color: #188038; }}
+        .hd-stat.s-flat {{ border-color: var(--border); color: var(--footer-text); }}
+        .hd-stat.s-sold {{ border-color: #e67e22; color: #e67e22; }}
         /* 全部持仓表 */
         /* 桌面端不建滚动容器，表头才能 sticky 到浮窗主体上 */
         .hd-table-wrap {{ overflow: visible; width: 100%; flex: none; }}
@@ -8402,16 +8514,23 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             border-bottom: 1px solid var(--border); white-space: nowrap;
         }}
         .hd-table thead th.hd-num {{ text-align: right; }}
+        /* 可点击排序的表头 */
+        .hd-table thead th.hd-sortable {{ cursor: pointer; user-select: none; }}
+        .hd-table thead th.hd-sortable:hover {{ color: var(--link-color); }}
+        .hd-table thead th.hd-sorted {{ color: var(--link-color); }}
+        .hd-sort-mark {{ font-size: 9px; margin-left: 2px; vertical-align: 1px; }}
         /* 全局的 th:nth-child(N) 规则给每一列都设了宽度，fixed 布局会把多余空间
            按比例摊到所有列上，导致 colgroup 的列宽被等比放大。这里统一重置，
            让列宽只由 <colgroup> 决定（未设宽度的列自动吸收剩余空间）。 */
         .hd-table th, .hd-table td {{ width: auto !important; }}
         .hd-table col.hd-col-rank {{ width: 40px; }}
         .hd-table col.hd-col-code {{ width: 84px; }}
-        .hd-table col.hd-col-ratio {{ width: 84px; }}
-        .hd-table col.hd-col-bar {{ width: 180px; }}
-        .hd-table col.hd-col-chg {{ width: 80px; }}
+        .hd-table col.hd-col-prev {{ width: 68px; }}
+        .hd-table col.hd-col-ratio {{ width: 68px; }}
+        .hd-table col.hd-col-bar {{ width: 150px; }}
+        .hd-table col.hd-col-chg {{ width: 76px; }}
         .hd-table thead th.hd-c-rank {{ text-align: center; }}
+        .hd-table thead th.hd-c-prev {{ text-align: right; }}
         .hd-table thead th.hd-c-ratio {{ text-align: right; }}
         .hd-table thead th.hd-c-chg {{ text-align: right; }}
         .hd-table tbody td {{
@@ -8421,6 +8540,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .hd-table tbody tr:hover td {{ background: var(--hover-bg); }}
         .hd-table td.hd-rank {{ text-align: center; color: var(--footer-text); font-size: 10px; }}
         .hd-table td.hd-code {{ color: var(--footer-text); font-size: 11px; font-family: ui-monospace, Menlo, Consolas, monospace; }}
+        /* 上季占比：弱化显示，作为本季值的对照基准 */
+        .hd-table td.hd-prev {{ text-align: right; color: var(--footer-text); font-variant-numeric: tabular-nums; }}
         .hd-table td.hd-ratio {{ text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }}
         .hd-table td.hd-chg {{ text-align: right; font-size: 10px; font-variant-numeric: tabular-nums; }}
         .hd-bar {{ height: 6px; border-radius: 3px; background: var(--hover-bg); overflow: hidden; }}
@@ -8430,19 +8551,47 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             border-top: 2px solid var(--border); color: var(--text);
         }}
         .hd-table tfoot td.hd-ratio {{ color: #e67e22; }}
+        /* 本季退出披露名单的持仓 */
+        .hd-sold {{
+            margin-top: 2px; padding-top: 8px; border-top: 1px dashed var(--border);
+            flex: none;
+        }}
+        .hd-sold-head {{
+            display: flex; align-items: baseline; gap: 8px; font-size: 11px;
+            color: var(--footer-text); cursor: pointer; user-select: none;
+        }}
+        .hd-sold-head b {{ color: #e67e22; font-size: 12px; }}
+        .hd-sold-hint {{ font-size: 10px; color: var(--footer-text); opacity: 0.85; }}
+        .hd-sold-toggle {{ margin-left: auto; color: var(--link-color); white-space: nowrap; }}
+        .hd-sold-list {{ display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }}
+        .hd-sold-list.collapsed {{ display: none; }}
+        .hd-sold-item {{
+            font-size: 10px; line-height: 1.8; padding: 0 7px; border-radius: 9px;
+            background: var(--hover-bg); color: var(--text); white-space: nowrap;
+        }}
+        .hd-sold-item i {{ font-style: normal; color: var(--footer-text); margin-left: 4px; }}
         .hd-empty {{ padding: 40px 0; text-align: center; color: var(--footer-text); font-size: 12px; }}
         @media (max-width: 992px) {{
             .modal-card.modal-card-mid {{ width: 96%; max-height: 90vh; }}
             #holdingsDetailBody {{ padding: 8px 10px 12px; max-height: calc(90vh - 48px); }}
             .hd-table-wrap {{ overflow-x: auto; }}
-            .hd-table {{ font-size: 11px; min-width: 460px; }}
-            .hd-table col.hd-col-rank {{ width: 30px; }}
-            .hd-table col.hd-col-code {{ width: 62px; }}
-            .hd-table col.hd-col-ratio {{ width: 64px; }}
-            .hd-table col.hd-col-bar {{ width: 56px; }}
-            .hd-table col.hd-col-chg {{ width: 58px; }}
+            .hd-table {{ font-size: 11px; min-width: 400px; }}
+            /* 窄屏列宽由 JS 决定（≤520px 不渲染「占比」条列）：
+               表格里给单元格加 display:none 会让后续单元格整体左移一格，
+               落进宽度为 0 的列而消失，所以只能在渲染时少生成一列。 */
+            .hd-table col.hd-col-rank {{ width: 26px; }}
+            .hd-table col.hd-col-code {{ width: 54px; }}
+            .hd-table col.hd-col-prev {{ width: 50px; }}
+            .hd-table col.hd-col-ratio {{ width: 50px; }}
+            .hd-table col.hd-col-chg {{ width: 50px; }}
             .hd-quarter-chip {{ font-size: 10px; padding: 1px 7px; }}
+            .hd-nav {{ width: 18px; height: 18px; font-size: 12px; }}
             .hd-summary {{ font-size: 10px; gap: 4px 10px; }}
+            .hd-stats {{ gap: 4px; }}
+            .hd-stat {{ font-size: 9px; padding: 0 5px; }}
+            .hd-stat b {{ font-size: 10px; }}
+            .hd-sold-head {{ font-size: 10px; gap: 6px; }}
+            .hd-sold-hint {{ display: none; }}
             /* 窄屏标题放不下「代码 + 全名 + 季度」，隐去全名保证季度可见 */
             .hd-tname {{ display: none; }}
             .modal-card-mid .modal-header h3 {{ font-size: 12px; }}
@@ -9308,13 +9457,19 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 gap: 8px;
                 min-width: 0;
             }}
-            /* 单列堆叠：每个季度自成一块，持仓明细在上、两个饼图在下 */
+            /* 手机：季度条同样横向滚动，一屏一列并露出下一列，
+               避免 8 个季度纵向堆叠把「年度收益率 / 折线图」顶到很远的地方 */
             .holdings-container {{
                 display: grid;
-                grid-template-columns: minmax(0, 1fr);
+                grid-template-columns: repeat(var(--qcols), minmax(78vw, 1fr));
                 gap: 8px;
                 align-items: stretch;
                 min-width: 0;
+                overflow-x: auto;
+                overflow-y: hidden;
+                padding: 2px 2px 6px;
+                scrollbar-width: thin;
+                -webkit-overflow-scrolling: touch;
             }}
             .quarter-column {{
                 display: flex;
@@ -10091,7 +10246,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             <div class="footer-note">
                 <div class="footer-left">
-                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方为最近 4 个季度的前十大持仓，下方是同一批季度的持有人结构饼图（QDII 基金另附国家/地区配置），再往下是双轴走势图与年度收益。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>（按占净值比例降序），并可在浮窗内切换该基金所有历史季度。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
+                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方是最近 8 个季度的前十大持仓 + 持有人结构饼图（QDII 基金另附国家/地区配置），<strong>季度条可横向滚动</strong>，滚到最右侧点「<strong>加载更早季度</strong>」即可回溯该基金全部历史季度；下方依次为年度收益率与双轴走势图。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>，浮窗内「上季 / 本季」两列并排对照、点表头可按占净值或环比变化量排序、底部可展开本季退出披露名单的个股；季度切换支持 chips 与 ‹ › 翻页。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
                 </div>
                 <div class="footer-right">
                     <span>⏱️ 统计更新于: <strong>{update_time_str}</strong></span>
@@ -10240,8 +10395,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         var fundParsedDates = {{}};
         var holdingDetailHtml = window.__FUND_HOLDING_DETAILS__ || {{}};
         var fullHoldingsData = window.__FUND_FULL_HOLDINGS__ || {{}};
+        var detailMoreData = window.__FUND_DETAIL_MORE__ || {{}};
         var holdingDetailPromise = null;
         var fullHoldingsPromise = null;
+        var detailMorePromise = null;
 
         document.addEventListener('DOMContentLoaded', function() {{
             fundNavData = window.__FUND_NAV_DATA__ || fundNavData || {{}};
@@ -10293,6 +10450,28 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 document.body.appendChild(script);
             }});
             return fullHoldingsPromise;
+        }}
+
+        // 更早季度（首屏 8 列之外）同样体积较大，只在点「加载更早季度」时拉
+        function loadDetailMore() {{
+            if (Object.keys(detailMoreData).length > 0) return Promise.resolve();
+            if (detailMorePromise) return detailMorePromise;
+            detailMorePromise = new Promise(resolve => {{
+                const script = document.createElement('script');
+                script.src = {json.dumps(detail_more_asset)};
+                script.onload = () => {{
+                    detailMoreData = window.__FUND_DETAIL_MORE__ || {{}};
+                    window.__FUND_DETAIL_MORE__ = null;
+                    resolve();
+                }};
+                script.onerror = () => {{
+                    script.remove();
+                    detailMorePromise = null;
+                    resolve();
+                }};
+                document.body.appendChild(script);
+            }});
+            return detailMorePromise;
         }}
 
         // ★ 内嵌面板（CFTC / 沪深宽基ETF）懒加载 + 主题联动
@@ -11150,6 +11329,28 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }});
         }}
 
+        // 只初始化指定节点范围内的饼图（追加「更早季度」时用，
+        // 避免把已经建好的十几张图全部 destroy + 重建）
+        function initPiesIn(roots, code) {{
+            const list = Array.isArray(roots) ? roots : [roots];
+            const canvases = [];
+            list.forEach(root => {{
+                if (!root || !root.querySelectorAll) return;
+                root.querySelectorAll('canvas.holder-pie-canvas, canvas.country-pie-canvas')
+                    .forEach(c => canvases.push(c));
+            }});
+            if (!canvases.length) return;
+            registerFundChartPlugins();
+            canvases.forEach(canvas => {{
+                const key = `${{code}}-${{canvas.dataset.idx || 0}}`;
+                if (canvas.classList.contains('holder-pie-canvas')) {{
+                    renderHolderPie(code, canvas, key);
+                }} else {{
+                    renderCountryPie(code, canvas, key);
+                }}
+            }});
+        }}
+
         function renderCountryPie(code, canvas, key) {{
             if (countryChartInstances[key]) {{
                 if (typeof countryChartInstances[key].destroy === 'function') {{
@@ -11453,6 +11654,50 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
         }}
 
+        // 首屏只内联最近 8 个季度，更早的季度在末尾放一个「加载更早季度」占位列，
+        // 点了才去拉 fund_dashboard_details_more.js（全站约 4.5MB，只在需要时下载）。
+        function setupMoreQuarters(container, code) {{
+            if (!container) return;
+            const moreCount = parseInt(container.dataset.more || '0', 10);
+            if (!moreCount || container.querySelector('.quarter-more-col')) return;
+
+            const btnCol = document.createElement('div');
+            btnCol.className = 'quarter-column quarter-more-col';
+            btnCol.innerHTML = '<button type="button" class="quarter-more-btn">'
+                + '加载更早<br>' + moreCount + ' 个季度</button>';
+            // 网格列数必须跟着子元素数量走，否则第 9 个子元素会掉到第二行
+            const headCount = container.children.length;
+            container.appendChild(btnCol);
+            container.style.setProperty('--qcols', String(headCount + 1));
+
+            const btn = btnCol.querySelector('.quarter-more-btn');
+            btn.addEventListener('click', function(e) {{
+                e.stopPropagation();
+                if (btn.disabled) return;
+                btn.disabled = true;
+                btn.textContent = '正在加载…';
+                loadDetailMore().then(() => {{
+                    const target = document.querySelector('#fundDetailBody .holdings-container');
+                    const html = detailMoreData[code] || '';
+                    if (!html || !target || !btnCol.isConnected) {{
+                        btn.disabled = false;
+                        btn.innerHTML = '加载失败<br>点此重试';
+                        return;
+                    }}
+                    // 先塞进临时容器，拿到新增节点后再挂上去，
+                    // 这样只初始化新加的饼图，不动已有的
+                    const tmp = document.createElement('div');
+                    tmp.innerHTML = html;
+                    const added = Array.prototype.slice.call(tmp.children);
+                    btnCol.remove();
+                    added.forEach(node => target.appendChild(node));
+                    const total = parseInt(target.dataset.total || '0', 10);
+                    if (total > 0) target.style.setProperty('--qcols', String(total));
+                    initPiesIn(added, code);
+                }});
+            }});
+        }}
+
         function openFundDetail(code) {{
             const modal = document.getElementById('fundDetailModal');
             const body = document.getElementById('fundDetailBody');
@@ -11489,6 +11734,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     initCountryChart(code);
                     initHolderChart(code);
                     initChart(code);
+                    setupMoreQuarters(body.querySelector('.holdings-container'), code);
                 }});
             }};
 
@@ -11509,7 +11755,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
 
         // ===== 全部持仓浮窗（二级） =====
-        let hdState = {{ code: null, quarter: null }};
+        let hdState = {{ code: null, quarter: null, sortKey: 'ratio', sortDir: 'desc', soldOpen: false }};
 
         function _hdQuarters(code) {{
             const all = fullHoldingsData[code];
@@ -11523,7 +11769,33 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 .replace(/"/g, '&quot;');
         }}
 
-        function renderHoldingsDetail(code, quarter) {{
+        // 环比增减的统一渲染（红涨绿跌，与页面其它地方口径一致）
+        function _hdDelta(d) {{
+            if (d == null || isNaN(d)) return '';
+            if (Math.abs(d) < 0.005) return ' <span style="color:var(--footer-text)">持平</span>';
+            if (d > 0) return ' <span class="change-up">▲' + d.toFixed(2) + '</span>';
+            return ' <span class="change-down">▼' + Math.abs(d).toFixed(2) + '</span>';
+        }}
+
+        // 上季度索引：股票代码优先、名称兜底（A 股改名时有发生）
+        function _hdPrevIndex(period) {{
+            const byCode = {{}}, byName = {{}};
+            ((period && period.list) || []).forEach(function(row) {{
+                if (row[1]) byCode[row[1]] = row[2];
+                if (row[0]) byName[row[0]] = row[2];
+            }});
+            return {{ byCode: byCode, byName: byName }};
+        }}
+
+        function _hdLookup(idx, row) {{
+            if (!idx) return null;
+            if (row[1] && Object.prototype.hasOwnProperty.call(idx.byCode, row[1])) return idx.byCode[row[1]];
+            if (row[0] && Object.prototype.hasOwnProperty.call(idx.byName, row[0])) return idx.byName[row[0]];
+            return null;
+        }}
+
+        function renderHoldingsDetail(code, quarter, opts) {{
+            opts = opts || {{}};
             const body = document.getElementById('holdingsDetailBody');
             const title = document.getElementById('holdingsDetailTitle');
             if (!body || !title) return;
@@ -11536,47 +11808,123 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
             if (!quarter || !all[quarter]) quarter = quarters[0];
 
+            const qIdx = quarters.indexOf(quarter);
             const cur = all[quarter] || {{}};
             const list = cur.list || [];
-            const prevQ = (function() {{
-                const i = quarters.indexOf(quarter);
-                return (i >= 0 && i + 1 < quarters.length) ? quarters[i + 1] : null;
-            }})();
-            const prevMap = {{}};
-            if (prevQ && all[prevQ] && all[prevQ].list) {{
-                all[prevQ].list.forEach(function(row) {{ prevMap[row[0]] = row[2]; }});
-            }}
+            const prevQ = (qIdx >= 0 && qIdx + 1 < quarters.length) ? quarters[qIdx + 1] : null;
+            const prevIdx = prevQ ? _hdPrevIndex(all[prevQ]) : null;
+            const prevList = prevQ ? (all[prevQ].list || []) : [];
+            const prevTotal = prevQ
+                ? prevList.reduce(function(s, r) {{ return s + (r[2] || 0); }}, 0)
+                : null;
+
+            // 季报（Q1/Q3）只披露前十大，半年报（Q2）/年报（Q4）才是全量。
+            // 口径不同会直接毁掉对比的可信度，所以要处理三件事：
+            //   1) 「新进 / 退出」的措辞按本季口径区分，不能把「掉出前十」说成「清仓」；
+            //   2) 本季是季报时，退出名单只取「上季前十大」——拿上季全量去比会误报几十条清仓；
+            //   3) 两季口径不一致时合计占净值不可比，必须隐藏环比差值。
+            const partial = /Q[13]$/.test(quarter) || list.length <= 10;
+            const prevPartial = prevQ ? (/Q[13]$/.test(prevQ) || prevList.length <= 10) : false;
+            const comparable = !!prevQ && (partial === prevPartial);
+
+            // 手机屏宽放不下 7 列，隐去装饰性的「占比」条列，
+            // 优先保证「上季 / 本季 / 环比」三列同屏可见。
+            const showBar = !(window.matchMedia && window.matchMedia('(max-width: 520px)').matches);
 
             const name = (typeof fundNames !== 'undefined' && fundNames[code]) ? fundNames[code] : '';
             const maxRatio = list.reduce(function(m, r) {{ return Math.max(m, r[2] || 0); }}, 0) || 1;
             const total = list.reduce(function(s, r) {{ return s + (r[2] || 0); }}, 0);
 
+            // 组装行数据（含上季占比与变化量），排序与渲染复用同一份
+            const rows = list.map(function(row, i) {{
+                const ratio = row[2] || 0;
+                const prev = _hdLookup(prevIdx, row);
+                return {{
+                    rank: i + 1,
+                    name: row[0] || '',
+                    code: row[1] || '',
+                    ratio: ratio,
+                    prev: prev,
+                    chg: (prev == null) ? null : (ratio - prev)
+                }};
+            }});
+
+            // 排序：占净值 / 环比变化量；新进（无上季数据）恒定排在末尾
+            const sortKey = (hdState.sortKey === 'chg') ? 'chg' : 'ratio';
+            const sortDir = (hdState.sortDir === 'asc') ? 1 : -1;
+            rows.sort(function(a, b) {{
+                if (sortKey === 'chg') {{
+                    const an = (a.chg == null), bn = (b.chg == null);
+                    if (an !== bn) return an ? 1 : -1;
+                    if (an || a.chg === b.chg) return a.rank - b.rank;
+                    return (a.chg - b.chg) * sortDir;
+                }}
+                if (a.ratio === b.ratio) return a.rank - b.rank;
+                return (a.ratio - b.ratio) * sortDir;
+            }});
+
+            // 增减仓统计
+            let cntNew = 0, cntUp = 0, cntDown = 0, cntFlat = 0;
+            rows.forEach(function(r) {{
+                if (r.chg == null) cntNew++;
+                else if (Math.abs(r.chg) < 0.005) cntFlat++;
+                else if (r.chg > 0) cntUp++;
+                else cntDown++;
+            }});
+
+            // 本季退出披露名单的持仓
+            const sold = [];
+            if (prevQ) {{
+                // 本季是季报时，只有「上季前十大」的变动是可比信息；
+                // 拿上季全量（半年报可能有上百条）去比，会把几十只未进前十的说成清仓。
+                const soldSrc = partial ? prevList.slice(0, 10) : prevList;
+                const curByCode = {{}}, curByName = {{}};
+                list.forEach(function(row) {{
+                    if (row[1]) curByCode[row[1]] = 1;
+                    if (row[0]) curByName[row[0]] = 1;
+                }});
+                soldSrc.forEach(function(row) {{
+                    const hit = (row[1] && curByCode[row[1]]) || (row[0] && curByName[row[0]]);
+                    if (!hit) sold.push({{ name: row[0] || '', code: row[1] || '', ratio: row[2] || 0 }});
+                }});
+                sold.sort(function(a, b) {{ return b.ratio - a.ratio; }});
+            }}
+
             let rowsHtml = '';
-            list.forEach(function(row, i) {{
-                const sname = row[0] || '', scode = row[1] || '', ratio = row[2] || 0;
-                let chg = '<span style="color:var(--footer-text)">—</span>';
+            rows.forEach(function(r) {{
+                let prevHtml = '<span style="color:var(--footer-text)">—</span>';
+                let chgHtml = '<span style="color:var(--footer-text)">—</span>';
                 if (prevQ) {{
-                    if (Object.prototype.hasOwnProperty.call(prevMap, sname)) {{
-                        const d = ratio - prevMap[sname];
-                        if (Math.abs(d) < 0.01) {{
-                            chg = '<span style="color:var(--footer-text)">持平</span>';
-                        }} else if (d > 0) {{
-                            chg = '<span class="change-up">▲' + d.toFixed(2) + '</span>';
-                        }} else {{
-                            chg = '<span class="change-down">▼' + Math.abs(d).toFixed(2) + '</span>';
-                        }}
+                    if (r.chg == null) {{
+                        // 上季若只披露前十大，缺席只能说明「没进前十」，不能说成新进
+                        prevHtml = prevPartial
+                            ? '<span style="color:var(--footer-text)" title="上季仅披露前十大，该股可能仍然持有">未进前十</span>'
+                            : '<span class="change-new">新进</span>';
+                        chgHtml = prevPartial
+                            ? '<span style="color:var(--footer-text)">—</span>'
+                            : '<span class="change-new">新增</span>';
                     }} else {{
-                        chg = '<span class="change-new">新增</span>';
+                        prevHtml = r.prev.toFixed(2) + '%';
+                        if (Math.abs(r.chg) < 0.005) {{
+                            chgHtml = '<span style="color:var(--footer-text)">持平</span>';
+                        }} else if (r.chg > 0) {{
+                            chgHtml = '<span class="change-up">▲' + r.chg.toFixed(2) + '</span>';
+                        }} else {{
+                            chgHtml = '<span class="change-down">▼' + Math.abs(r.chg).toFixed(2) + '</span>';
+                        }}
                     }}
                 }}
-                const barW = Math.max(1, Math.min(100, ratio / maxRatio * 100));
+                const barW = Math.max(1, Math.min(100, r.ratio / maxRatio * 100));
                 rowsHtml += '<tr>'
-                    + '<td class="hd-rank">' + (i + 1) + '</td>'
-                    + '<td title="' + _hdEsc(sname) + '">' + _hdEsc(sname) + '</td>'
-                    + '<td class="hd-code" title="' + _hdEsc(scode) + '">' + _hdEsc(scode || '--') + '</td>'
-                    + '<td class="hd-ratio">' + ratio.toFixed(2) + '%</td>'
-                    + '<td><div class="hd-bar"><i style="width:' + barW.toFixed(1) + '%"></i></div></td>'
-                    + '<td class="hd-chg">' + chg + '</td>'
+                    + '<td class="hd-rank">' + r.rank + '</td>'
+                    + '<td title="' + _hdEsc(r.name) + '">' + _hdEsc(r.name) + '</td>'
+                    + '<td class="hd-code" title="' + _hdEsc(r.code) + '">' + _hdEsc(r.code || '--') + '</td>'
+                    + '<td class="hd-prev">' + prevHtml + '</td>'
+                    + '<td class="hd-ratio">' + r.ratio.toFixed(2) + '%</td>'
+                    + (showBar
+                        ? '<td class="hd-c-bar"><div class="hd-bar"><i style="width:' + barW.toFixed(1) + '%"></i></div></td>'
+                        : '')
+                    + '<td class="hd-chg">' + chgHtml + '</td>'
                     + '</tr>';
             }});
 
@@ -11587,52 +11935,139 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     + '" data-quarter="' + _hdEsc(q) + '">' + _hdEsc(q) + '</button>';
             }});
 
+            // 可排序表头：点击切换升/降序
+            function sortTh(key, label, cls, tip) {{
+                const on = (sortKey === key);
+                const mark = on ? (sortDir === 1 ? '▲' : '▼') : '';
+                return '<th class="' + cls + ' hd-sortable' + (on ? ' hd-sorted' : '') + '"'
+                    + ' data-sort="' + key + '" title="' + tip + '">'
+                    + label + (mark ? '<span class="hd-sort-mark">' + mark + '</span>' : '')
+                    + '</th>';
+            }}
+
             title.innerHTML = '📦 [' + _hdEsc(code) + ']'
                 + (name ? ' <span class="hd-tname">' + _hdEsc(name) + '</span>' : '')
                 + ' · ' + _hdEsc(quarter) + ' 全部持仓';
             title.setAttribute('title', title.textContent);
 
+            let soldHtml = '';
+            if (sold.length) {{
+                const soldTitle = partial ? '较上季掉出前十' : '本季清仓';
+                const hint = partial
+                    ? '本季为季报，仅披露前十大，无法区分「清仓」与「掉出前十」'
+                    : '本季为半年报/年报全量披露，未出现者视为清仓';
+                soldHtml = '<div class="hd-sold">'
+                    + '<div class="hd-sold-head" title="' + hint + '">'
+                    +   soldTitle + ' <b>' + sold.length + '</b> 只'
+                    +   '<span class="hd-sold-hint">' + hint + '</span>'
+                    +   '<span class="hd-sold-toggle">' + (hdState.soldOpen ? '收起 ▲' : '展开 ▼') + '</span>'
+                    + '</div>'
+                    + '<div class="hd-sold-list' + (hdState.soldOpen ? '' : ' collapsed') + '">'
+                    +   sold.map(function(s) {{
+                            return '<span class="hd-sold-item" title="' + _hdEsc(s.name + ' ' + s.code) + '">'
+                                + _hdEsc(s.name)
+                                + '<i>' + (s.code ? _hdEsc(s.code) + ' ' : '') + s.ratio.toFixed(2) + '%</i>'
+                                + '</span>';
+                        }}).join('')
+                    + '</div>'
+                    + '</div>';
+            }}
+
+            // 两季披露口径不一致（季报 vs 半年报/年报）时，合计占净值没有可比性
+            const caliberNote = (prevQ && !comparable)
+                ? '<span style="color:#e67e22" title="季报仅披露前十大，半年报/年报为全量，两季合计口径不同">'
+                  + '口径不同，合计不可比</span>'
+                : '';
+
             body.innerHTML = ''
-                + '<div class="hd-quarter-bar">' + chipsHtml + '</div>'
+                + '<div class="hd-quarter-bar">'
+                +   '<button type="button" class="hd-nav" data-nav="1" title="更早一个季度"'
+                +     (qIdx + 1 >= quarters.length ? ' disabled' : '') + '>‹</button>'
+                +   '<div class="hd-chips">' + chipsHtml + '</div>'
+                +   '<button type="button" class="hd-nav" data-nav="-1" title="更新一个季度"'
+                +     (qIdx <= 0 ? ' disabled' : '') + '>›</button>'
+                + '</div>'
                 + '<div class="hd-summary">'
                 +   '<span>报告期 <b>' + _hdEsc(cur.end || quarter) + '</b></span>'
-                +   '<span>持仓条数 <b>' + list.length + '</b></span>'
-                +   '<span>合计占净值 <b>' + total.toFixed(2) + '%</b></span>'
-                +   (prevQ ? '<span>环比基准 <b>' + _hdEsc(prevQ) + '</b></span>' : '')
+                +   '<span>持仓 <b>' + list.length + '</b> 只'
+                +     (partial ? '（季报前十）' : '（全量披露）') + '</span>'
+                +   '<span>合计占净值 <b>' + total.toFixed(2) + '%</b>'
+                +     (comparable ? _hdDelta(total - prevTotal) : '') + '</span>'
+                +   (prevQ ? '<span>对比基准 <b>' + _hdEsc(prevQ) + '</b></span>' : '')
+                +   caliberNote
                 + '</div>'
+                + (prevQ ? '<div class="hd-stats">'
+                +   '<span class="hd-stat s-new">' + (prevPartial ? '上季未进前十' : '新进')
+                +     ' <b>' + cntNew + '</b></span>'
+                +   '<span class="hd-stat s-up">加仓 <b>' + cntUp + '</b></span>'
+                +   '<span class="hd-stat s-down">减仓 <b>' + cntDown + '</b></span>'
+                +   '<span class="hd-stat s-flat">持平 <b>' + cntFlat + '</b></span>'
+                +   '<span class="hd-stat s-sold">' + (partial ? '掉出前十' : '清仓')
+                +     ' <b>' + sold.length + '</b></span>'
+                + '</div>' : '')
                 + '<div class="hd-table-wrap"><table class="hd-table">'
                 +   '<colgroup>'
                 +     '<col class="hd-col-rank">'
                 +     '<col>'
                 +     '<col class="hd-col-code">'
+                +     '<col class="hd-col-prev">'
                 +     '<col class="hd-col-ratio">'
-                +     '<col class="hd-col-bar">'
+                +     (showBar ? '<col class="hd-col-bar">' : '')
                 +     '<col class="hd-col-chg">'
                 +   '</colgroup>'
                 +   '<thead><tr>'
                 +     '<th class="hd-c-rank">#</th>'
                 +     '<th>股票名称</th>'
                 +     '<th class="hd-c-code">代码</th>'
-                +     '<th class="hd-c-ratio hd-num">占净值</th>'
-                +     '<th class="hd-c-bar">占比</th>'
-                +     '<th class="hd-c-chg hd-num">环比</th>'
+                +     '<th class="hd-c-prev hd-num">上季</th>'
+                +     sortTh('ratio', '本季', 'hd-c-ratio hd-num', '按本季占净值比例排序')
+                +     (showBar ? '<th class="hd-c-bar">占比</th>' : '')
+                +     sortTh('chg', '环比', 'hd-c-chg hd-num', '按环比变化量排序（新进恒定排末尾）')
                 +   '</tr></thead>'
                 +   '<tbody>' + rowsHtml + '</tbody>'
                 +   '<tfoot><tr>'
-                +     '<td colspan="3">合计（' + list.length + ' 条）</td>'
+                +     '<td colspan="3">合计（' + list.length + ' 只）</td>'
+                +     '<td class="hd-prev">'
+                +       (prevTotal != null
+                            // 窄屏列窄，保留 1 位小数并省掉 * 号，否则会被省略号截断；
+                            // 「口径不同」的提示在 summary 里已有橙色文字，不会丢失信息。
+                            ? prevTotal.toFixed(showBar ? 2 : 1) + '%'
+                              + (comparable ? '' : (showBar ? '<span title="口径不同">*</span>' : ''))
+                            : '') + '</td>'
                 +     '<td class="hd-ratio">' + total.toFixed(2) + '%</td>'
-                +     '<td colspan="2"></td>'
+                +     (showBar ? '<td class="hd-c-bar"></td>' : '')
+                +     '<td class="hd-chg">' + (comparable ? _hdDelta(total - prevTotal) : '') + '</td>'
                 +   '</tr></tfoot>'
-                + '</table></div>';
+                + '</table></div>'
+                + soldHtml;
 
-            body.scrollTop = 0;
-            hdState = {{ code: code, quarter: quarter }};
+            // 点「详细」进来的可能是很旧的季度，把当前 chip 滚到可视区中间
+            if (!opts.keepScroll) {{
+                const activeChip = body.querySelector('.hd-quarter-chip.active');
+                if (activeChip && activeChip.parentNode) {{
+                    const bar = activeChip.parentNode;
+                    const br = bar.getBoundingClientRect();
+                    const cr = activeChip.getBoundingClientRect();
+                    bar.scrollLeft += (cr.left - br.left) - (br.width - cr.width) / 2;
+                }}
+                body.scrollTop = 0;
+            }}
+
+            hdState = {{
+                code: code,
+                quarter: quarter,
+                sortKey: sortKey,
+                sortDir: (sortDir === 1 ? 'asc' : 'desc'),
+                soldOpen: hdState.soldOpen
+            }};
         }}
 
         function openHoldingsDetail(code, quarter) {{
             const modal = document.getElementById('holdingsDetailModal');
             if (!modal) return;
-            hdState = {{ code: code, quarter: quarter || null }};
+            // 每只基金重新打开都回到默认排序（本季降序）与收起的清仓列表
+            hdState = {{ code: code, quarter: quarter || null,
+                         sortKey: 'ratio', sortDir: 'desc', soldOpen: false }};
             modal.classList.add('show');
             if (Object.keys(fullHoldingsData).length) {{
                 renderHoldingsDetail(code, quarter);
@@ -11649,7 +12084,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         function closeHoldingsDetail() {{
             const modal = document.getElementById('holdingsDetailModal');
             if (modal) modal.classList.remove('show');
-            hdState = {{ code: null, quarter: null }};
+            hdState = {{ code: null, quarter: null,
+                         sortKey: 'ratio', sortDir: 'desc', soldOpen: false }};
         }}
 
         window.openHoldingsDetail = openHoldingsDetail;
@@ -11679,10 +12115,47 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 const hdBody = document.getElementById('holdingsDetailBody');
                 if (hdBody) {{
                     hdBody.addEventListener('click', function(e) {{
+                        // 切换季度
                         const chip = e.target.closest('.hd-quarter-chip');
-                        if (!chip) return;
-                        e.stopPropagation();
-                        renderHoldingsDetail(hdState.code, chip.dataset.quarter);
+                        if (chip) {{
+                            e.stopPropagation();
+                            renderHoldingsDetail(hdState.code, chip.dataset.quarter);
+                            return;
+                        }}
+                        // 上一季 / 下一季快捷翻页
+                        const nav = e.target.closest('.hd-nav');
+                        if (nav && !nav.disabled) {{
+                            e.stopPropagation();
+                            const qs = _hdQuarters(hdState.code);
+                            const i = qs.indexOf(hdState.quarter);
+                            const j = i + parseInt(nav.dataset.nav, 10);
+                            if (i >= 0 && j >= 0 && j < qs.length) {{
+                                renderHoldingsDetail(hdState.code, qs[j]);
+                            }}
+                            return;
+                        }}
+                        // 表头点击排序（同一列再次点击反向）
+                        const th = e.target.closest('th.hd-sortable');
+                        if (th) {{
+                            e.stopPropagation();
+                            const k = th.dataset.sort;
+                            if (hdState.sortKey === k) {{
+                                hdState.sortDir = (hdState.sortDir === 'asc') ? 'desc' : 'asc';
+                            }} else {{
+                                hdState.sortKey = k;
+                                hdState.sortDir = 'desc';
+                            }}
+                            renderHoldingsDetail(hdState.code, hdState.quarter, {{ keepScroll: true }});
+                            return;
+                        }}
+                        // 清仓列表展开 / 收起
+                        const soldHead = e.target.closest('.hd-sold-head');
+                        if (soldHead) {{
+                            e.stopPropagation();
+                            hdState.soldOpen = !hdState.soldOpen;
+                            renderHoldingsDetail(hdState.code, hdState.quarter, {{ keepScroll: true }});
+                            return;
+                        }}
                     }});
                 }}
             }}
@@ -12286,6 +12759,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     _atomic_write(nav_data_output, nav_data_script)
     _atomic_write(holding_detail_output, holding_detail_script)
     _atomic_write(full_holdings_output, full_holdings_script)
+    _atomic_write(detail_more_output, detail_more_script)
     _atomic_write(output_path, html_content)
     return output_path
 
