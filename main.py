@@ -3158,6 +3158,222 @@ def _extract_redemption_tiers(html_text):
 
     return None
 
+
+# ===== 基金简介与基金经理 =====
+_FUND_PROFILE_CACHE_VERSION = 2
+
+def fetch_fund_profile(opener, code):
+    """从天天基金 F10 概况页(jbgk)和基金经理页(jjjl)抓取基金简介和经理信息。
+
+    返回 dict：
+      - inception_date: 成立日期 'YYYY-MM-DD'
+      - fund_type: 基金类型
+      - objective: 投资目标（基金简介）
+      - managers: [{name, start_date, tenure_days, tenure_str, return_pct, peer_avg_pct}]
+    """
+    cache_file = os.path.join(FEE_CACHE_DIR, f"{code}_profile.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            if cached.get('_v') == _FUND_PROFILE_CACHE_VERSION and cached.get('managers'):
+                return cached
+        except Exception:
+            pass
+
+    headers = {"User-Agent": DEFAULT_HEADERS["User-Agent"]}
+    profile = {
+        '_v': _FUND_PROFILE_CACHE_VERSION,
+        'inception_date': '',
+        'fund_type': '',
+        'objective': '',
+        'managers': []
+    }
+
+    # --- 1. 概况页 jbgk ---
+    jbgk_url = f"https://fundf10.eastmoney.com/jbgk_{code}.html"
+    try:
+        html_gk = _fetch_f10_html(jbgk_url, max_retries=2, timeout=10)
+        if not html_gk:
+            req_fb = urllib.request.Request(jbgk_url, headers={
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
+                "Referer": f"https://fundf10.eastmoney.com/jbgk_{code}.html",
+            })
+            with opener.open(req_fb, timeout=8) as resp:
+                html_gk = resp.read().decode('utf-8', errors='ignore')
+        if html_gk:
+            clean = re.sub(r'<[^>]+>', ' ', html_gk)
+            clean = clean.replace('&nbsp;', ' ').replace('&amp;', '&')
+            clean = re.sub(r'\s+', ' ', clean)
+
+            # 成立日期：优先从"成立日期：YYYY-MM-DD"匹配，再从"成立日期/规模 YYYY-MM-DD"匹配
+            m = re.search(r'成立日期[：:]\s*([\d-]+)', clean)
+            if not m:
+                m = re.search(r'成立日期[/／]规模\s+([\d-]+)', clean)
+            if m:
+                profile['inception_date'] = m.group(1)
+
+            # 基金类型
+            m = re.search(r'基金类型\s+(.*?)\s+发行日期', clean)
+            if m:
+                profile['fund_type'] = m.group(1).strip()
+
+            # 投资目标
+            m = re.search(r'投资目标\s+(.*?)\s+投资理念', clean)
+            if m:
+                profile['objective'] = m.group(1).strip()
+            if not profile['objective']:
+                m = re.search(r'投资目标\s+(.*?)(?:投资理念|投资策略|业绩比较|风险收益)', clean)
+                if m:
+                    profile['objective'] = m.group(1).strip()
+    except Exception:
+        pass
+
+    # --- 2. 基金经理页 jjjl ---
+    jjjl_url = f"https://fundf10.eastmoney.com/jjjl_{code}.html"
+    try:
+        html_jl = _fetch_f10_html(jjjl_url, max_retries=2, timeout=10)
+        if not html_jl:
+            # F10 限频时用 opener 直接请求作为 fallback
+            req_fb = urllib.request.Request(jjjl_url, headers={
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
+                "Referer": f"https://fundf10.eastmoney.com/jjjl_{code}.html",
+            })
+            with opener.open(req_fb, timeout=8) as resp:
+                html_jl = resp.read().decode('utf-8', errors='ignore')
+        if not html_jl:
+            raise Exception("jjjl page empty")
+        clean_jl = re.sub(r'<[^>]+>', ' ', html_jl)
+        clean_jl = clean_jl.replace('&nbsp;', ' ').replace('&amp;', '&')
+        clean_jl = re.sub(r'\s+', ' ', clean_jl)
+
+        # 现任基金经理姓名 + 上任日期（姓名可能含空格，如 "IKEDA KAE"）
+        m = re.search(r'现任基金经理简介\s+姓名[：:]\s*(.+?)\s+上任日期[：:]\s*([\d-]+)', clean_jl)
+        if m:
+            cur_name = m.group(1)
+            cur_start = m.group(2)
+        else:
+            cur_name = ''
+            cur_start = ''
+
+        # 经理简介（取现任经理段落）
+        manager_brief = ''
+        if cur_name:
+            m_brief = re.search(
+                r'现任基金经理简介.*?姓名[：:]\s*\S+\s+上任日期[：:]\s*[\d-]+\s+(.*?)(?:其他基金|基金经理变动|任职期间|$)',
+                clean_jl, re.S
+            )
+            if m_brief:
+                brief = m_brief.group(1).strip()
+                manager_brief = brief[:200] if len(brief) > 200 else brief
+
+        # 任职天数字符串：兼容 "1年又206天" / "206天" / "3年256天" / "11年" 等格式
+        _TENURE_PAT = r'\d+年又\d+天|\d+年\d+天|\d+天|\d+年'
+
+        # 从同类平均表中找当前基金的行（含任职收益 + 同类平均）
+        # 格式: {code} {name} {type} {start} 至今 {tenure} {return} {peer_avg} {rank}
+        managers = []
+        if cur_name and cur_start:
+            pat = re.compile(
+                re.escape(code) + r'\s+\S+.*?'
+                r'(\d{4}-\d{2}-\d{2})\s+至今\s+'
+                r'(' + _TENURE_PAT + r')\s+'
+                r'([+-]?[\d.]+%|--)\s+'
+                r'([+-]?[\d.]+%|--)'
+            )
+            m_ret = pat.search(clean_jl)
+            if m_ret:
+                start_date = m_ret.group(1)
+                tenure_str = m_ret.group(2)
+                return_pct = m_ret.group(3)
+                peer_avg_pct = m_ret.group(4)
+                tenure_days = 0
+                try:
+                    sd = datetime.strptime(start_date, '%Y-%m-%d')
+                    tenure_days = (now_beijing() - sd).days
+                except Exception:
+                    pass
+
+                managers.append({
+                    'name': cur_name,
+                    'start_date': cur_start,
+                    'tenure_days': tenure_days,
+                    'tenure_str': tenure_str,
+                    'return_pct': return_pct,
+                    'peer_avg_pct': peer_avg_pct,
+                    'brief': manager_brief
+                })
+
+        # 如果同类平均表没匹配到，从变动一览表找"至今"行
+        if not managers and cur_name:
+            pat2 = re.compile(
+                r'(\d{4}-\d{2}-\d{2})\s+至今\s+'
+                + re.escape(cur_name) + r'.*?\s+'
+                r'(' + _TENURE_PAT + r')\s+'
+                r'([+-]?[\d.]+%)'
+            )
+            m_ret2 = pat2.search(clean_jl)
+            if m_ret2:
+                start_date = m_ret2.group(1)
+                tenure_str = m_ret2.group(2)
+                return_pct = m_ret2.group(3)
+                peer_avg_pct = '--'
+                tenure_days = 0
+                try:
+                    sd = datetime.strptime(start_date, '%Y-%m-%d')
+                    tenure_days = (now_beijing() - sd).days
+                except Exception:
+                    pass
+                managers.append({
+                    'name': cur_name,
+                    'start_date': cur_start,
+                    'tenure_days': tenure_days,
+                    'tenure_str': tenure_str,
+                    'return_pct': return_pct,
+                    'peer_avg_pct': peer_avg_pct,
+                    'brief': manager_brief
+                })
+
+        # 最终兜底：至少保留姓名和上任日期，自行计算任职天数
+        if not managers and cur_name:
+            tenure_days = 0
+            tenure_str = ''
+            try:
+                sd = datetime.strptime(cur_start, '%Y-%m-%d')
+                tenure_days = (now_beijing() - sd).days
+                if tenure_days >= 365:
+                    yrs = tenure_days // 365
+                    days_left = tenure_days % 365
+                    tenure_str = f"{yrs}年又{days_left}天" if days_left > 0 else f"{yrs}年"
+                else:
+                    tenure_str = f"{tenure_days}天"
+            except Exception:
+                pass
+            managers.append({
+                'name': cur_name,
+                'start_date': cur_start,
+                'tenure_days': tenure_days,
+                'tenure_str': tenure_str,
+                'return_pct': '--',
+                'peer_avg_pct': '--',
+                'brief': manager_brief
+            })
+
+        profile['managers'] = managers
+    except Exception:
+        pass
+
+    # 缓存
+    if profile['managers'] or profile['objective'] or profile['inception_date']:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(profile, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    return profile
+
+
 def fetch_fund_detail_meta(opener, code):
     cache_file = os.path.join(FEE_CACHE_DIR, f"{code}_meta.json")
     if os.path.exists(cache_file):
@@ -3171,6 +3387,7 @@ def fetch_fund_detail_meta(opener, code):
                 cached["holdings"] = fetch_holdings(opener, code)
                 cached["holder_struct"] = fetch_fund_holder_structure(opener, code)
                 cached["countries_info"] = fetch_fund_country_distribution(opener, code, is_qdii=is_qdii_fund)
+                cached["profile"] = fetch_fund_profile(opener, code)
                 return cached
         except Exception:
             pass
@@ -3558,10 +3775,11 @@ def fetch_fund_detail_meta(opener, code):
     meta["holdings"] = fetch_holdings(opener, code)
     meta["holder_struct"] = fetch_fund_holder_structure(opener, code)
     meta["countries_info"] = fetch_fund_country_distribution(opener, code, is_qdii=is_qdii_fund)
+    meta["profile"] = fetch_fund_profile(opener, code)
 
     if meta.get("fee_manage") not in (None, "--") and meta.get("fee_redemption") not in (None, "未知"):
         try:
-            save_meta = {k: v for k, v in meta.items() if k not in ("holdings", "holder_struct", "countries_info")}
+            save_meta = {k: v for k, v in meta.items() if k not in ("holdings", "holder_struct", "countries_info", "profile")}
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(save_meta, f, ensure_ascii=False, indent=2)
         except Exception:
@@ -5580,8 +5798,74 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         </div>
         """
 
+        # ===== 基金简介卡片 =====
+        profile = r.get('profile') or {}
+        pf_inception = profile.get('inception_date', '') or ''
+        pf_type = profile.get('fund_type', '') or ''
+        pf_objective = profile.get('objective', '') or ''
+        pf_managers = profile.get('managers', []) or []
+
+        # 构建基金经理 HTML
+        mgr_html_parts = []
+        for mgr in pf_managers:
+            mgr_name = mgr.get('name', '')
+            mgr_start = mgr.get('start_date', '')
+            mgr_tenure_str = mgr.get('tenure_str', '')
+            mgr_return = mgr.get('return_pct', '--')
+            mgr_peer = mgr.get('peer_avg_pct', '--')
+            mgr_brief = mgr.get('brief', '')
+
+            # 任职收益 vs 同类平均的颜色
+            def _ret_color(val_str):
+                try:
+                    v = float(val_str.replace('%', ''))
+                    if v > 0:
+                        return '#d93025'  # 红=涨
+                    elif v < 0:
+                        return '#188038'  # 绿=跌
+                except Exception:
+                    pass
+                return 'var(--footer-text)'
+
+            ret_color = _ret_color(mgr_return)
+            peer_color = _ret_color(mgr_peer)
+
+            mgr_html_parts.append(f"""
+                <div class="profile-manager">
+                    <div class="profile-manager-head">
+                        <span class="profile-mgr-name">{html.escape(mgr_name)}</span>
+                        <span class="profile-mgr-tag">任职起始：{html.escape(mgr_start)}</span>
+                        <span class="profile-mgr-tag">任职年限：{html.escape(mgr_tenure_str or '--')}</span>
+                    </div>
+                    <div class="profile-manager-returns">
+                        <span class="profile-ret-item">任职收益：<span style="color:{ret_color};font-weight:600;">{html.escape(mgr_return)}</span></span>
+                        <span class="profile-ret-item">同类平均：<span style="color:{peer_color};">{html.escape(mgr_peer)}</span></span>
+                    </div>
+                    {f'<div class="profile-mgr-brief">{html.escape(mgr_brief)}</div>' if mgr_brief else ''}
+                </div>
+            """)
+        mgr_html = ''.join(mgr_html_parts) if mgr_html_parts else '<div class="profile-manager-empty">暂无经理信息</div>'
+
+        profile_html = f"""
+            <div class="fund-profile-card">
+                <div class="fund-profile-tags">
+                    {f'<span class="profile-tag">📅 成立日期：{html.escape(pf_inception)}</span>' if pf_inception else ''}
+                    {f'<span class="profile-tag">📋 类型：{html.escape(pf_type)}</span>' if pf_type else ''}
+                    {f'<span class="profile-tag">💰 规模：{r.get("scale", "--")}</span>' if r.get("scale") else ''}
+                    {f'<span class="profile-tag">💳 管理费：{r.get("fee_manage", "--")}</span>' if r.get("fee_manage") else ''}
+                    {f'<span class="profile-tag">🏦 托管费：{r.get("fee_custody", "--")}</span>' if r.get("fee_custody") else ''}
+                </div>
+                {f'<div class="fund-profile-objective"><span class="profile-obj-label">投资目标：</span>{html.escape(pf_objective)}</div>' if pf_objective else ''}
+                <div class="fund-profile-managers">
+                    <div class="profile-managers-title">👤 基金经理</div>
+                    {mgr_html}
+                </div>
+            </div>
+        """
+
         holding_detail_data_json[r['code']] = _minify_frag(f"""
             <div class="holdings-wrapper">
+                {profile_html}
                 <div class="quarters-panel">
                     <div class="holdings-container" style="--qcols: {head_col_count};"
                          data-more="{len(more_columns)}" data-total="{len(column_quarters)}">
@@ -8069,6 +8353,103 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
 
         .fund-row {{ cursor: pointer; }}
+        /* ===== 基金简介卡片 ===== */
+        .fund-profile-card {{
+            width: 100%;
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 4px;
+            box-sizing: border-box;
+        }}
+        .fund-profile-tags {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 14px;
+            margin-bottom: 8px;
+        }}
+        .profile-tag {{
+            font-size: 12px;
+            color: var(--header-text);
+            background: var(--hover-bg);
+            padding: 2px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }}
+        .fund-profile-objective {{
+            font-size: 12px;
+            color: var(--text);
+            line-height: 1.6;
+            margin-bottom: 8px;
+            padding: 8px 10px;
+            background: var(--hover-bg);
+            border-radius: 6px;
+        }}
+        .profile-obj-label {{
+            color: var(--link-color);
+            font-weight: 600;
+            white-space: nowrap;
+        }}
+        .fund-profile-managers {{
+            border-top: 1px solid var(--border);
+            padding-top: 8px;
+        }}
+        .profile-managers-title {{
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--header-text);
+            margin-bottom: 6px;
+        }}
+        .profile-manager {{
+            padding: 6px 0;
+            border-bottom: 1px dashed var(--border);
+        }}
+        .profile-manager:last-child {{
+            border-bottom: none;
+        }}
+        .profile-manager-head {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 4px 12px;
+            margin-bottom: 4px;
+        }}
+        .profile-mgr-name {{
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--link-color);
+        }}
+        .profile-mgr-tag {{
+            font-size: 12px;
+            color: var(--footer-text);
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1px 6px;
+            white-space: nowrap;
+        }}
+        .profile-manager-returns {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 20px;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }}
+        .profile-ret-item {{
+            color: var(--footer-text);
+        }}
+        .profile-mgr-brief {{
+            font-size: 12px;
+            color: var(--footer-text);
+            line-height: 1.5;
+            margin-top: 4px;
+        }}
+        .profile-manager-empty {{
+            font-size: 12px;
+            color: var(--footer-text);
+            padding: 4px 0;
+        }}
         /* 详情浮窗内部布局（宽度由浮窗决定，不再受表格列宽影响） */
         .holdings-wrapper {{
             display: flex;
@@ -13679,6 +14060,7 @@ def main():
                 "holdings": meta.get("holdings", []),
                 "holder_struct": meta.get("holder_struct", None),
                 "countries_info": meta.get("countries_info", {"date": "--", "countries": []}),
+                "profile": meta.get("profile", {"inception_date": "", "fund_type": "", "objective": "", "managers": []}),
                 "source": "天天基金",
                 "nav_data": raw_data_sorted,
                 "annual_returns": annual_returns,    # ★ 新增
