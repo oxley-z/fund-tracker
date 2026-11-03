@@ -3867,7 +3867,15 @@ os.makedirs(ANNUAL_RETURNS_CACHE_DIR, exist_ok=True)
 
 
 def fetch_fund_annual_returns(fund_code: str) -> dict:
-    """从天天基金 pingzhongdata 接口获取基金全部历史单位净值，计算每个自然年的年度收益率。
+    """从天天基金 pingzhongdata 接口获取基金累计净值，计算每个自然年的年度收益率。
+
+    ★ 口径说明（重要）：
+      使用 Data_ACWorthTrend（**累计净值**），而不是 Data_netWorthTrend（单位净值）。
+      单位净值在分红/拆分除权当天会跳水，直接用它算年度收益会把分红误算成亏损。
+      例如 160213（国泰纳斯达克100）2025 年分红 4 次：
+        单位净值口径 = -55.16%（错，把分红当亏损）
+        累计净值口径 = +9.77%（对）
+      详情页折线图取的是 lsjz 接口的 LJJZ（累计净值），两者必须同口径才能对得上。
 
     返回值示例：{"2020": 45.67, "2021": -12.34, ...}
     失败时返回空字典 {}。
@@ -3875,9 +3883,14 @@ def fetch_fund_annual_returns(fund_code: str) -> dict:
     cache_file = os.path.join(ANNUAL_RETURNS_CACHE_DIR, f"{fund_code}.json")
     if os.path.exists(cache_file):
         try:
-            if time.time() - os.path.getmtime(cache_file) < 30 * 86400:   # 30 天有效
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            if isinstance(cached, dict) and cached:
+                # 当年收益每天都在变：缓存含当年数据时只留 1 天，历史年份 30 天足够。
+                # 否则会出现「热力图还是半个月前的年内收益、折线图已是实时」的错位。
+                ttl = 86400 if str(now_beijing().year) in cached else 30 * 86400
+                if time.time() - os.path.getmtime(cache_file) < ttl:
+                    return cached
         except Exception:
             pass
 
@@ -3887,38 +3900,57 @@ def fetch_fund_annual_returns(fund_code: str) -> dict:
         "Referer": "http://fund.eastmoney.com/",
     }
 
-    nav_list = None
+    # [(timestamp_ms, nav), ...]，优先累计净值，缺失时回退单位净值
+    trend = None
     for attempt in range(3):
         try:
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=15) as resp:
                 text = resp.read().decode("utf-8", errors="ignore")
-            m = re.search(
-                r"Data_netWorthTrend\s*=\s*(\[\{.+?\}\]);",
-                text, re.DOTALL,
-            )
+
+            # --- 1. 累计净值（首选）---
+            m = re.search(r"Data_ACWorthTrend\s*=\s*(\[.*?\]);", text, re.DOTALL)
             if m:
-                nav_list = json.loads(m.group(1))
+                try:
+                    ac = json.loads(m.group(1))
+                    trend = [
+                        (it[0], it[1])
+                        for it in ac
+                        if isinstance(it, (list, tuple)) and len(it) >= 2
+                        and it[0] is not None and it[1] is not None
+                    ]
+                except Exception:
+                    trend = None
+            # --- 2. 单位净值（兜底，老基金偶有累计净值为空）---
+            if not trend:
+                m = re.search(r"Data_netWorthTrend\s*=\s*(\[\{.+?\}\]);", text, re.DOTALL)
+                if m:
+                    net = json.loads(m.group(1))
+                    trend = [
+                        (it["x"], it["y"])
+                        for it in net
+                        if it.get("x") is not None and it.get("y") is not None
+                    ]
+            if trend:
                 break
         except Exception:
             time.sleep(2)
             continue
 
-    if not nav_list:
+    if not trend:
         return {}
 
-    # 按年份分组
+    # 按年份分组。时间戳按北京时间换算，避免机器时区非东八区时跨年错位。
+    _bj = timezone(timedelta(hours=8))
     year_data: dict = {}
-    for item in nav_list:
-        ts = item.get("x")
-        nav = item.get("y")
-        if ts is None or nav is None:
-            continue
+    for ts, nav in trend:
         try:
-            year = datetime.fromtimestamp(ts / 1000).year
-            year_data.setdefault(year, []).append((ts, nav))
+            year = datetime.fromtimestamp(ts / 1000, tz=_bj).year
+            nav_f = float(nav)
         except Exception:
             continue
+        if nav_f > 0:
+            year_data.setdefault(year, []).append((ts, nav_f))
 
     sorted_years = sorted(year_data.keys())
     returns = {}
@@ -11589,7 +11621,21 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             else if (period === 'quarter') startDate.setMonth(latest.getMonth() - 3);
             else if (period === 'half') startDate.setMonth(latest.getMonth() - 6);
             else if (period === 'year') startDate.setFullYear(latest.getFullYear() - 1);
-            else if (period === 'ytd') startDate = new Date(latest.getFullYear(), 0, 1);
+            else if (period === 'ytd') {{
+                // ★ 与「年度收益率」热力图口径严格对齐：
+                //   基准取「上一年最后一个交易日」的净值，而不是当年第一个交易日。
+                //   否则同一个自然年会因为基准日差一天而出现两个不同的数字。
+                const yPrevEnd = `${{latest.getFullYear() - 1}}-12-31`;
+                let baseIdx = -1;
+                for (let i = 0; i < dates.length; i++) {{
+                    if (dates[i] <= yPrevEnd) baseIdx = i;
+                }}
+                if (baseIdx >= 0) {{
+                    return {{ dates: dates.slice(baseIdx), navs: navs.slice(baseIdx) }};
+                }}
+                // 数据未覆盖上年末（如基金成立当年），退回当年首个交易日
+                startDate = new Date(latest.getFullYear(), 0, 1);
+            }}
 
             const indices = [];
             for (let i = 0; i < dates.length; i++) {{
@@ -14033,6 +14079,23 @@ def main():
                 annual_returns = fetch_fund_annual_returns(code)
             except Exception as e:
                 print(f"    ⚠️ {code} 年度收益抓取异常: {e}")
+
+            # ★ 最新年份用 nav_data 覆盖：pingzhongdata 的累计净值比 lsjz 接口
+            #   （折线图数据源）滞后 1-2 个交易日，会让「热力图当年收益」和
+            #   「折线图今年内」在净值大幅波动时对不上。这里改用与折线图完全同源
+            #   同口径的 nav_data 重算最新年份，历史年份仍用 pingzhongdata 的全量数据。
+            #   复用 compute_annual_returns_from_nav 以便同时享受拆股断点修正。
+            if annual_returns and raw_data_sorted:
+                try:
+                    _cur_year = str(raw_data_sorted[-1]['date'])[:4]
+                    _prev_end = f"{int(_cur_year) - 1}-12-31"
+                    # 只有 nav_data 覆盖到上一年末时，该年收益才是完整的自然年口径
+                    if any(str(r['date']) <= _prev_end for r in raw_data_sorted):
+                        _calc = compute_annual_returns_from_nav(raw_data_sorted)
+                        if _cur_year in _calc:
+                            annual_returns[_cur_year] = _calc[_cur_year]
+                except Exception:
+                    pass
 
             # ★ 新增：抓取年化跟踪误差 & 同类平均
             te_data = {}
