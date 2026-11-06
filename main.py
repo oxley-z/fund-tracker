@@ -5534,7 +5534,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         total_ratio += ratio
                         change_text = ''
                         change_class = ''
-                        if name in prev_holdings_dict:
+                        if prev_period is None:
+                            # 只有一期快照（如美股 ETF 每日持仓）时没有对比基准，
+                            # 不能把每一只都标成「新增」
+                            pass
+                        elif name in prev_holdings_dict:
                             diff = ratio - prev_holdings_dict[name]
                             if abs(diff) < 0.01: change_text = '持平'; change_class = ''
                             elif diff > 0.3: change_text = f'加仓 {diff:.2f}%'; change_class = 'change-add'
@@ -5550,9 +5554,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             <span class="stock-change {change_class}">{change_text}</span>
                         </div>
                         '''
+                    # 杠杆 ETF（如 SOXL）靠掉期合约拿倍数敞口，各腿占比相加会超过 100%，
+                    # 直接写「前十大合计 261%」会让人以为是数据错误，加一句口径说明。
+                    total_label = '前十大合计' if total_ratio <= 100 else '前十大合计（含杠杆敞口）'
                     stocks_html += f'''
                     <div class="stock-item stock-total">
-                        <span class="stock-name">前十大合计</span>
+                        <span class="stock-name">{total_label}</span>
                         <span class="stock-ratio">{total_ratio:.2f}%</span>
                         <span class="stock-change"></span>
                     </div>
@@ -5727,20 +5734,27 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         else:
             fallback_cards = [GHOST_HOLDINGS_CARD] * len(column_quarters)
 
+        # 美股 ETF 这类标的既没有持有人结构也没有国家/地区配置，
+        # 整块饼图区会退化成一大片「本季度未披露」空白，直接不渲染。
+        has_pie_data = bool(holder_by_quarter) or bool(country_by_quarter)
         quarter_columns = []
         for idx, quarter in enumerate(column_quarters):
             holdings_card = (holdings_card_by_quarter.get(quarter)
                              or fallback_cards[idx])
-            pies_class = "quarter-pies" if show_country else "quarter-pies single"
-            country_cell = (_pie_cell(country_by_quarter.get(quarter), "country",
-                                      quarter, idx) if show_country else "")
-            quarter_columns.append(f"""
-            <div class="quarter-column" data-quarter="{html.escape(str(quarter))}">
-                {holdings_card}
+            if has_pie_data:
+                pies_class = "quarter-pies" if show_country else "quarter-pies single"
+                country_cell = (_pie_cell(country_by_quarter.get(quarter), "country",
+                                          quarter, idx) if show_country else "")
+                pies_html = f"""
                 <div class="{pies_class}">
                     {_pie_cell(holder_by_quarter.get(quarter), "holder", quarter, idx)}
                     {country_cell}
-                </div>
+                </div>"""
+            else:
+                pies_html = ""
+            quarter_columns.append(f"""
+            <div class="quarter-column" data-quarter="{html.escape(str(quarter))}">
+                {holdings_card}{pies_html}
             </div>
             """)
         # 首屏内联最近 HOLDINGS_PERIODS_KEEP 列；更早的季度单独成文件按需加载
@@ -5904,22 +5918,36 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             """)
         mgr_html = ''.join(mgr_html_parts) if mgr_html_parts else '<div class="profile-manager-empty">暂无经理信息</div>'
 
-        profile_html = f"""
+        # 美股 ETF / 指数这类标的三费、规模、经理全是 "--" 或空，
+        # 整张简介卡片没有实质信息，不渲染（否则只剩一排「--」和「暂无经理信息」）
+        def _tag_ok(val):
+            return val not in (None, "", "--", "-", "未知")
+
+        profile_tags = []
+        if pf_inception:
+            profile_tags.append(f'<span class="profile-tag">📅 成立日期：{html.escape(pf_inception)}</span>')
+        if pf_type:
+            profile_tags.append(f'<span class="profile-tag">📋 类型：{html.escape(pf_type)}</span>')
+        if _tag_ok(r.get("scale")):
+            profile_tags.append(f'<span class="profile-tag">💰 规模：{html.escape(str(r.get("scale")))}</span>')
+        if _tag_ok(r.get("fee_manage")):
+            profile_tags.append(f'<span class="profile-tag">💳 管理费：{html.escape(str(r.get("fee_manage")))}</span>')
+        if _tag_ok(r.get("fee_custody")):
+            profile_tags.append(f'<span class="profile-tag">🏦 托管费：{html.escape(str(r.get("fee_custody")))}</span>')
+
+        if profile_tags or pf_objective or mgr_html_parts:
+            profile_html = f"""
             <div class="fund-profile-card">
-                <div class="fund-profile-tags">
-                    {f'<span class="profile-tag">📅 成立日期：{html.escape(pf_inception)}</span>' if pf_inception else ''}
-                    {f'<span class="profile-tag">📋 类型：{html.escape(pf_type)}</span>' if pf_type else ''}
-                    {f'<span class="profile-tag">💰 规模：{r.get("scale", "--")}</span>' if r.get("scale") else ''}
-                    {f'<span class="profile-tag">💳 管理费：{r.get("fee_manage", "--")}</span>' if r.get("fee_manage") else ''}
-                    {f'<span class="profile-tag">🏦 托管费：{r.get("fee_custody", "--")}</span>' if r.get("fee_custody") else ''}
-                </div>
+                {f'<div class="fund-profile-tags">{"".join(profile_tags)}</div>' if profile_tags else ''}
                 {f'<div class="fund-profile-objective"><span class="profile-obj-label">投资目标：</span>{html.escape(pf_objective)}</div>' if pf_objective else ''}
-                <div class="fund-profile-managers">
+                {f'''<div class="fund-profile-managers">
                     <div class="profile-managers-title">👤 基金经理</div>
                     {mgr_html}
-                </div>
+                </div>''' if mgr_html_parts else ''}
             </div>
         """
+        else:
+            profile_html = ""
 
         holding_detail_data_json[r['code']] = _minify_frag(f"""
             <div class="holdings-wrapper">
@@ -13855,6 +13883,98 @@ def remove_nav_split_jumps(records):
         adjusted.append({"date": item["date"], "nav": adjusted_nav})
     return adjusted
 
+# ==============================================================================
+# 美股 ETF 持仓抓取
+# 数据源：stockanalysis.com（聚合各发行商每日披露的持仓，各 ETF 格式统一）
+# 与国内/QDII 基金不同，美股 ETF 没有「季度报告」披露口径，发行商按日更新
+# 持仓快照，因此这里只保留一份「最新持仓」，date 用抓取日期
+# （_period_label 会把它归到当前季度，页面上显示为 2026Q4 + 截止至日期）。
+# ==============================================================================
+US_ETF_HOLDINGS_CACHE_DIR = os.path.join(CACHE_DIR, "us_etf_holdings")
+os.makedirs(US_ETF_HOLDINGS_CACHE_DIR, exist_ok=True)
+_US_ETF_HOLDINGS_TTL = 3 * 86400        # 持仓变化慢，3 天足够
+
+
+def fetch_us_etf_holdings(symbol):
+    """抓美股 ETF 前 25 大持仓，返回与 fetch_holdings 同构的 periods 列表。
+
+    返回：[{"date": "2026-11-06", "holdings": [{"name","code","ratio"}, ...]}]
+    失败返回 []，不影响行情主流程。
+    """
+    cache_file = os.path.join(US_ETF_HOLDINGS_CACHE_DIR, f"{symbol}.json")
+    if os.path.exists(cache_file):
+        try:
+            if time.time() - os.path.getmtime(cache_file) < _US_ETF_HOLDINGS_TTL:
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    cached = json.load(f)
+                periods = cached.get('periods') or []
+                if periods:
+                    return periods
+        except Exception:
+            pass
+
+    url = f"https://stockanalysis.com/etf/{symbol.lower()}/holdings/"
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": DEFAULT_HEADERS["User-Agent"],
+            "Accept": "text/html,application/xhtml+xml,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        with get_thread_opener().open(req, timeout=25) as resp:
+            html_text = resp.read().decode('utf-8', errors='ignore')
+    except Exception:
+        return []
+
+    try:
+        from bs4 import BeautifulSoup
+    except Exception:
+        return []
+
+    holdings = []
+    try:
+        soup = BeautifulSoup(html_text, 'html.parser')
+        table = soup.find('table', id='main-table')
+        body = table.find('tbody') if table else None
+        for tr in (body.find_all('tr') if body else []):
+            tds = tr.find_all('td')
+            if len(tds) < 4:
+                continue
+            code = tds[1].get_text(strip=True)
+            name = tds[2].get_text(strip=True)
+            raw_ratio = tds[3].get_text(strip=True).replace('%', '').replace(',', '')
+            try:
+                ratio = float(raw_ratio)
+            except (TypeError, ValueError):
+                continue
+            if not name or ratio <= 0:
+                continue
+            holdings.append({
+                "name": name,
+                # 杠杆 ETF 的掉期合约没有股票代码，stockanalysis 给的是 n/a
+                "code": "" if code.lower() in ("n/a", "-", "—") else code,
+                "ratio": round(ratio, 2),
+            })
+    except Exception:
+        return []
+
+    if not holdings:
+        return []
+
+    periods = [{"date": now_beijing().strftime('%Y-%m-%d'), "holdings": holdings}]
+    try:
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                "_v": 1,
+                "symbol": symbol,
+                "fetched_at": now_beijing().strftime('%Y-%m-%d %H:%M:%S'),
+                "source": url,
+                "periods": periods,
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return periods
+
+
 def fetch_us_etf_data(symbol, start_date, end_date):
     """抓取美股 ETF 历史行情（合并自 fetch_us_etfs_data.py）。
 
@@ -14330,12 +14450,20 @@ def main():
             except Exception as e:
                 print(f"    ⚠️ 美股ETF {symbol} 年度收益计算异常: {e}")
 
+            # ★ 美股 ETF 持仓来自 stockanalysis.com（各发行商每日披露的聚合）
+            us_etf_holdings = []
+            try:
+                us_etf_holdings = fetch_us_etf_holdings(symbol)
+            except Exception as e:
+                print(f"    ⚠️ 美股ETF {symbol} 持仓抓取异常: {e}")
+
             res.update({
                 "code": symbol, "name": US_ETF_NAMES.get(symbol, symbol),
                 "scale": "--", "scale_val": -1.0,
                 "fee_manage": "--", "fee_custody": "--", "fee_sales": "--", "fee_source": "--",
                 "fee_purchase": "--", "fee_redemption": "--", "buy_status": "--", "buy_limit": "--",
-                "buy_limit_val": -1, "fee_total": "--", "fee_val": -1.0, "holdings": [],
+                "buy_limit_val": -1, "fee_total": "--", "fee_val": -1.0,
+                "holdings": us_etf_holdings,
                 "holder_struct": None, "countries_info": {"date": "--", "countries": []},
                 "source": "美股ETF行情", "nav_data": data,
                 "annual_returns": annual_returns,      # ★ 本地计算
