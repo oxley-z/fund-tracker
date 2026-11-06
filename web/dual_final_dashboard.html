@@ -297,13 +297,25 @@ function chartData(){
   }
   return traces;
 }
+function isMobileViewport(){
+  try{
+    // 窄屏，或触屏且无精确指针（手机/平板）都按移动端处理
+    return window.matchMedia('(max-width: 768px)').matches
+        || window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  }catch(e){ return window.innerWidth<=768; }
+}
 function layoutConfig(){
   var normalized=state.mode==='BASE100';
+  var mobile=isMobileViewport();
   return {
     paper_bgcolor:'#ffffff',plot_bgcolor:'#ffffff',
     font:{family:'"Microsoft YaHei","PingFang SC",sans-serif',color:'#66717d',size:11},
-    hovermode:'x unified',
-    hoverlabel:{bgcolor:'#17212b',bordercolor:'#17212b',font:{size:12,color:'#ffffff'}},
+    // 桌面端用 x unified 一次看齐所有序列；移动端这样会把十几只 ETF 堆成一个
+    // 超长浮层直接盖住折线图，所以改成 closest 只显示最近一条。
+    hovermode:mobile?'closest':'x unified',
+    hoverlabel:mobile
+      ?{bgcolor:'#17212b',bordercolor:'#17212b',font:{size:10,color:'#ffffff'},align:'left',namelength:-1}
+      :{bgcolor:'#17212b',bordercolor:'#17212b',font:{size:12,color:'#ffffff'}},
     xaxis:{
       type:'date',automargin:true,gridcolor:'#edf0f3',linecolor:'#dfe5ea',
       tickcolor:'#dfe5ea',tickfont:{size:10},hoverformat:'%Y-%m-%d',
@@ -322,7 +334,8 @@ function layoutConfig(){
     },
     legend:{orientation:'h',x:0,y:1.08,font:{size:10},visible:visibleEtfs().length<=4},
     margin:{t:30,r:normalized?28:82,b:48,l:66},
-    dragmode:'zoom'
+    // 移动端默认拖动平移，单击才出数值；否则手指一滑就在框选缩放
+    dragmode:mobile?'pan':'zoom'
   };
 }
 function drawChart(){
@@ -337,7 +350,7 @@ function drawChart(){
     return;
   }
   var config={
-    responsive:true,displayModeBar:true,displaylogo:false,
+    responsive:true,displayModeBar:!isMobileViewport(),displaylogo:false,
     modeBarButtonsToRemove:['sendDataToCloud','editInChartStudio','lasso2d','select2d']
   };
   Plotly.react('chart',chartData(),layoutConfig(),config);
@@ -431,8 +444,18 @@ document.querySelectorAll('thead button').forEach(function(button){
     drawTable();
   });
 });
+// 横竖屏切换/拖动窗口可能跨越 768px 断点，此时 hovermode 与 dragmode 都要换档，
+// 只做 Plotly.Plots.resize 不会重算 layout，需要整张重绘。
+var _lastMobileView=isMobileViewport();
 window.addEventListener('resize',function(){
-  if(typeof Plotly!=='undefined') Plotly.Plots.resize(document.getElementById('chart'));
+  if(typeof Plotly==='undefined') return;
+  var nowMobile=isMobileViewport();
+  if(nowMobile!==_lastMobileView){
+    _lastMobileView=nowMobile;
+    drawChart();
+  }else{
+    Plotly.Plots.resize(document.getElementById('chart'));
+  }
 });
 fillSelect();
 updateAll();
