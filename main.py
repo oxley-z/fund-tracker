@@ -5547,9 +5547,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             else: change_text = f'↓{abs(diff):.2f}%'; change_class = 'change-down'
                         else:
                             change_text = '新增'; change_class = 'change-new'
+                        # 美股 ETF 的持仓名做了中文化，英文原名放进 title 供悬停查看
+                        _name_en = h.get('name_en') or ''
+                        _title_attr = f' title="{html.escape(str(_name_en))}"' if _name_en else ''
                         stocks_html += f'''
                         <div class="stock-item">
-                            <span class="stock-name">{name}</span>
+                            <span class="stock-name"{_title_attr}>{name}</span>
                             <span class="stock-ratio">{ratio:.2f}%</span>
                             <span class="stock-change {change_class}">{change_text}</span>
                         </div>
@@ -13893,25 +13896,64 @@ def remove_nav_split_jumps(records):
 US_ETF_HOLDINGS_CACHE_DIR = os.path.join(CACHE_DIR, "us_etf_holdings")
 os.makedirs(US_ETF_HOLDINGS_CACHE_DIR, exist_ok=True)
 _US_ETF_HOLDINGS_TTL = 3 * 86400        # 持仓变化慢，3 天足够
+_US_ETF_HOLDINGS_MAX_PERIODS = 8        # 最多保留最近 8 个季度
+
+_US_STOCK_NAME_MAP = None
+
+
+def _load_us_stock_names():
+    """加载「美股代码 -> 中文简称」映射（data/us_stock_names.json）。
+
+    数据来源：从各基金/ QDII 持仓缓存里提取天天基金已翻译好的中文名，
+    再叠加一小份人工补充（Meta/台积电/伯克希尔这类只给了英文名的）。
+    """
+    global _US_STOCK_NAME_MAP
+    if _US_STOCK_NAME_MAP is not None:
+        return _US_STOCK_NAME_MAP
+    mapping = {}
+    try:
+        with open(os.path.join("data", "us_stock_names.json"), 'r', encoding='utf-8') as f:
+            mapping = json.load(f).get('names') or {}
+    except Exception:
+        mapping = {}
+    _US_STOCK_NAME_MAP = mapping
+    return mapping
+
+
+def _quarter_key_of(date_str):
+    """2026-11-06 -> 2026Q4；解析失败返回 None。"""
+    m = re.match(r'(\d{4})-(\d{2})', str(date_str or ''))
+    if not m:
+        return None
+    return f"{m.group(1)}Q{(int(m.group(2)) - 1) // 3 + 1}"
 
 
 def fetch_us_etf_holdings(symbol):
     """抓美股 ETF 前 25 大持仓，返回与 fetch_holdings 同构的 periods 列表。
 
-    返回：[{"date": "2026-11-06", "holdings": [{"name","code","ratio"}, ...]}]
+    返回：[{"date": "2026-11-06", "holdings": [{"name","name_en","code","ratio"}, ...]}]
+
+    ★ 历史季度的处理：
+      stockanalysis.com 只提供「当前」持仓，发行商官网也只放最新一版，
+      SEC N-PORT 与 Wayback 在当前网络下都取不到，因此这里用**季度快照累积**：
+      每次抓取按季度归档，同季度覆盖、跨季度追加，最多保留 8 个季度。
+      也就是说从首次运行起，每过一个季度页面就多一列可对比的历史持仓。
+
     失败返回 []，不影响行情主流程。
     """
     cache_file = os.path.join(US_ETF_HOLDINGS_CACHE_DIR, f"{symbol}.json")
+
+    # 旧缓存（含历史季度）
+    old_periods = []
     if os.path.exists(cache_file):
         try:
-            if time.time() - os.path.getmtime(cache_file) < _US_ETF_HOLDINGS_TTL:
-                with open(cache_file, 'r', encoding='utf-8') as f:
-                    cached = json.load(f)
-                periods = cached.get('periods') or []
-                if periods:
-                    return periods
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            old_periods = cached.get('periods') or []
+            if time.time() - os.path.getmtime(cache_file) < _US_ETF_HOLDINGS_TTL and old_periods:
+                return old_periods
         except Exception:
-            pass
+            old_periods = []
 
     url = f"https://stockanalysis.com/etf/{symbol.lower()}/holdings/"
     try:
@@ -13923,13 +13965,14 @@ def fetch_us_etf_holdings(symbol):
         with get_thread_opener().open(req, timeout=25) as resp:
             html_text = resp.read().decode('utf-8', errors='ignore')
     except Exception:
-        return []
+        return old_periods
 
     try:
         from bs4 import BeautifulSoup
     except Exception:
-        return []
+        return old_periods
 
+    name_map = _load_us_stock_names()
     holdings = []
     try:
         soup = BeautifulSoup(html_text, 'html.parser')
@@ -13948,31 +13991,48 @@ def fetch_us_etf_holdings(symbol):
                 continue
             if not name or ratio <= 0:
                 continue
+            # 杠杆 ETF 的掉期合约没有股票代码，stockanalysis 给的是 n/a
+            code = "" if code.lower() in ("n/a", "-", "—") else code
+            cn = name_map.get(code.upper()) if code else None
             holdings.append({
-                "name": name,
-                # 杠杆 ETF 的掉期合约没有股票代码，stockanalysis 给的是 n/a
-                "code": "" if code.lower() in ("n/a", "-", "—") else code,
+                "name": cn or name,
+                "name_en": name if cn else "",
+                "code": code,
                 "ratio": round(ratio, 2),
             })
     except Exception:
-        return []
+        return old_periods
 
     if not holdings:
-        return []
+        return old_periods
 
-    periods = [{"date": now_beijing().strftime('%Y-%m-%d'), "holdings": holdings}]
+    # ★ 季度快照累积：同季度覆盖，跨季度追加
+    today = now_beijing().strftime('%Y-%m-%d')
+    today_q = _quarter_key_of(today)
+    merged, replaced = [], False
+    for p in old_periods:
+        if _quarter_key_of(p.get('date')) == today_q:
+            merged.append({"date": today, "holdings": holdings})
+            replaced = True
+        else:
+            merged.append(p)
+    if not replaced:
+        merged.append({"date": today, "holdings": holdings})
+    merged.sort(key=lambda p: str(p.get('date') or ''), reverse=True)
+    merged = merged[:_US_ETF_HOLDINGS_MAX_PERIODS]
+
     try:
         with open(cache_file, 'w', encoding='utf-8') as f:
             json.dump({
-                "_v": 1,
+                "_v": 2,
                 "symbol": symbol,
                 "fetched_at": now_beijing().strftime('%Y-%m-%d %H:%M:%S'),
                 "source": url,
-                "periods": periods,
+                "periods": merged,
             }, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
-    return periods
+    return merged
 
 
 def fetch_us_etf_data(symbol, start_date, end_date):
