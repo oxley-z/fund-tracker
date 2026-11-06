@@ -1167,6 +1167,25 @@ def get_skew(opener) -> tuple[float, str, str]:
     except Exception: pass
     return 0.0, "获取失败", "https://sc.macromicro.me/series/4407/cboe-skew"
 
+def get_vxsmh(opener) -> tuple[float, str, str]:
+    """Cboe 半导体 ETF 波动率指数（基于 VanEck Semiconductor ETF / SMH）。
+
+    该指数 2025-09 才发布，历史序列较短；CBOE 没有提供对应的实时报价接口，
+    只能从日线 CSV 末尾取最新收盘价。
+    """
+    try:
+        points = fetch_cboe_macro_history("VXSMH", (now_beijing() - timedelta(days=20)).strftime("%Y-%m-%d"))
+        if points:
+            return points[-1][1], "CBOE 官方 (VXSMH)", "https://www.cboe.com/us/indices/dashboard/vxsmh/"
+    except Exception: pass
+
+    try:
+        val = fetch_from_cboe_quote(opener, "_VXSMH")
+        if val > 0:
+            return val, "CBOE 官方 (_VXSMH)", "https://www.cboe.com/us/indices/dashboard/vxsmh/"
+    except Exception: pass
+    return 0.0, "获取失败", "https://www.cboe.com/us/indices/dashboard/vxsmh/"
+
 def get_brent_oil(opener) -> tuple[float, str, str]:
     """获取布伦特原油连续价格"""
     try:
@@ -1377,6 +1396,7 @@ def fetch_home_market_metrics(opener):
         ("vix",           get_vix,             (0.0, "获取失败", "#")),
         ("usdcny",        get_usd_cny,         (0.0, "获取失败", "#")),
         ("vxn",           get_vxn,             (0.0, "获取失败", "#")),
+        ("vxsmh",         get_vxsmh,           (0.0, "获取失败", "#")),
         ("skew",          get_skew,            (0.0, "获取失败", "#")),
         ("brent",         get_brent_oil,       (0.0, "获取失败", "#")),
         ("gold_london",   get_gold_london,     (0.0, "获取失败", "#")),
@@ -1413,6 +1433,7 @@ def fetch_home_market_metrics(opener):
     vix_val, vix_src, vix_url                     = out["vix"]
     usdcny_val, usdcny_src, usdcny_url            = out["usdcny"]
     vxn_val, vxn_src, vxn_url                     = out["vxn"]
+    vxsmh_val, vxsmh_src, vxsmh_url               = out["vxsmh"]
     skew_val, skew_src, skew_url                  = out["skew"]
     brent_val, brent_src, brent_url               = out["brent"]
     gold_val, gold_src, gold_url                  = out["gold_london"]
@@ -1426,6 +1447,8 @@ def fetch_home_market_metrics(opener):
     vix_status = "数据暂缺" if vix_val <= 0 else ("极度恐慌" if vix_val >= 30 else ("警惕波动" if vix_val >= 20 else ("温和震荡" if vix_val >= 15 else "平稳低波")))
     usdcny_status = "数据暂缺" if usdcny_val <= 0 else ("美元走强" if usdcny_val >= 7.30 else ("区间震荡" if usdcny_val >= 7.15 else "人民币升值"))
     vxn_status = "数据暂缺" if vxn_val <= 0 else ("科技股极恐" if vxn_val >= 30 else ("杀估值抛压" if vxn_val >= 22 else "波动平缓"))
+    # VXSMH 中枢显著高于 VIX/VXN（历史中位数约 42），阈值按自身分布分档
+    vxsmh_status = "数据暂缺" if vxsmh_val <= 0 else ("半导体极恐" if vxsmh_val >= 55 else ("警惕波动" if vxsmh_val >= 45 else ("正常震荡" if vxsmh_val >= 38 else "平稳低波")))
     skew_status = "数据暂缺" if skew_val <= 0 else ("尾部黑天鹅预警" if skew_val >= 140 else ("风险积聚" if skew_val >= 132 else "常态平稳"))
     brent_status = "数据暂缺" if brent_val <= 0 else ("极度高企" if brent_val >= 95 else ("通胀溢价" if brent_val >= 80 else ("温和中性" if brent_val >= 65 else "需求疲软")))
     gold_status = "数据暂缺" if gold_val <= 0 else ("极度高企" if gold_val >= 2500 else ("高位震荡" if gold_val >= 2000 else ("温和中性" if gold_val >= 1500 else "低位盘整")))
@@ -1439,6 +1462,7 @@ def fetch_home_market_metrics(opener):
         "vix": {"val": vix_val, "status": vix_status, "time": now_str, "source": vix_src, "url": vix_url, "desc": "<15 平稳低波 | 15~20 正常震荡 | 20~30 警惕波动 | >30 极度恐慌"},
         "usdcny": {"val": usdcny_val, "status": usdcny_status, "time": now_str, "source": usdcny_src, "url": usdcny_url, "desc": "美元兑人民币汇率，QDII换汇成本及折溢价关键锚"},
         "vxn": {"val": vxn_val, "status": vxn_status, "time": now_str, "source": vxn_src, "url": vxn_url, "desc": "纳斯达克100期权隐波，监测科技成长股杀估值抛压"},
+        "vxsmh": {"val": vxsmh_val, "status": vxsmh_status, "time": now_str, "source": vxsmh_src, "url": vxsmh_url, "desc": "半导体 ETF(SMH) 期权隐波，衡量芯片股情绪与拥挤度"},
         "skew": {"val": skew_val, "status": skew_status, "time": now_str, "source": skew_src, "url": skew_url, "desc": "基准100。>135提示期权市场尾部极度对冲成本升高"},
         "brent": {"val": brent_val, "status": brent_status, "time": now_str, "source": brent_src, "url": brent_url, "desc": "国际基准原油，大宗通胀与全球工业周期核心温度计"},
         "gold_london": {"val": gold_val, "status": gold_status, "time": now_str, "source": gold_src, "url": gold_url, "desc": "伦敦现货金价（美元/盎司），全球避险与美元信用对冲核心锚点"},
@@ -1794,6 +1818,7 @@ def fetch_macro_history():
     jobs = {
         "vix": lambda: fetch_cboe_macro_history("VIX"),
         "vxn": lambda: fetch_cboe_macro_history("VXN"),
+        "vxsmh": lambda: fetch_cboe_macro_history("VXSMH"),
         "skew": lambda: fetch_cboe_macro_history("SKEW"),
         "cnn": fetch_cnn_macro_history,
         "usdcny": lambda: _fetch_eastmoney_macro_history("133.USDCNH"),
@@ -1842,6 +1867,7 @@ def fetch_macro_history():
     sources = {
         "vix": ("VIX 标普500波动率", "点", "CBOE 官方历史收盘价"),
         "vxn": ("VXN 纳斯达克100波动率", "点", "CBOE 官方历史收盘价"),
+        "vxsmh": ("VXSMH 半导体 ETF 波动率", "点", "CBOE 官方历史收盘价"),
         "skew": ("SKEW 黑天鹅偏斜", "点", "CBOE 官方历史收盘价"),
         "cnn": ("CNN 恐慌贪婪指数", "分", "CNN 官方历史序列"),
         "usdcny": ("USD/CNY 汇率", "", "东方财富 USDCNH 历史日线"),
@@ -6350,6 +6376,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     vix = metrics["vix"]
     usdcny = metrics["usdcny"]
     vxn = metrics["vxn"]
+    vxsmh = metrics.get("vxsmh", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
     skew = metrics["skew"]
     brent = metrics["brent"]
 
@@ -6411,6 +6438,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         "cnn": (fng.get("score"), "CNN 恐慌贪婪指数", "分", "CNN 官方历史序列"),
         "vix": (vix.get("val"), "VIX 标普500波动率", "点", "CBOE 官方历史收盘价"),
         "vxn": (vxn.get("val"), "VXN 纳斯达克100波动率", "点", "CBOE 官方历史收盘价"),
+        "vxsmh": (vxsmh.get("val"), "VXSMH 半导体 ETF 波动率", "点", "CBOE 官方历史收盘价"),
         "skew": (skew.get("val"), "SKEW 黑天鹅偏斜", "点", "CBOE 官方历史收盘价"),
         "usdcny": (usdcny.get("val"), "USD/CNY 汇率", "", "东方财富 USDCNH 历史日线"),
         "gold_london": (gold_london.get("val"), "伦敦金 (XAU/USD)", "美元/盎司", "东方财富 COMEX 黄金历史日线"),
@@ -10342,6 +10370,23 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         </a>
                     </div>
 
+                    <div{_macro_history_attrs('vxsmh', 'macroHistoryPanelCore')}>
+                        <div class="metric-header">
+                            <span>VXSMH 半导体波动率</span>
+                            {_macro_history_hint('vxsmh')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#9334e6;">{vxsmh['val']}</span>
+                            <span class="metric-tag" style="background:rgba(147,52,230,0.12); color:#9334e6;">{vxsmh['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            &lt;38 平稳低波 | 38~45 正常震荡 | 45~55 警惕波动 | &gt;55 半导体极恐
+                        </div>
+                        <a href="{vxsmh['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: CBOE 官方 (VXSMH) ↗
+                        </a>
+                    </div>
+
                     <div{_macro_history_attrs('vxn', 'macroHistoryPanelCore')}>
                         <div class="metric-header">
                             <span>VXN 纳指波动率</span>
@@ -13998,6 +14043,7 @@ def main():
             "vix": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
             "usdcny": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
             "vxn": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "vxsmh": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
             "skew": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
             "brent": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
             "gold_london": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
@@ -14045,12 +14091,12 @@ def main():
         except Exception as e:
             print(f"⚠️ 宏观历史序列抓取失败: {e}")
             macro_history = _read_macro_history_cache()
-    print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {home_metrics['fng']['score']} | VIX {home_metrics['vix']['val']} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
+    print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {home_metrics['fng']['score']} | VIX {home_metrics['vix']['val']} | VXSMH {home_metrics.get('vxsmh', {}).get('val', 0.0)} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
     print(f"🛢️ 大宗商品指标获取成功: 布伦特原油 {home_metrics['brent']['val']} | 伦敦金 {home_metrics['gold_london']['val']} | 沪金主连 {home_metrics['gold_shfe']['val']} | 伦敦银 {home_metrics['silver_london']['val']} | COMEX铜 {home_metrics['copper_lme']['val']} | BTC {home_metrics.get('btc', {}).get('val', 0.0)}")
     macro_history_point_counts = " | ".join(
         f"{key.upper()} {len(macro_history.get(key, {}).get('points', []))}"
         for key in (
-            "vix", "vxn", "cnn", "usdcny", "skew",
+            "vix", "vxn", "vxsmh", "cnn", "usdcny", "skew",
             "gold_london", "gold_shfe", "silver_london",
             "copper_lme", "brent", "btc",
             "pe_ndx", "pe_sp500", "pe_hs300", "pe_kc50", "pe_hstech",
