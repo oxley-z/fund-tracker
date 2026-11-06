@@ -9300,17 +9300,28 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .cmp-bar i {{ display: block; height: 100%; }}
         .cmp-bar i + i {{ box-shadow: inset 1px 0 0 rgba(255,255,255,.55); }}
 
+        /* ★ 滚动容器必须铺满整个视图宽度。
+           以前这里同时写了 max-width:1440px + margin:0 auto，宽屏下滚动条就停在
+           1440px 处，两侧留出大片空白；鼠标移到空白区滚轮不生效，必须先把指针
+           挪进容器内才能滚动。现在改为「容器全宽负责滚动，内容限宽负责排版」。 */
         .qdii-container {{
             flex: 1;
             overflow-y: auto;
-            max-width: 1440px;
-            margin: 0 auto;
-            padding: 16px 1.5%;
             width: 100%;
+            padding: 16px 1.5%;
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
             gap: 12px;
+            scrollbar-gutter: stable;
+        }}
+        /* 内容仍限宽 1440 并居中，保持宽屏下的阅读宽度 */
+        .qdii-container > * {{
+            width: 100%;
+            max-width: 1440px;
+            margin-left: auto;
+            margin-right: auto;
+            box-sizing: border-box;
         }}
         .qdii-filter-bar {{
             display: flex;
