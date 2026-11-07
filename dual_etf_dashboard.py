@@ -1618,18 +1618,25 @@ function layoutConfig(){
     xaxis:{
       type:'date',automargin:true,gridcolor:'#edf0f3',linecolor:'#dfe5ea',
       tickcolor:'#dfe5ea',tickfont:{size:10},hoverformat:'%Y-%m-%d',
-      rangeslider:{visible:false}
+      rangeslider:{visible:false},
+      // 移动端没有鼠标悬停，靠点击定位；十字虚线吸附到最近的数据点，读数才准
+      showspikes:mobile,spikemode:'across',spikesnap:'data',
+      spikecolor:'#8b97a3',spikethickness:1,spikedash:'dot'
     },
     yaxis:{
       title:{text:normalized?'区间起点 = 100':'总份额（亿份）',font:{color:'#66717d',size:11},standoff:8},
       gridcolor:'#edf0f3',linecolor:'#dfe5ea',tickcolor:'#dfe5ea',
       tickfont:{color:'#66717d',size:10},zeroline:false,automargin:true,
-      tickformat:normalized?',.0f':',.1f'
+      tickformat:normalized?',.0f':',.1f',
+      showspikes:mobile,spikemode:'across',spikesnap:'data',
+      spikecolor:'#8b97a3',spikethickness:1,spikedash:'dot'
     },
     yaxis2:{
       title:{text:'上证指数（点）',font:{color:'#c43d3d',size:11},standoff:8},
       overlaying:'y',side:'right',visible:!normalized,showgrid:false,
-      tickfont:{color:'#c43d3d',size:10},zeroline:false,automargin:true,tickformat:',.0f'
+      tickfont:{color:'#c43d3d',size:10},zeroline:false,automargin:true,tickformat:',.0f',
+      showspikes:mobile,spikemode:'across',spikesnap:'data',
+      spikecolor:'#8b97a3',spikethickness:1,spikedash:'dot'
     },
     legend:{orientation:'h',x:0,y:1.08,font:{size:10},visible:visibleEtfs().length<=4},
     margin:{t:30,r:normalized?28:82,b:48,l:66},
@@ -1652,7 +1659,87 @@ function drawChart(){
     responsive:true,displayModeBar:!isMobileViewport(),displaylogo:false,
     modeBarButtonsToRemove:['sendDataToCloud','editInChartStudio','lasso2d','select2d']
   };
-  Plotly.react('chart',chartData(),layoutConfig(),config);
+  var pending=Plotly.react('chart',chartData(),layoutConfig(),config);
+  // Plotly.react 在 2.x 返回 Promise；老版本没有则直接绑
+  if(pending&&typeof pending.then==='function'){
+    pending.then(function(gd){bindMobileTapHover(gd);});
+  }else{
+    bindMobileTapHover(chart);
+  }
+}
+// ===== 移动端：点一下显示十字线 + 数值框，1.5 秒后淡出 =====
+// 触屏没有 hover，Plotly 默认只在手指按住的瞬间闪一下，松手就没了。
+// 而且实测 Plotly 的 showspikes 在「点击钉住」场景下不会绘制（Fx.hover 不走
+// spike 分支），所以十字线自己用一层绝对定位的虚线画，位置按数据点换算，
+// 这样既准又能自己控制淡出节奏。
+var _etfCrossTimer=null;
+
+function _etfCrossLayer(gd){
+  var layer=gd.querySelector('.etf-crosshair-layer');
+  if(layer) return layer;
+  // #chart 的 position 是 static，绝对定位的子层会挂到页面根部（高度变成整页），
+  // 十字线就会拉出图表之外，必须先给容器补上定位上下文
+  if(getComputedStyle(gd).position==='static') gd.style.position='relative';
+  layer=document.createElement('div');
+  layer.className='etf-crosshair-layer';
+  layer.style.cssText='position:absolute;inset:0;pointer-events:none;z-index:4;opacity:0;';
+  layer.innerHTML='<div class="ch-v"></div><div class="ch-h"></div>';
+  gd.appendChild(layer);
+  return layer;
+}
+
+function _etfDrawCross(gd,pt){
+  var fl=gd._fullLayout;
+  if(!fl||!fl._size) return;
+  // 真实点击时 Plotly 会在 point 上挂 xaxis/yaxis（右轴序列是 yaxis2）；
+  // 拿不到就退回主轴，保证任何情况下都能画出来
+  var xa=pt.xaxis||fl.xaxis, ya=pt.yaxis||fl.yaxis;
+  if(!xa||!ya) return;
+  var size=fl._size;
+  var xPix=xa._offset+xa.d2p(pt.x);
+  var yPix=ya._offset+ya.d2p(pt.y);
+  if(!isFinite(xPix)||!isFinite(yPix)) return;
+  var layer=_etfCrossLayer(gd);
+  var v=layer.querySelector('.ch-v'),h=layer.querySelector('.ch-h');
+  v.style.cssText='position:absolute;left:'+xPix+'px;top:'+size.t+'px;bottom:'+size.b+'px;'
+    +'border-left:1px dashed #7b8794;';
+  h.style.cssText='position:absolute;top:'+yPix+'px;left:'+size.l+'px;right:'+size.r+'px;'
+    +'border-top:1px dashed #7b8794;';
+  layer.style.transition='';
+  layer.style.opacity='1';
+}
+
+function _etfClearCross(gd){
+  if(_etfCrossTimer){ clearTimeout(_etfCrossTimer); _etfCrossTimer=null; }
+  var layer=gd.querySelector('.etf-crosshair-layer');
+  if(layer){ layer.style.transition=''; layer.style.opacity='0'; }
+  var hl=gd.querySelector('.hoverlayer');
+  if(hl){ hl.style.transition=''; hl.style.opacity=''; }
+}
+
+function bindMobileTapHover(gd){
+  if(!gd) return;
+  if(typeof gd.removeAllListeners==='function'){
+    try{ gd.removeAllListeners('plotly_click'); }catch(e){}
+  }
+  if(!isMobileViewport()) return;
+  gd.on('plotly_click',function(evt){
+    _etfClearCross(gd);
+    if(!evt||!evt.points||!evt.points.length){
+      try{ Plotly.Fx.unhover(gd); }catch(e){}
+      return;
+    }
+    var pt=evt.points[0];
+    try{ Plotly.Fx.hover(gd,[{curveNumber:pt.curveNumber,pointNumber:pt.pointNumber}]); }catch(e){}
+    _etfDrawCross(gd,pt);
+    // 1.5 秒后一起淡出：十字线留 25%（还能看出位置），数值框留 35%（还能读）
+    _etfCrossTimer=setTimeout(function(){
+      var layer=gd.querySelector('.etf-crosshair-layer');
+      if(layer){ layer.style.transition='opacity .6s ease'; layer.style.opacity='0.25'; }
+      var hl=gd.querySelector('.hoverlayer');
+      if(hl){ hl.style.transition='opacity .6s ease'; hl.style.opacity='0.35'; }
+    },1500);
+  });
 }
 function rowStats(t){
   var y=t.y;
