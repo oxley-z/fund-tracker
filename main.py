@@ -6935,6 +6935,24 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 { value: 30, label: '30 极恐', color: '#d93025' }
             ]
         },
+        // VXSMH 中枢显著高于 VIX/VXN（历史中位数约 42），阈值按自身分布分档
+        vxsmh: {
+            lineColor: '#9334e6',
+            yStart: 25,
+            suggestedMax: 75,
+            sourceUrl: 'https://www.cboe.com/us/indices/dashboard/vxsmh/',
+            bands: [
+                { min: 0,  max: 38,  label: '平稳低波',   color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 38, max: 45,  label: '正常震荡',   color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 45, max: 55,  label: '警惕波动',   color: 'rgba(230,126,34,0.10)',  swatch: '#e67e22' },
+                { min: 55, max: 200, label: '半导体极恐', color: 'rgba(217,48,37,0.10)',   swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 38, label: '38 平稳', color: '#188038' },
+                { value: 45, label: '45 警惕', color: '#e67e22' },
+                { value: 55, label: '55 极恐', color: '#d93025' }
+            ]
+        },
         cnn: {
             lineColor: '#6f42c1',
             yStart: 0,
