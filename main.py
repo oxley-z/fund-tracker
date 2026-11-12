@@ -5126,10 +5126,309 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     </div>
     '''
 
+    # ==================================================================
+    # 第三个标签页：年化收益排行（基准 = 纳指100）
+    # ------------------------------------------------------------------
+    # QDII 基金只缓存了「年度收益」（annual_returns），没有全历史日净值，
+    # 所以年化用「区间内各年收益累乘 → 按年数开方」折算，而不是日净值。
+    # 基准同样用 NDX 的年度收益，保证两边口径一致、同期可比。
+    # ==================================================================
+    def _annual_map_of(result_row):
+        """把 annual_returns 统一成 {'2021': -1.24, ...}（float，失败丢弃）。"""
+        out = {}
+        for k, v in (result_row.get('annual_returns') or {}).items():
+            try:
+                out[str(k)] = round(float(v), 2)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    _ndx_row = next((r for r in results if r.get('code') == 'NDX'), None)
+    qdii_annual_benchmark = _annual_map_of(_ndx_row) if _ndx_row else {}
+
+    qdii_annual_funds = []
+    for item in qdii_funds:
+        r = item["data"]
+        annual = _annual_map_of(r)
+        if not annual:
+            continue
+        profile = r.get('profile') or {}
+        qdii_annual_funds.append({
+            "code": r["code"],
+            "name": r.get("name", ""),
+            "group": item["group"],
+            "group_label": item["group_label"],
+            "inception": (profile.get('inception_date') or '').strip(),
+            "annual": annual,
+            "scale": r.get("scale") or "--",
+        })
+
+    qdii_annual_payload = json.dumps({
+        "benchmark": {"code": "NDX", "name": "纳指100", "annual": qdii_annual_benchmark},
+        "funds": qdii_annual_funds,
+    }, ensure_ascii=False, separators=(',', ':'))
+
+    qdii_annual_html = f'''
+    <div class="qdii-container">
+        <div class="qdii-filter-bar">
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">统计区间</span>
+                <button type="button" class="qdii-chip active" data-arange="inception">成立以来</button>
+                <button type="button" class="qdii-chip" data-arange="10">近 10 年</button>
+                <button type="button" class="qdii-chip" data-arange="5">近 5 年</button>
+                <button type="button" class="qdii-chip" data-arange="3">近 3 年</button>
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">自定义区间</span>
+                <select class="qdii-year-select" id="qdiiAnnualStart"></select>
+                <span class="qdii-range-sep">至</span>
+                <select class="qdii-year-select" id="qdiiAnnualEnd"></select>
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">筛选</span>
+                <button type="button" class="qdii-chip" id="qdiiAnnualBeatOnly">只看跑赢纳指的主动基金</button>
+            </div>
+        </div>
+
+        <div class="qdii-table-card">
+            <div class="cmp-block-title">📈 QDII 年化收益排行
+                <span class="cmp-block-sub">基准：纳指100（NDX）· 年化 = 区间累计收益按年数开方 · 每行基准取与该基金相同的年份区间</span>
+            </div>
+            <div class="qdii-table-wrap qdii-annual-wrap">
+                <table class="cmp-table" id="qdiiAnnualTable">
+                    <thead>
+                        <tr>
+                            <th class="cmp-code">#</th>
+                            <th class="cmp-name">基金</th>
+                            <th class="qdii-th-sort qdii-col-secondary" data-akey="group_label">类型</th>
+                            <th class="qdii-th-sort qdii-col-secondary" data-akey="inception">成立日期</th>
+                            <th class="qdii-th-sort" data-akey="ann">区间年化</th>
+                            <th class="qdii-th-sort" data-akey="total">总涨幅</th>
+                            <th class="qdii-th-sort qdii-col-bench" data-akey="bench">纳指100同期</th>
+                            <th class="qdii-th-sort" data-akey="excess">超额</th>
+                            <th>标记</th>
+                        </tr>
+                    </thead>
+                    <tbody id="qdiiAnnualBody"></tbody>
+                </table>
+            </div>
+            <div class="qdii-annual-foot" id="qdiiAnnualFoot"></div>
+        </div>
+    </div>
+    '''
+
+    # 年化排行的前端逻辑单独放一个普通字符串，避免在 f-string 里写大量 {{ }}
+    qdii_annual_js = r"""
+        // ===== QDII 年化收益排行（基准：纳指100）=====
+        (function() {
+            function initQdiiAnnual() {
+                var data = (typeof qdiiAnnualData !== 'undefined' && qdiiAnnualData) ? qdiiAnnualData : null;
+                var body = document.getElementById('qdiiAnnualBody');
+                if (!data || !body) return;
+
+                var benchAnnual = (data.benchmark && data.benchmark.annual) || {};
+                var funds = data.funds || [];
+
+                // 收集所有出现过的年份
+                var yearSet = {};
+                Object.keys(benchAnnual).forEach(function(y) { yearSet[Number(y)] = 1; });
+                funds.forEach(function(f) {
+                    Object.keys(f.annual || {}).forEach(function(y) { yearSet[Number(y)] = 1; });
+                });
+                var years = Object.keys(yearSet).map(Number).filter(function(y) { return y > 1900; })
+                    .sort(function(a, b) { return a - b; });
+                if (!years.length) return;
+
+                var startSel = document.getElementById('qdiiAnnualStart');
+                var endSel = document.getElementById('qdiiAnnualEnd');
+                if (startSel && !startSel.options.length) {
+                    years.forEach(function(y) {
+                        startSel.appendChild(new Option(y + ' 年', y));
+                        endSel.appendChild(new Option(y + ' 年', y));
+                    });
+                    startSel.value = years[0];
+                    endSel.value = years[years.length - 1];
+                }
+
+                var mode = 'inception';   // inception | 10 | 5 | 3 | custom
+                var beatOnly = false;
+                var sortKey = 'ann', sortDir = 'desc';
+
+                // 区间年化：区间内各年收益累乘，再按「实际有数据的年数」开方
+                function annualize(map, from, to) {
+                    var prod = 1, n = 0, first = null, last = null;
+                    for (var y = from; y <= to; y++) {
+                        var v = map[String(y)];
+                        if (v === undefined || v === null || isNaN(v)) continue;
+                        prod *= (1 + v / 100);
+                        n++;
+                        if (first === null) first = y;
+                        last = y;
+                    }
+                    if (!n) return null;
+                    return {
+                        ann: (Math.pow(prod, 1 / n) - 1) * 100,
+                        total: (prod - 1) * 100,
+                        n: n, first: first, last: last
+                    };
+                }
+
+                function resolveRange(f) {
+                    var latest = years[years.length - 1];
+                    if (mode === 'inception') {
+                        var incYear = String(f.inception || '').slice(0, 4);
+                        var start = /^\d{4}$/.test(incYear) ? Number(incYear) : years[0];
+                        return { from: start, to: latest };
+                    }
+                    if (mode === 'custom') {
+                        var a = Number(startSel.value), b = Number(endSel.value);
+                        return { from: Math.min(a, b), to: Math.max(a, b) };
+                    }
+                    var n = Number(mode);
+                    return { from: latest - n + 1, to: latest };
+                }
+
+                var fmt = function(v) {
+                    if (v === null || v === undefined || isNaN(v)) return '--';
+                    return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+                };
+                var cls = function(v) {
+                    if (v === null || v === undefined || isNaN(v)) return '';
+                    return v >= 0 ? 'metric-red' : 'metric-green';
+                };
+
+                function render() {
+                    var rows = [];
+                    funds.forEach(function(f) {
+                        var rg = resolveRange(f);
+                        var mine = annualize(f.annual || {}, rg.from, rg.to);
+                        if (!mine) return;
+                        // 基准取「与该基金完全相同的年份区间」，保证同期可比
+                        var bm = annualize(benchAnnual, mine.first, mine.last);
+                        rows.push({
+                            code: f.code,
+                            name: f.name,
+                            group: f.group,
+                            group_label: f.group_label,
+                            inception: f.inception || '--',
+                            ann: mine.ann,
+                            total: mine.total,
+                            bench: bm ? bm.ann : null,
+                            excess: bm ? (mine.ann - bm.ann) : null,
+                            // 基金成立晚于区间起点时，实际只覆盖部分年份，如实显示
+                            span: (mine.first === mine.last)
+                                ? String(mine.first)
+                                : (mine.first + '-' + mine.last),
+                            n: mine.n
+                        });
+                    });
+
+                    var list = rows.slice();
+                    if (beatOnly) {
+                        list = list.filter(function(r) {
+                            return r.group === 'us_active' && r.excess !== null && r.excess > 0;
+                        });
+                    }
+
+                    list.sort(function(a, b) {
+                        var av = a[sortKey], bv = b[sortKey];
+                        if (typeof av === 'string' || typeof bv === 'string') {
+                            av = String(av || ''); bv = String(bv || '');
+                            return sortDir === 'asc' ? av.localeCompare(bv, 'zh-CN') : bv.localeCompare(av, 'zh-CN');
+                        }
+                        if (av === null || av === undefined) return 1;
+                        if (bv === null || bv === undefined) return -1;
+                        return sortDir === 'asc' ? av - bv : bv - av;
+                    });
+
+                    body.innerHTML = list.map(function(r, i) {
+                        var isActive = r.group === 'us_active';
+                        var beat = isActive && r.excess !== null && r.excess > 0;
+                        var tag = '';
+                        if (isActive) {
+                            tag = beat
+                                ? '<span class="qdii-beat-tag">🏆 跑赢纳指</span>'
+                                : '<span class="qdii-lag-tag">跑输纳指</span>';
+                        }
+                        return '<tr' + (beat ? ' class="qdii-beat-row"' : '') + '>'
+                            + '<td class="cmp-code">' + (i + 1) + '</td>'
+                            + '<td class="cmp-name"><div class="etf-cell"><strong>' + r.name
+                            + '</strong><span class="etf-code">' + r.code + '</span></div></td>'
+                            + '<td class="qdii-col-secondary">' + r.group_label + '</td>'
+                            + '<td class="qdii-col-secondary">' + r.inception + '</td>'
+                            + '<td class="' + cls(r.ann) + '"><strong>' + fmt(r.ann) + '</strong>'
+                            + '<span class="qdii-span-hint">' + r.span + ' · ' + r.n + '年</span></td>'
+                            + '<td class="' + cls(r.total) + '">' + fmt(r.total) + '</td>'
+                            + '<td class="qdii-col-bench ' + cls(r.bench) + '">' + fmt(r.bench) + '</td>'
+                            + '<td class="' + cls(r.excess) + '">' + fmt(r.excess) + '</td>'
+                            + '<td>' + tag + '</td>'
+                            + '</tr>';
+                    }).join('') || '<tr><td colspan="9"><div class="empty">当前区间暂无可用数据</div></td></tr>';
+
+                    var foot = document.getElementById('qdiiAnnualFoot');
+                    if (foot) {
+                        var activeAll = rows.filter(function(r) { return r.group === 'us_active'; });
+                        var beatAll = activeAll.filter(function(r) { return r.excess !== null && r.excess > 0; });
+                        foot.textContent = '共 ' + list.length + ' 只 · 主动基金 ' + activeAll.length
+                            + ' 只，其中 ' + beatAll.length + ' 只跑赢纳指100 · 点击表头可换排序';
+                    }
+                }
+
+                document.querySelectorAll('[data-arange]').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        document.querySelectorAll('[data-arange]').forEach(function(b) {
+                            b.classList.toggle('active', b === btn);
+                        });
+                        mode = btn.dataset.arange;
+                        render();
+                    });
+                });
+
+                [startSel, endSel].forEach(function(sel) {
+                    if (!sel) return;
+                    sel.addEventListener('change', function() {
+                        mode = 'custom';
+                        document.querySelectorAll('[data-arange]').forEach(function(b) {
+                            b.classList.remove('active');
+                        });
+                        render();
+                    });
+                });
+
+                var beatBtn = document.getElementById('qdiiAnnualBeatOnly');
+                if (beatBtn) {
+                    beatBtn.addEventListener('click', function() {
+                        beatOnly = !beatOnly;
+                        beatBtn.classList.toggle('active', beatOnly);
+                        render();
+                    });
+                }
+
+                document.querySelectorAll('#qdiiAnnualTable th.qdii-th-sort').forEach(function(th) {
+                    th.addEventListener('click', function() {
+                        var key = th.dataset.akey;
+                        if (sortKey === key) sortDir = (sortDir === 'desc' ? 'asc' : 'desc');
+                        else { sortKey = key; sortDir = 'desc'; }
+                        render();
+                    });
+                });
+
+                render();
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initQdiiAnnual);
+            } else {
+                initQdiiAnnual();
+            }
+        })();
+    """
+
     qdii_sections_html = f'''
     <div class="qdii-subtabs">
         <button type="button" class="qdii-subtab active" data-qtab="overview">📋 现有监控</button>
         <button type="button" class="qdii-subtab" data-qtab="compare">🎯 QDII 基金对比</button>
+        <button type="button" class="qdii-subtab" data-qtab="annual">📈 年化收益排行</button>
     </div>
     <div class="qdii-subpane active" data-qpane="overview">
     <div class="qdii-container">
@@ -5166,6 +5465,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
     <div class="qdii-subpane" data-qpane="compare">
         {qdii_compare_html}
+    </div>
+
+    <div class="qdii-subpane" data-qpane="annual">
+        {qdii_annual_html}
     </div>
     '''
 
@@ -9178,6 +9481,37 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .qdii-subpane {{ display: none; flex: 1; min-height: 0; flex-direction: column; }}
         .qdii-subpane.active {{ display: flex; }}
 
+        /* ===== QDII 年化收益排行 ===== */
+        .qdii-annual-wrap {{ max-height: calc(100vh - 300px); overflow: auto; }}
+        .qdii-year-select {{
+            padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--table-bg); color: var(--text); font-size: 12px;
+            font-family: inherit; cursor: pointer;
+        }}
+        .qdii-range-sep {{ color: var(--footer-text); font-size: 12px; padding: 0 2px; }}
+        .qdii-th-sort {{ cursor: pointer; user-select: none; white-space: nowrap; }}
+        .qdii-th-sort:hover {{ color: var(--link-color); }}
+        .qdii-beat-tag {{
+            display: inline-block; padding: 2px 7px; border-radius: 4px;
+            background: rgba(232,113,10,0.14); color: #e8710a;
+            font-size: 11px; font-weight: 700; white-space: nowrap;
+        }}
+        .qdii-lag-tag {{
+            display: inline-block; padding: 2px 7px; border-radius: 4px;
+            background: rgba(95,99,104,0.10); color: var(--footer-text);
+            font-size: 11px; white-space: nowrap;
+        }}
+        /* 跑赢纳指的主动基金整行淡淡高亮，一眼扫得出来 */
+        #qdiiAnnualTable tbody tr.qdii-beat-row td {{ background: rgba(232,113,10,0.045); }}
+        .qdii-annual-foot {{
+            padding: 10px 14px; font-size: 12px; color: var(--footer-text);
+            border-top: 1px solid var(--border); flex-shrink: 0;
+        }}
+        .qdii-span-hint {{
+            display: block; font-size: 10px; color: var(--footer-text);
+            font-weight: 400; margin-top: 1px; white-space: nowrap;
+        }}
+
         /* ===== QDII 对比表 ===== */
         .cmp-block-title {{
             display: flex;
@@ -9993,6 +10327,37 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             .cmp-delta {{ font-size: 9px; margin-left: 3px; padding: 0 3px; }}
             .cmp-block-title {{ font-size: 12px; padding: 8px 10px; flex-wrap: wrap; gap: 4px; }}
             .cmp-block-title .cmp-block-sub {{ font-size: 10px; }}
+
+            /* 年化排行：手机宽度放不下 8 列，隐藏「序号 / 类型 / 成立日期」，
+               把空间让给真正要看的年化、超额和标记，避免关键数据被挤到屏幕外。
+               注意：隐藏列后必须改用 table-layout:auto —— fixed 下隐藏列会让
+               剩余列宽塌陷，基金名列直接变 0 宽。 */
+            #qdiiAnnualTable {{ min-width: 0; table-layout: auto; font-size: 10px; }}
+            #qdiiAnnualTable th.cmp-code, #qdiiAnnualTable td.cmp-code {{ display: none; }}
+            .qdii-col-secondary {{ display: none; }}
+            /* 手机上再省一列：纳指的绝对水平可以省略，超额已经表达了对比结果 */
+            .qdii-col-bench {{ display: none; }}
+            #qdiiAnnualTable th.cmp-name, #qdiiAnnualTable td.cmp-name {{
+                width: auto; max-width: 116px; position: static; left: auto;
+                white-space: normal;
+            }}
+            #qdiiAnnualTable th, #qdiiAnnualTable td {{ padding: 5px 3px; }}
+            /* 基金名里已经带代码，移动端不再重复显示，并限制两行避免行高过大 */
+            #qdiiAnnualTable td.cmp-name .etf-code {{ display: none; }}
+            #qdiiAnnualTable td.cmp-name .etf-cell strong {{
+                display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+                overflow: hidden; line-height: 1.35;
+            }}
+            #qdiiAnnualTable .qdii-span-hint {{ display: none; }}
+            /* 手机端标记列只留图标，文字太宽会把整列挤出屏幕 */
+            #qdiiAnnualTable .qdii-beat-tag, #qdiiAnnualTable .qdii-lag-tag {{
+                font-size: 0; padding: 2px 3px; text-align: center;
+            }}
+            #qdiiAnnualTable .qdii-beat-tag::before {{ content: "🏆"; font-size: 13px; }}
+            #qdiiAnnualTable .qdii-lag-tag::before {{ content: "—"; font-size: 12px; }}
+            .qdii-annual-wrap {{ max-height: calc(100vh - 250px); }}
+            .qdii-year-select {{ font-size: 11px; padding: 3px 6px; }}
+            .qdii-annual-foot {{ font-size: 11px; padding: 8px 10px; }}
 
             .modal-card {{ width: 95%; max-height: 90vh; }}
             .modal-body {{ padding: 10px 12px; }}
@@ -10896,6 +11261,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         var holdingDetailHtml = window.__FUND_HOLDING_DETAILS__ || {{}};
         var fullHoldingsData = window.__FUND_FULL_HOLDINGS__ || {{}};
         var detailMoreData = window.__FUND_DETAIL_MORE__ || {{}};
+        var qdiiAnnualData = {qdii_annual_payload};
         var holdingDetailPromise = null;
         var fullHoldingsPromise = null;
         var detailMorePromise = null;
@@ -13039,6 +13405,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 initQdiiSubtabs();
             }}
         }})();
+
+        {qdii_annual_js}
 
         // ===== QDII 监控筛选 =====
         (function() {{
