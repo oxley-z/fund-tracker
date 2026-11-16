@@ -1030,6 +1030,12 @@ def main():
 
     latest_report_date = df_tff['report_date'].max().strftime('%Y-%m-%d')
     print(f"  最新可用的 report_date = {latest_report_date}")
+    # ★ CFTC 正常节奏是周二持仓、周五发布，所以「最新一期」平常就有 3~10 天滞后。
+    #   超过 12 天基本是官方停发（政府停摆 / 假日 / 发布延迟），不是抓取失败，
+    #   提前说清楚，免得每次都要翻日志确认。
+    _lag_days = (datetime.now() - datetime.strptime(latest_report_date, '%Y-%m-%d')).days
+    if _lag_days > 12:
+        print(f"  ℹ️ 官方本期尚未发布（距今 {_lag_days} 天），本次不会有新报告")
 
     # ---- 2. 处理目标日期 ----
     if batch_start and batch_end:

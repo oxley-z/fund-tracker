@@ -36,9 +36,18 @@ jobs:
       # ★ 每次都基于 report/ 里的最新报告重新生成 CFTC 面板：
       #   仓库里的 web/cftc_dashboard.html 可能滞后于 report/（历史 bug），
       #   若直接沿用，会把线上面板的日历日期回退成旧日期。
+      # ★ 不再用 `|| echo` 吞掉退出码：失败时需在 Actions 里显示为失败并打 annotation，
+      #   否则「CFTC 面板没更新」永远只能靠人肉猜（脚本正常耗时约 3s：导入 2.3s + 解析 96 期 0.9s）。
       - name: Rebuild CFTC Dashboard
+        id: cftc
+        continue-on-error: true
+        run: python -u cftc_generate_dashboard.py
+
+      - name: Warn if CFTC Rebuild Failed
+        if: steps.cftc.outcome == 'failure'
         run: |
-          python cftc_generate_dashboard.py || echo "⚠️ CFTC 面板重建失败，本次沿用仓库中的版本"
+          echo "::warning::CFTC 面板重建失败，本次沿用仓库中的版本（web/cftc_dashboard.html）"
+          echo "::warning::请滚动到上面的 Rebuild CFTC Dashboard 步骤查看 traceback。"
 
       # ★ 沪深宽基 ETF 份额看板：基于 data/ 里的断点做增量，生成 web/dual_final_dashboard.html
       - name: Rebuild Dual ETF Dashboard

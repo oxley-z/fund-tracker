@@ -4,6 +4,7 @@ import re
 import json
 import sys
 import time
+from datetime import datetime
 import requests
 import pandas as pd
 import akshare as ak
@@ -30,6 +31,13 @@ REPORT_FILE_EXT = ".html"
 
 PRICE_CACHE_FILE = os.path.join(REPORT_DIR, "cftc_价格历史缓存.json")
 DATA_EXPORT_FILE = os.path.join(REPORT_DIR, "cftc_面板完整数据.json")
+
+# ★ 数据滞后告警阈值（天）
+#   CFTC 正常节奏：周二收盘持仓（T）→ 周五 15:30 ET 发布，所以面板上的
+#   「最新报告日」平常就有 3~10 天滞后。超过 12 天说明官方那一期还没发布
+#   （停摆、假日或数据延迟），不是我们的抓取失败 —— 需要区分开，否则每天都
+#   会被人当成 bug 排查。
+STALE_DAYS_WARN = 12
 
 # ================= 深色主题（与主看板联动） =================
 # 说明：这两段以普通字符串保存，模板里用 {CFTC_THEME_CSS} / {CFTC_THEME_JS} 注入，
@@ -70,6 +78,7 @@ CFTC_THEME_CSS = """
         [data-theme="dark"] .info { color: #a9b1bd; }
         [data-theme="dark"] .sub-info,
         [data-theme="dark"] .stat-card .label { color: #8b93a1; }
+        [data-theme="dark"] .stale-badge { background: #3a2a10; color: #ffc069; border-color: #6b5620; }
         [data-theme="dark"] .type-yield { background: #3a1e1e; color: #ff7875; border-color: #7a3b3b; }
         [data-theme="dark"] .type-futures { background: #1e2f1e; color: #73d13d; border-color: #3d6b3d; }
         [data-theme="dark"] .type-proxy { background: #16263a; color: #69c0ff; border-color: #2f4a6b; }
@@ -212,7 +221,9 @@ def load_cache():
 
 def save_cache(cache):
     try:
-        with open(PRICE_CACHE_FILE, 'w', encoding='utf-8') as f:
+        # ★ newline='\n'：Windows 本地跑和 Linux CI 跑必须产出同样的字节，
+        #   否则每次本地重建都会把整个 JSON/HTML 标成改动（CRLF vs LF）。
+        with open(PRICE_CACHE_FILE, 'w', encoding='utf-8', newline='\n') as f:
             json.dump(cache, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"⚠️ 保存缓存文件失败: {e}")
@@ -446,6 +457,25 @@ def enrich_with_prices(df):
     return df
 
 # 修改后:
+def freshness_note(latest_date_str):
+    """计算最新一期报告距今天数，返回 (days_old, 打印用文案)。
+
+    CFTC 只在有新版报告时才更新数据；官方停发（政府停摆/假日/发布延迟）期间，
+    面板数据会一直停在上一期。这里把它和「抓取失败」明确区分开。
+    """
+    try:
+        latest = datetime.strptime(latest_date_str, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return 0, ""
+    days_old = (datetime.now().date() - latest).days
+    if days_old > STALE_DAYS_WARN:
+        return days_old, (
+            f"ℹ️ 最新一期报告日 {latest_date_str}（距今 {days_old} 天）："
+            f"CFTC 官方尚未发布新一期 COT，面板沿用该期数据（非抓取失败）"
+        )
+    return days_old, f"✅ 最新一期报告日 {latest_date_str}（距今 {days_old} 天）"
+
+
 def generate_dashboard(df):
     df = df.sort_values(['Asset', 'Date'])
     
@@ -472,13 +502,21 @@ def generate_dashboard(df):
         }
 
     try:
-        with open(DATA_EXPORT_FILE, 'w', encoding='utf-8') as f:
+        with open(DATA_EXPORT_FILE, 'w', encoding='utf-8', newline='\n') as f:
             json.dump(full_data, f, ensure_ascii=False, indent=4)
         print(f"💾 面板完整数据源已导出至: {DATA_EXPORT_FILE}")
     except Exception:
         pass
 
     latest_date = df['Date'].max().strftime('%Y-%m-%d')
+
+    # ★ 数据滞后标记：CFTC 官方停发期间（如政府停摆）在标题旁挂个提示，
+    #   避免「最新报告日」看起来像抓取失败的 bug。
+    days_old, _ = freshness_note(latest_date)
+    stale_badge = (
+        f'<span class="stale-badge">数据滞后 {days_old} 天 · CFTC 尚未发布新一期</span>'
+        if days_old > STALE_DAYS_WARN else ""
+    )
 
     # ★ 收集所有报告日期（供前端日历高亮 & 点击跳转）
     report_dates = sorted(df['Date'].dt.strftime('%Y-%m-%d').unique().tolist())
@@ -630,6 +668,7 @@ def generate_dashboard(df):
         .type-custom {{ background: #fff0f6; color: #eb2f96; border: 1px solid #ffadd2; }}
         .info {{ color: #666; font-size: 14px; display: flex; flex-direction: column; gap: 5px; }}
         .sub-info {{ font-size: 13px; color: #888; }}
+        .stale-badge {{ display: inline-block; align-self: flex-start; padding: 2px 10px; border-radius: 10px; font-size: 12px; background: #fff7e6; color: #ad6800; border: 1px solid #ffd591; }}
         #chart-container {{ flex: 1; background: #fff; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 20px; min-height: 400px; }}
         
         /* ============ 主页（数据总览）样式 ============ */
@@ -805,6 +844,7 @@ def generate_dashboard(df):
             </h1>
             <div class="info">
                 <span>统计区间: {df['Date'].min().strftime('%Y-%m-%d')} 至 {latest_date}</span>
+                {stale_badge}
                 <span class="sub-info" id="dataSourceDesc">点击左侧资产列表，或点击下方表格行，查看单资产的量价对冲详细分析</span>
             </div>
         </header>
@@ -1273,16 +1313,18 @@ def generate_dashboard(df):
 </body>
 </html>
     """
-    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+    with open(OUTPUT_FILE, 'w', encoding='utf-8', newline='\n') as f:
         f.write(html_template)
     print(f"🎉 完美收工！前端分析面板已生成: {OUTPUT_FILE}")
 
 def main():
+    started = time.time()
     files = sorted(glob.glob(HTML_PATTERN))
     if not files:
+        # ★ 必须非 0 退出：CI 里这一步原来靠 `|| echo` 掩盖，失败也显示成绿色
         print(f"❌ 未找到 HTML 文件，请检查 {REPORT_DIR} 目录。")
-        return
-        
+        sys.exit(1)
+
     all_data = []
     try:
         for i, f in enumerate(files, 1):
@@ -1291,15 +1333,19 @@ def main():
             all_data.extend(parse_html_file(f))
     except KeyboardInterrupt:
         print("\n🛑 解析中断，处理已读取的数据...")
-    
-    if all_data:
-        df = pd.DataFrame(all_data)
-        df['Date'] = pd.to_datetime(df['Date'])
-        
-        df = enrich_with_prices(df)
-        generate_dashboard(df)
-    else:
+
+    if not all_data:
         print("\n❌ 未提取到任何有效数据。")
+        sys.exit(1)
+
+    df = pd.DataFrame(all_data)
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    print(freshness_note(df['Date'].max().strftime('%Y-%m-%d'))[1])
+
+    df = enrich_with_prices(df)
+    generate_dashboard(df)
+    print(f"⏱️ 面板重建耗时 {time.time() - started:.1f}s（{len(files)} 期报告 / {len(df)} 行持仓）")
 
 if __name__ == "__main__":
     main()
