@@ -411,7 +411,8 @@ def fetch_szse_day(date_str):
     try:
         records = fetch_szse_range(date_str, date_str)
     except Exception as e:
-        print(f'   [深交所] {date_str} 获取失败: {str(e)[:300]}')
+        # 深交所对异常/境外出口常直接 reset，逐日打印原始异常会刷屏；
+        # 失败原因记入 LAST_NETWORK_ERRORS，由最终的网络诊断块统一输出。
         remember_network_error('深交所', e)
         return (None, 'neterr') if is_network_error(e) else (None, 'apierr')
     if records is None:

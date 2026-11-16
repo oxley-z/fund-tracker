@@ -25,7 +25,12 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from datetime import datetime
+import logging
 
+# 公告 PDF 里常带残缺的交叉引用表，pypdf 会把 startxref / Object Streams 这类
+# 内部容错过程当告警刷到控制台。它们不影响正文抽取，统一压到 ERROR。
+for _noisy_logger in ("pypdf", "pdfminer", "pdfminer.pdfparser", "pdfminer.psparser"):
+    logging.getLogger(_noisy_logger).setLevel(logging.ERROR)
 
 # 强制清空代理环境变量
 for env_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
@@ -288,6 +293,8 @@ _F10_LIMITER = _RateLimiter(rate=1.2, burst=2)
 # 季报持仓接口单独限速：批量拉取 160+ 只基金时，1.2/s 太慢，4/s 实测不触发 514。
 _HOLDINGS_LIMITER = _RateLimiter(rate=3.0, burst=3)
 # ★ 已取消 F10 HTML 本地缓存：不再创建 cache/f10 目录，也不再写盘
+# F10 费率页异常计数：只报前几次 + 结束时汇总一次，避免刷屏
+_F10_ERR = {"n": 0}
 
 
 # --- 3. 底层抓取：限速 + 514 专属退避 + 普通重试 ---
@@ -1329,8 +1336,15 @@ def get_copper_lme(opener) -> tuple[float, str, str]:
     return 0.0, "获取失败", "https://cn.investing.com/commodities/copper"
 
 def get_btc_price(opener) -> tuple[float, str, str]:
-    """获取比特币最新现货价格（4 个源并行竞速，谁先返回用谁）。"""
+    """获取比特币最新现货价格（多个源并行竞速，谁先返回用谁）。"""
     sources = [
+        (
+            "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",
+            {**DEFAULT_HEADERS, "Accept": "application/json"},
+            6,
+            lambda j: (float(j.get("price", 0)),
+                       "Binance (BTC/USDT)", "https://www.binance.com/zh-CN/trade/BTC_USDT"),
+        ),
         (
             "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
             {**DEFAULT_HEADERS, "Accept": "application/json"},
@@ -1373,15 +1387,23 @@ def get_btc_price(opener) -> tuple[float, str, str]:
             pass
         return None
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=len(sources)) as ex:
         futs = [ex.submit(_try, u, h, t, p) for u, h, t, p in sources]
-        for f in as_completed(futs, timeout=6):
-            r = f.result()
-            if r:
-                # 取消其余任务
-                for x in futs:
-                    x.cancel()
-                return r
+        try:
+            for f in as_completed(futs, timeout=8):
+                r = f.result()
+                if r:
+                    # 取消其余任务
+                    for x in futs:
+                        x.cancel()
+                    return r
+        except Exception:
+            # 所有源都超时/失败时 as_completed 会抛 "N (of M) futures unfinished"，
+            # 属于正常的"全都不可用"，直接走下面的兜底返回值，不向主流程抛异常。
+            pass
+        finally:
+            for x in futs:
+                x.cancel()
 
     return 0.0, "获取失败", "https://www.tradingview.com/symbols/BTCUSD/"
 
@@ -1411,7 +1433,7 @@ def fetch_home_market_metrics(opener):
         try:
             return fn(get_thread_opener())
         except Exception as e:
-            print(f"    ⚠️ 宏观指标 {fn.__name__} 异常: {e}")
+            print(f"    [warn] 宏观指标 {fn.__name__}: {_brief_error(e)}")
             return default
 
     out = {}
@@ -1425,7 +1447,7 @@ def fetch_home_market_metrics(opener):
             try:
                 out[key] = fut.result(timeout=60)     # 兜底 60s 单任务上限
             except Exception as e:
-                print(f"    ⚠️ 宏观指标 {key} 超时/异常: {e}")
+                print(f"    [warn] 宏观指标 {key} 超时/异常: {_brief_error(e)}")
                 out[key] = default_map[key]
 
     # ============ 解包结果 ============
@@ -1679,6 +1701,26 @@ def fetch_cnn_macro_history():
     return _compact_macro_points(points)
 
 
+def _brief_error(exc, limit=80):
+    """把网络异常压成一行短描述，避免日志被完整堆栈/长错误刷屏。"""
+    name = type(exc).__name__
+    text = " ".join(str(exc).split())
+    low = text.lower()
+    if "remote disconnected" in low or "remote end closed" in low or "server closed" in low:
+        return "服务端主动断开"
+    if "connection reset" in low or "connection aborted" in low or "connectionreseterror" in low:
+        return "连接被重置"
+    if name in ("TimeoutError", "ConnectTimeout", "ReadTimeout") or "timed out" in low or "timeout" in low:
+        return "超时"
+    if "name or service not known" in low or "getaddrinfo" in low or "nodename" in low:
+        return "域名解析失败"
+    if "certificate" in low or "ssl" in low:
+        return "TLS 握手失败"
+    if not text:
+        return name
+    return f"{name}: {text[:limit]}"
+
+
 def _fetch_eastmoney_macro_history(secid, start_date=MACRO_HISTORY_START, convert_factor=1.0):
     """读取东方财富日 K 收盘价，用作商品和指数的历史兜底。"""
     convert_factor = float(convert_factor)
@@ -1696,14 +1738,16 @@ def _fetch_eastmoney_macro_history(secid, start_date=MACRO_HISTORY_START, conver
     })
     url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{fields}"
     last_error = None
-    for attempt in range(5):
+    # 该接口在部分网络下会被服务端直接掐断（RemoteDisconnected，秒失败），
+    # 重试次数给 2 次即可：多试也拿不到，只会白吃掉宏观历史任务的整体时间预算。
+    for attempt in range(2):
         try:
             req = urllib.request.Request(url, headers={
                 **DEFAULT_HEADERS,
                 "Referer": "https://quote.eastmoney.com/",
                 "Connection": "close",
             })
-            with urllib.request.urlopen(req, timeout=25) as resp:
+            with urllib.request.urlopen(req, timeout=12) as resp:
                 payload = json.loads(resp.read().decode("utf-8", errors="replace"))
             rows = (payload.get("data") or {}).get("klines") or []
             points = {}
@@ -1722,10 +1766,85 @@ def _fetch_eastmoney_macro_history(secid, start_date=MACRO_HISTORY_START, conver
                 return _compact_macro_points(points)
         except Exception as exc:
             last_error = exc
-        time.sleep(1.2 * (attempt + 1))
+        if attempt == 0:
+            time.sleep(1.0 + random.random())
     if last_error:
         raise last_error
     return []
+
+
+# 东财 kline 被掐断时的新浪兜底：(kind, symbol, 换算系数)
+#   kind="fx"     新浪外汇日线，报文形如 var _fx("日期,开,高,低,收,|...")
+#   kind="global" 新浪国际期货日线，报文形如 var _gc([{"date":..,"close":..}])
+# 铜在新浪按美分/磅报价，需除以 100 还原为美元/磅；其余品种与东财口径一致。
+# 布伦特原油沿用东财 CL00Y（WTI 连续）的同口径，保持历史序列不出现跳空。
+_MACRO_HISTORY_FALLBACK = {
+    "usdcny":       ("fx",     "fx_susdcny", 1.0),
+    "gold_london":  ("global", "GC",         1.0),
+    "silver_london": ("global", "SI",        1.0),
+    "copper_lme":   ("global", "HG",         0.01),
+    "brent":        ("global", "CL",         1.0),
+}
+
+_SINA_SOURCE_LABEL = {
+    "usdcny":        "新浪财经 USD/CNY 历史日线",
+    "gold_london":   "新浪财经 COMEX 黄金历史日线",
+    "silver_london": "新浪财经 COMEX 白银历史日线",
+    "copper_lme":    "新浪财经 COMEX 铜历史日线",
+    "brent":         "新浪财经 WTI 原油历史日线",
+}
+
+
+def _fetch_sina_macro_history(kind, symbol, convert_factor=1.0, start_date=MACRO_HISTORY_START):
+    """新浪兜底：东财 kline 被服务端掐断时，用新浪外汇/国际期货日线补历史。"""
+    convert_factor = float(convert_factor)
+    if kind == "fx":
+        url = ("https://vip.stock.finance.sina.com.cn/forex/api/jsonp.php/"
+               f"var%20_{symbol}/NewForexService.getDayKLine?symbol={symbol}")
+    else:
+        url = ("https://stock2.finance.sina.com.cn/futures/api/jsonp.php/"
+               f"var%20_{symbol.lower()}/GlobalFuturesService.getGlobalFuturesDailyKLine?symbol={symbol}")
+
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Referer": "https://finance.sina.com.cn/",
+    })
+    with get_thread_opener().open(req, timeout=15) as resp:
+        text = resp.read().decode("gbk", errors="replace")
+
+    points = {}
+    if kind == "fx":
+        m = re.search(r'"([^"]*)"', text)
+        if not m:
+            return []
+        for row in m.group(1).split("|"):
+            parts = [p for p in row.split(",") if p]
+            if len(parts) < 5:
+                continue
+            try:
+                date_str = parts[0].strip()
+                close = float(parts[4]) * convert_factor
+            except ValueError:
+                continue
+            if date_str >= start_date and close > 0:
+                points[date_str] = close
+    else:
+        m = re.search(r"\((\[.*?\])\)", text, re.S)
+        if not m:
+            return []
+        try:
+            rows = json.loads(m.group(1))
+        except ValueError:
+            return []
+        for row in rows:
+            try:
+                date_str = str(row.get("date") or "")[:10]
+                close = float(row.get("close") or 0) * convert_factor
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if date_str >= start_date and close > 0:
+                points[date_str] = close
+    return _compact_macro_points(points)
 
 
 def _fetch_danjuan_pe_history(code):
@@ -1897,19 +2016,43 @@ def fetch_macro_history():
         "pe_hstech": lambda: _fetch_danjuan_pe_history("HKHSTECH"),
     }
 
-    # 东方财富会限制并发，先串行补这条链路，再并发其他源。
+    # 东财 kline 在部分网络下会被服务端直接掐断，所以每条序列都配了新浪兜底；
+    # 这里改成小并发（东财并发过高会限流），失败项最后汇总成一行，不再逐条刷屏。
     # 指数点位单独走独立缓存，不放进这里：本任务一旦超时会整体回退旧缓存。
     eastmoney_keys = (
         "usdcny", "gold_london", "silver_london", "copper_lme", "brent",
     )
-    for key in eastmoney_keys:
+    remote_via = {}
+    failed_history = {}
+
+    def _fetch_with_fallback(key):
+        """东财优先，失败则切新浪同口径品种，返回 (points, 数据源标记)。"""
         try:
             points = jobs[key]()
-        except Exception as e:
-            print(f"    [warn] 宏观历史 {key} 获取失败: {e}")
-            continue
-        if points:
-            remote[key] = points
+            if points:
+                return points, "eastmoney"
+        except Exception:
+            pass
+        fallback = _MACRO_HISTORY_FALLBACK.get(key)
+        if not fallback:
+            return [], None
+        points = _fetch_sina_macro_history(*fallback)
+        return points, ("sina" if points else None)
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        future_map = {ex.submit(_fetch_with_fallback, key): key for key in eastmoney_keys}
+        for future in as_completed(future_map):
+            key = future_map[future]
+            try:
+                points, via = future.result(timeout=60)
+            except Exception as e:
+                failed_history[key] = _brief_error(e)
+                continue
+            if points:
+                remote[key] = points
+                remote_via[key] = via
+            else:
+                failed_history[key] = "东财/新浪均无数据"
 
     parallel_jobs = {k: v for k, v in jobs.items() if k not in eastmoney_keys}
     with ThreadPoolExecutor(max_workers=min(10, len(parallel_jobs))) as ex:
@@ -1919,12 +2062,15 @@ def fetch_macro_history():
             try:
                 points = future.result(timeout=70)
             except Exception as e:
-                print(f"    [warn] 宏观历史 {key} 获取失败: {e}")
+                failed_history[key] = _brief_error(e)
                 continue
             if points:
                 remote[key] = points
 
     result = {"generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S")}
+    if failed_history:
+        summary = "，".join(f"{k}({v})" for k, v in failed_history.items())
+        print(f"    [warn] 宏观历史本轮未更新，沿用缓存: {summary}")
     sources = {
         "vix": ("VIX 标普500波动率", "点", "CBOE 官方历史收盘价"),
         "vxn": ("VXN 纳斯达克100波动率", "点", "CBOE 官方历史收盘价"),
@@ -1945,6 +2091,9 @@ def fetch_macro_history():
         "pe_hstech": ("恒生科技历史 PE", "倍", "蛋卷指数估值"),
     }
     for key, (title, unit, source) in sources.items():
+        # 本轮实际走的是新浪兜底时，把图上的数据源标注改成新浪，避免口径说明对不上。
+        if remote_via.get(key) == "sina":
+            source = _SINA_SOURCE_LABEL.get(key, source)
         merged = _merge_macro_series(cached, remote.get(key), key, title, unit, source)
         if merged:
             result[key] = merged
@@ -3938,7 +4087,11 @@ def fetch_fund_detail_meta(opener, code):
             if code == "023675":
                 print(f"    [F10] {_c}: 管理={meta.get('fee_manage')} 托管={meta.get('fee_custody')} 销服={meta.get('fee_sales')}")
         except Exception as e:
-            print(f"    [F10] {_c} 异常: {e}")
+            # F10 静态页在高并发下经常 read timeout，缺失的费率还有蛋卷兜底，
+            # 所以只报前几次，避免几十只基金各刷一行把日志淹没。
+            _F10_ERR["n"] += 1
+            if _F10_ERR["n"] <= 3:
+                print(f"    [F10] {_c} 异常: {_brief_error(e)}")
 
 # ===== 运作费兜底：蛋卷基金（覆盖 F10 静态页缺失的次新基金）=====
     if (meta.get("fee_manage") in (None, "0.00")
@@ -15040,9 +15193,10 @@ def main():
         try:
             macro_history = fut_macro_history.result(timeout=180)
         except Exception as e:
-            print(f"⚠️ 宏观历史序列抓取失败: {e}")
+            print(f"⚠️ 宏观历史序列抓取失败，本轮沿用本地缓存: {_brief_error(e)}")
             macro_history = _read_macro_history_cache()
-    print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {home_metrics['fng']['score']} | VIX {home_metrics['vix']['val']} | VXSMH {home_metrics.get('vxsmh', {}).get('val', 0.0)} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
+    _fng_disp = home_metrics['fng']['score'] if home_metrics['fng']['score'] > 0 else "暂无"
+    print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {_fng_disp} | VIX {home_metrics['vix']['val']} | VXSMH {home_metrics.get('vxsmh', {}).get('val', 0.0)} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
     print(f"🛢️ 大宗商品指标获取成功: 布伦特原油 {home_metrics['brent']['val']} | 伦敦金 {home_metrics['gold_london']['val']} | 沪金主连 {home_metrics['gold_shfe']['val']} | 伦敦银 {home_metrics['silver_london']['val']} | COMEX铜 {home_metrics['copper_lme']['val']} | BTC {home_metrics.get('btc', {}).get('val', 0.0)}")
     macro_history_point_counts = " | ".join(
         f"{key.upper()} {len(macro_history.get(key, {}).get('points', []))}"
@@ -15161,6 +15315,9 @@ def main():
                 print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ✅ 完成 (国家披露期: {c_date})")
             else:
                 print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ❌ 历史净值抓取失败")
+
+    if _F10_ERR["n"] > 3:
+        print(f"    [F10] 费率页累计 {_F10_ERR['n']} 次请求异常（已由蛋卷费率兜底，不影响出图）")
 
     def _process_commodity(symbol):
         try:
