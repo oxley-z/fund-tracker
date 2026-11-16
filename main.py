@@ -1777,13 +1777,13 @@ def _fetch_eastmoney_macro_history(secid, start_date=MACRO_HISTORY_START, conver
 #   kind="fx"     新浪外汇日线，报文形如 var _fx("日期,开,高,低,收,|...")
 #   kind="global" 新浪国际期货日线，报文形如 var _gc([{"date":..,"close":..}])
 # 铜在新浪按美分/磅报价，需除以 100 还原为美元/磅；其余品种与东财口径一致。
-# 布伦特原油沿用东财 CL00Y（WTI 连续）的同口径，保持历史序列不出现跳空。
+# 布伦特原油不在其中：卡片实时值取的是 Brent（BZ=F），历史也必须用 Brent，
+# 不能再走东财 102.CL00Y（WTI 连续），详见 fetch_macro_history 里的 brent 任务。
 _MACRO_HISTORY_FALLBACK = {
     "usdcny":       ("fx",     "fx_susdcny", 1.0),
     "gold_london":  ("global", "GC",         1.0),
     "silver_london": ("global", "SI",        1.0),
     "copper_lme":   ("global", "HG",         0.01),
-    "brent":        ("global", "CL",         1.0),
 }
 
 _SINA_SOURCE_LABEL = {
@@ -1791,8 +1791,12 @@ _SINA_SOURCE_LABEL = {
     "gold_london":   "新浪财经 COMEX 黄金历史日线",
     "silver_london": "新浪财经 COMEX 白银历史日线",
     "copper_lme":    "新浪财经 COMEX 铜历史日线",
-    "brent":         "新浪财经 WTI 原油历史日线",
+    "brent":         "新浪财经 Brent 原油历史日线",
 }
+
+# 口径切换过的序列：旧缓存里切换日之前的数据属于另一种标的，必须整段丢弃，
+# 否则图上的接缝会出现一次假的跳空。brent 曾长期按 WTI(CL00Y) 记录。
+_HISTORY_EPOCH_RESET = {"brent"}
 
 
 def _fetch_sina_macro_history(kind, symbol, convert_factor=1.0, start_date=MACRO_HISTORY_START):
@@ -2007,7 +2011,10 @@ def fetch_macro_history():
         "silver_london": lambda: _fetch_eastmoney_macro_history("101.SI00Y"),
         # COMEX 铜实时值和历史值都按美元/磅保存，避免混用 LME 美元/吨口径。
         "copper_lme": lambda: _fetch_eastmoney_macro_history("101.HG00Y"),
-        "brent": lambda: _fetch_eastmoney_macro_history("102.CL00Y"),
+        # 布伦特原油：卡片实时值取 Brent(BZ=F)，历史也必须用 Brent。
+        # 东财 102.CL00Y 是 WTI 连续（长期比 Brent 低 5~7 美元），已弃用；
+        # 改走新浪 OIL（Brent 连续，覆盖约 10 年），旧 WTI 段由 _HISTORY_EPOCH_RESET 丢弃。
+        "brent": lambda: _fetch_sina_macro_history("global", "OIL"),
         "btc": _fetch_binance_macro_history,
         "pe_ndx": lambda: _fetch_danjuan_pe_history("NDX"),
         "pe_sp500": lambda: _fetch_danjuan_pe_history("SP500"),
@@ -2020,7 +2027,7 @@ def fetch_macro_history():
     # 这里改成小并发（东财并发过高会限流），失败项最后汇总成一行，不再逐条刷屏。
     # 指数点位单独走独立缓存，不放进这里：本任务一旦超时会整体回退旧缓存。
     eastmoney_keys = (
-        "usdcny", "gold_london", "silver_london", "copper_lme", "brent",
+        "usdcny", "gold_london", "silver_london", "copper_lme",
     )
     remote_via = {}
     failed_history = {}
@@ -2082,7 +2089,7 @@ def fetch_macro_history():
         "gold_shfe": ("沪金主连 (AU0)", "元/克", "新浪 AkShare 沪金历史日线"),
         "silver_london": ("伦敦银 (XAG/USD)", "美元/盎司", "东方财富 COMEX 白银历史日线"),
         "copper_lme": ("COMEX 铜", "美元/磅", "东方财富 COMEX 铜历史日线"),
-        "brent": ("布伦特原油 (BZ=F)", "美元/桶", "东方财富原油历史日线"),
+        "brent": ("布伦特原油 (BZ=F)", "美元/桶", "新浪财经 Brent 原油历史日线"),
         "btc": ("比特币 (BTC/USDT)", "USDT", "Binance 日线"),
         "pe_ndx": ("纳指100历史 PE", "倍", "蛋卷指数估值"),
         "pe_sp500": ("标普500历史 PE", "倍", "蛋卷指数估值"),
@@ -2094,7 +2101,18 @@ def fetch_macro_history():
         # 本轮实际走的是新浪兜底时，把图上的数据源标注改成新浪，避免口径说明对不上。
         if remote_via.get(key) == "sina":
             source = _SINA_SOURCE_LABEL.get(key, source)
-        merged = _merge_macro_series(cached, remote.get(key), key, title, unit, source)
+        cached_for_key = cached
+        remote_points = remote.get(key)
+        if key in _HISTORY_EPOCH_RESET and remote_points:
+            # 口径切换：只保留切换后（即新源最早一天起）的旧点，避免两类标的拼接。
+            epoch = str(remote_points[0][0])
+            old_series = cached.get(key) or {}
+            cached_for_key = dict(cached)
+            cached_for_key[key] = dict(
+                old_series,
+                points=[p for p in (old_series.get("points") or []) if str(p[0]) >= epoch],
+            )
+        merged = _merge_macro_series(cached_for_key, remote_points, key, title, unit, source)
         if merged:
             result[key] = merged
 
