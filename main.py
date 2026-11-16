@@ -1478,6 +1478,41 @@ def fetch_home_market_metrics(opener):
 # ==============================================================================
 MACRO_HISTORY_CACHE = os.path.join("data", "macro_history.json")
 MACRO_HISTORY_START = "2006-01-01"
+
+# 宽基指数估值图右轴：指数收盘点位（东方财富日线）。
+# 蛋卷只给 PE，不给点位；点位需要按 PE 的观测日对齐后再叠加展示。
+# key -> (标题, 单位, 来源, 东方财富 secid, 对应 PE 序列 key, 指数简称)
+INDEX_POINT_TARGETS = {
+    "idx_ndx":    ("纳指100指数点位", "点", "东方财富 NDX 日线",     "100.NDX",     "pe_ndx",    "纳指100"),
+    "idx_sp500":  ("标普500指数点位", "点", "东方财富 SPX 日线",     "100.SPX",     "pe_sp500",  "标普500"),
+    "idx_hs300":  ("沪深300指数点位", "点", "东方财富 沪深300 日线", "1.000300",   "pe_hs300",  "沪深300"),
+    "idx_kc50":   ("科创50指数点位", "点", "东方财富 科创50 日线",  "1.000688",   "pe_kc50",   "科创50"),
+    "idx_hstech": ("恒生科技指数点位", "点", "东方财富 HSTECH 日线", "124.HSTECH", "pe_hstech", "恒生科技"),
+}
+# PE 序列 -> (点位序列 key, 指数简称)，供生成页面时挂载右轴数据
+INDEX_PE_OVERLAY = {
+    spec[4]: (key, spec[5]) for key, spec in INDEX_POINT_TARGETS.items()
+}
+# 点位走独立缓存：宏观历史任务超时会整体回退旧缓存，不能把点位绑在那条链上
+INDEX_POINT_CACHE = os.path.join("data", "index_point_history.json")
+# 多源降级：东方财富 push2his 偶发被限流/重置连接，新浪与腾讯可作为稳定替代。
+# 每条按顺序尝试，取到足够长的日线就停。
+INDEX_POINT_SOURCES = {
+    "idx_ndx":    [("sina_us", ".NDX"), ("tx_us", "usNDX"), ("eastmoney", "100.NDX")],
+    "idx_sp500":  [("sina_us", ".INX"), ("tx_us", "us.INX"), ("eastmoney", "100.SPX")],
+    "idx_hs300":  [("sina_a", "sh000300"), ("tx_a", "sh000300"), ("eastmoney", "1.000300")],
+    "idx_kc50":   [("sina_a", "sh000688"), ("tx_a", "sh000688"), ("eastmoney", "1.000688")],
+    "idx_hstech": [("tx_hk", "hkHSTECH"), ("eastmoney", "124.HSTECH")],
+}
+INDEX_POINT_SOURCE_LABELS = {
+    "sina_a": "新浪财经 A 股指数日线",
+    "sina_us": "新浪财经美股指数日线",
+    "tx_a": "腾讯财经 A 股指数日线",
+    "tx_us": "腾讯财经美股指数日线",
+    "tx_hk": "腾讯财经港股指数日线",
+    "eastmoney": "东方财富指数日线",
+}
+
 MACRO_HISTORY_VALUE_LIMITS = {
     "gold_london": (100.0, 20000.0),
     "silver_london": (2.0, 80.0),
@@ -1550,6 +1585,31 @@ def _compact_macro_points(point_map):
         for date_str, value in sorted(point_map.items())
         if date_str and value is not None
     ]
+
+
+def _align_points_to_dates(target_dates, source_points):
+    """把 [日期, 值] 序列对齐到 target_dates，取当日或之前最近一个观测值。
+
+    蛋卷 PE 是不规则低频序列，指数是日频收盘；三个市场休市日不同，
+    用前向填充避免把休市日误判成缺口。返回与 target_dates 等长的值列表（缺失为 None）。
+    """
+    rows = []
+    for row in source_points or []:
+        try:
+            rows.append((str(row[0]), float(row[1])))
+        except (IndexError, TypeError, ValueError):
+            continue
+    rows.sort(key=lambda item: item[0])
+    aligned = []
+    cursor = 0
+    last_value = None
+    for date_str in target_dates or []:
+        date_str = str(date_str)
+        while cursor < len(rows) and rows[cursor][0] <= date_str:
+            last_value = rows[cursor][1]
+            cursor += 1
+        aligned.append(round(last_value, 2) if last_value is not None else None)
+    return aligned
 
 
 def fetch_cboe_macro_history(symbol, start_date=MACRO_HISTORY_START):
@@ -1838,6 +1898,7 @@ def fetch_macro_history():
     }
 
     # 东方财富会限制并发，先串行补这条链路，再并发其他源。
+    # 指数点位单独走独立缓存，不放进这里：本任务一旦超时会整体回退旧缓存。
     eastmoney_keys = (
         "usdcny", "gold_london", "silver_london", "copper_lme", "brent",
     )
@@ -1890,6 +1951,197 @@ def fetch_macro_history():
 
     if any(key in result for key in sources):
         _write_macro_history_cache(result)
+    return result
+
+
+def _read_index_point_cache():
+    try:
+        with open(INDEX_POINT_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_index_point_cache(data):
+    try:
+        os.makedirs(os.path.dirname(INDEX_POINT_CACHE), exist_ok=True)
+        tmp = INDEX_POINT_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, INDEX_POINT_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ 指数点位缓存写入失败: {e}")
+
+
+def _http_text(url, referer=None, timeout=12):
+    """轻量 GET，供指数日线多源抓取使用。"""
+    headers = {**DEFAULT_HEADERS, "Accept": "*/*"}
+    if referer:
+        headers["Referer"] = referer
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def _fetch_sina_index_daily(kind, symbol):
+    """新浪指数日线：A 股用 CN_MarketData，美股用 US_MinKService。"""
+    points = {}
+    if kind == "sina_a":
+        url = (
+            "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+            f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen=3000"
+        )
+        rows = json.loads(_http_text(url, "https://finance.sina.com.cn/")) or []
+        for row in rows:
+            try:
+                points[str(row["day"])] = float(row["close"])
+            except (KeyError, TypeError, ValueError):
+                continue
+    else:
+        url = (
+            "https://stock.finance.sina.com.cn/usstock/api/jsonp.php/IO.XSRF.K/"
+            f"US_MinKService.getDailyK?symbol={urllib.parse.quote(symbol, safe='')}"
+        )
+        raw = _http_text(url, "https://finance.sina.com.cn/")
+        marker = raw.find("IO.XSRF.K(")
+        start = raw.find("(", marker) if marker >= 0 else raw.find("(")
+        end = raw.rfind(")")
+        rows = json.loads(raw[start + 1:end]) if start >= 0 and end > start else []
+        if isinstance(rows, list):
+            for row in rows:
+                try:
+                    points[str(row["d"])] = float(row["c"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+    return _compact_macro_points(points)
+
+
+def _fetch_tencent_index_daily(kind, symbol, start_year=2016):
+    """腾讯指数日线：单段最多 320 根 K 线，按自然年滚动拼接全历史。"""
+    path = {
+        "tx_a": "fqkline/get",
+        "tx_us": "usfqkline/get",
+        "tx_hk": "hkfqkline/get",
+    }.get(kind)
+    if not path:
+        return []
+    points = {}
+    for year in range(start_year, now_beijing().year + 1):
+        url = (
+            f"https://web.ifzq.gtimg.cn/appstock/app/{path}"
+            f"?param={symbol},day,{year}-01-01,{year}-12-31,320,qfq"
+        )
+        try:
+            raw = _http_text(url, "https://gu.qq.com/", timeout=10)
+            if raw.lstrip().startswith("kline_dayqfq="):
+                raw = raw.split("=", 1)[1]
+            payload = json.loads(raw)
+            node_map = payload.get("data") or {}
+            if not isinstance(node_map, dict):
+                continue
+            node = node_map.get(symbol) or next(iter(node_map.values()), {}) or {}
+            rows = node.get("day") or node.get("qfqday") or []
+            for row in rows:
+                if len(row) >= 3:
+                    try:
+                        points[str(row[0])] = float(row[2])
+                    except (TypeError, ValueError):
+                        continue
+        except Exception:
+            continue
+    return _compact_macro_points(points)
+
+
+def _fetch_eastmoney_index_daily(secid):
+    """东方财富日线：只做一次快速尝试，失败立即交给下一个源。"""
+    query = urllib.parse.urlencode({
+        "secid": secid,
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f53",
+        "klt": "101",
+        "fqt": "1",
+        "beg": "20160101",
+        "end": now_beijing().strftime("%Y%m%d"),
+        "lmt": "1000000",
+    })
+    url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{query}"
+    payload = json.loads(_http_text(url, "https://quote.eastmoney.com/", timeout=8))
+    rows = (payload.get("data") or {}).get("klines") or []
+    points = {}
+    for row in rows:
+        parts = str(row).split(",")
+        if len(parts) >= 2:
+            try:
+                points[parts[0]] = float(parts[1])
+            except (TypeError, ValueError):
+                continue
+    return _compact_macro_points(points)
+
+
+def _fetch_index_point_daily(key):
+    """按配置顺序尝试多个数据源，返回 (日线点位, 实际来源)。"""
+    for kind, symbol in INDEX_POINT_SOURCES.get(key, []):
+        try:
+            if kind.startswith("sina"):
+                points = _fetch_sina_index_daily(kind, symbol)
+            elif kind.startswith("tx"):
+                points = _fetch_tencent_index_daily(kind, symbol)
+            else:
+                points = _fetch_eastmoney_index_daily(symbol)
+        except Exception as exc:
+            print(f"    [warn] 指数点位 {key} {kind} 获取失败: {exc}")
+            points = []
+        if len(points) >= 60:
+            return points, INDEX_POINT_SOURCE_LABELS.get(kind, kind)
+    return [], None
+
+
+def fetch_index_point_history(pe_dates_by_key):
+    """抓取宽基指数收盘点位，按对应 PE 的观测日对齐后写入独立缓存。
+
+    与 fetch_macro_history 解耦：宏观历史任务超时/回退旧缓存时，点位数据依然可用，
+    也不会被宏观缓存的整体覆盖写丢掉。某条抓取失败时沿用上一次缓存点位。
+    """
+    cached = _read_index_point_cache()
+    result = {"generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S")}
+    updated = 0
+    for key, spec in INDEX_POINT_TARGETS.items():
+        title, unit, source, _secid, pe_key, _label = spec
+        pe_dates = pe_dates_by_key.get(pe_key) or []
+        if not pe_dates:
+            continue
+        merged = {}
+        old_item = cached.get(key) or {}
+        for row in (old_item.get("points") or []):
+            try:
+                merged[str(row[0])] = float(row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+        daily, used_source = _fetch_index_point_daily(key)
+        if daily:
+            aligned = _align_points_to_dates(pe_dates, daily)
+            for date_str, value in zip(pe_dates, aligned):
+                if value is not None:
+                    merged[str(date_str)] = value
+            # 多留一个最新交易日：PE 当天追加观测点时可以前向填充到最新收盘
+            merged[str(daily[-1][0])] = float(daily[-1][1])
+            updated += 1
+        else:
+            print(f"    [warn] 指数点位 {key} 全部数据源失败，沿用缓存")
+        points = _compact_macro_points(merged)
+        if points:
+            result[key] = {
+                "title": title,
+                "unit": unit,
+                "source": used_source or old_item.get("source") or source,
+                "points": points,
+            }
+    if updated:
+        _write_index_point_cache(result)
+        print(f"📈 宽基指数点位: 更新 {updated}/{len(INDEX_POINT_TARGETS)} 条")
+    else:
+        print("📈 宽基指数点位: 本轮未取到新数据，使用本地缓存")
     return result
 
 
@@ -4610,7 +4862,7 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         "ytd_gain": calc_gain(ytd=True)
     }
 
-def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None, index_valuation_history=None):
+def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None, index_valuation_history=None, index_point_history=None):
     CPO_CODES = {"022365", "540010", "002112", "011892", "021528", "009645", "011370", "011452", "016371", "001956", "016234", "016173", "006616", "018291", "020661", "017462", "001438", "008984", "180031", "004320", "027063"}
     STORAGE_CODES = {"025500", "025209", "018816", "014320"}
     SEMICONDUCTOR_CODES = {"024418", "024975", "020640", "019633", "024424", "017811", "013841", "007491", "020629", "017747", "026633", "162214", "007343", "018777"}
@@ -6862,8 +7114,37 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         </div>
         """
 
+    # ===== 宽基指数估值：给 PE 序列挂载指数点位，供历史图右轴叠加展示 =====
+    # 只注入页面，不写回缓存：overlay 是按 PE 日期轴对齐后的派生数组。
+    _macro_history_for_page = {}
+    for _key, _item in macro_history.items():
+        if _key in INDEX_POINT_TARGETS:
+            continue
+        _macro_history_for_page[_key] = dict(_item) if isinstance(_item, dict) else _item
+
+    for _pe_key, (_idx_key, _label) in INDEX_PE_OVERLAY.items():
+        _pe_item = _macro_history_for_page.get(_pe_key) or {}
+        _idx_item = (index_point_history or {}).get(_idx_key) or {}
+        _pe_points = _pe_item.get("points") or []
+        _idx_points = _idx_item.get("points") or []
+        if not _pe_points or not _idx_points:
+            continue
+        _values = _align_points_to_dates(
+            [row[0] for row in _pe_points if row], _idx_points
+        )
+        if not any(value is not None for value in _values):
+            continue
+        _pe_item["overlay"] = {
+            "title": f"{_label}指数点位",
+            "unit": "点",
+            "axisTitle": "点位(千)",
+            "divisor": 1000,
+            "source": _idx_item.get("source") or "东方财富指数日线",
+            "values": _values,
+        }
+
     macro_history_json = json.dumps(
-        macro_history, ensure_ascii=False, separators=(",", ":")
+        _macro_history_for_page, ensure_ascii=False, separators=(",", ":")
     ).replace("</", "<\\/")
 
     macro_history_script = r"""
@@ -7185,7 +7466,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         return {
             text: dark ? '#b9c0c8' : '#5f6368',
             grid: dark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)',
-            labelBg: dark ? 'rgba(37,37,37,0.88)' : 'rgba(255,255,255,0.90)'
+            labelBg: dark ? 'rgba(37,37,37,0.88)' : 'rgba(255,255,255,0.90)',
+            // 估值图双轴：PE 用高对比中性色，点位用蓝色（与右侧坐标轴同色）
+            peLine: dark ? '#e8eaed' : '#202124',
+            pointLine: dark ? '#6ea8fe' : '#1a73e8'
         };
     }
 
@@ -7195,6 +7479,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         const yScale = chart.scales && chart.scales.y;
         if (!area || !yScale) return;
         const ctx = chart.ctx;
+        // 双轴图右侧是点位坐标轴，虚线只画到绘图区右边界，避免穿过右轴刻度
+        const rightEdge = (chart.scales && chart.scales.y1)
+            ? area.right : (chart.width - 54);
 
         opts.lines.forEach(function(line) {
             const y = yScale.getPixelForValue(line.value);
@@ -7206,7 +7493,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             ctx.lineDashOffset = 0;
             ctx.beginPath();
             ctx.moveTo(area.left, y);
-            ctx.lineTo(chart.width - 54, y);
+            ctx.lineTo(rightEdge, y);
             ctx.stroke();
             ctx.restore();
         });
@@ -7285,7 +7572,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         return state.panel.querySelector('[data-macro-part="' + name + '"]');
     }
 
-    function renderLegend(cfg) {
+    function renderLegend(cfg, series, colors) {
         const legend = panelPart('legend');
         if (!legend) return;
         legend.replaceChildren();
@@ -7301,6 +7588,18 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             item.append(swatch, text);
             legend.appendChild(item);
         });
+        const overlay = series && series.overlay;
+        if (overlay) {
+            const item = document.createElement('span');
+            item.className = 'macro-history-legend-item';
+            const swatch = document.createElement('span');
+            swatch.className = 'macro-history-legend-swatch';
+            swatch.style.background = (colors && colors.pointLine) || '#1a73e8';
+            const text = document.createElement('span');
+            text.textContent = overlay.title + '（右轴 · ' + overlay.axisTitle + '）';
+            item.append(swatch, text);
+            legend.appendChild(item);
+        }
     }
 
     function renderRangeLabels(cfg, chart) {
@@ -7379,9 +7678,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }
         const count = end - start + 1;
         const meta = panelPart('meta');
+        const pointSource = series.overlay ? ' + ' + series.overlay.source : '';
         if (meta) meta.textContent =
             series.points[start][0] + ' ~ ' + series.points[end][0] +
-            ' · ' + count.toLocaleString('zh-CN') + ' 个观测点 · ' + series.source;
+            ' · ' + count.toLocaleString('zh-CN') + ' 个观测点 · ' +
+            series.source + pointSource;
         const reset = panelPart('resetZoom');
         if (reset) reset.hidden = !state.zoomRange;
     }
@@ -7527,24 +7828,106 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         const values = visiblePoints.map(function(point) { return Number(point[1]); });
         const colors = themeColors();
         const unit = series.unit || '';
-        const rightGutter = window.innerWidth <= 640 ? 76 : 90;
+        // 宽基指数估值图：PE 走左轴，指数点位走右轴，两条线共用同一日期轴
+        const overlay = series.overlay || null;
+        const overlayValues = overlay
+            ? (overlay.values || []).slice(start, end + 1).map(function(value) {
+                return (value === null || value === undefined) ? null : Number(value);
+            })
+            : null;
+        // 双轴图右侧要同时容纳点位坐标轴与分位标签；其它卡片沿用原有留白
+        const rightGutter = overlay
+            ? (window.innerWidth <= 640 ? 62 : 68)
+            : (window.innerWidth <= 640 ? 76 : 90);
         const xTickLimit = window.innerWidth <= 480 ? 4 : (window.innerWidth <= 900 ? 6 : 10);
+        const showAxisTitle = window.innerWidth > 640;
+
+        const datasets = [{
+            label: series.title,
+            data: values,
+            borderColor: overlay ? colors.peLine : cfg.lineColor,
+            backgroundColor: 'transparent',
+            borderWidth: overlay ? 1.9 : 1.6,
+            pointRadius: 0,
+            pointHitRadius: 7,
+            tension: 0.08,
+            fill: false
+        }];
+        if (overlay) {
+            datasets.push({
+                label: overlay.title,
+                data: overlayValues,
+                yAxisID: 'y1',
+                borderColor: colors.pointLine,
+                backgroundColor: 'transparent',
+                borderWidth: 1.5,
+                pointRadius: 0,
+                pointHitRadius: 7,
+                tension: 0.12,
+                fill: false
+            });
+        }
+
+        const scalesConfig = {
+            x: {
+                ticks: {
+                    color: colors.text,
+                    maxTicksLimit: xTickLimit,
+                    maxRotation: 0,
+                    autoSkip: true,
+                    font: { size: window.innerWidth <= 480 ? 9 : 10 }
+                },
+                grid: { display: false },
+                border: { color: colors.grid }
+            },
+            y: {
+                suggestedMin: cfg.yStart,
+                suggestedMax: cfg.suggestedMax,
+                min: cfg.yEnd === 100 ? 0 : undefined,
+                max: cfg.yEnd === 100 ? 100 : undefined,
+                title: {
+                    display: !!overlay && showAxisTitle,
+                    text: '市盈率 PE (倍)',
+                    color: colors.text,
+                    font: { size: 10 }
+                },
+                ticks: {
+                    color: colors.text,
+                    font: { size: 10 },
+                    callback: function(value) { return Number(value).toFixed(0); }
+                },
+                grid: { color: colors.grid },
+                border: { color: colors.grid }
+            }
+        };
+        if (overlay) {
+            const divisor = Number(overlay.divisor) || 1;
+            scalesConfig.y1 = {
+                position: 'right',
+                grid: { drawOnChartArea: false, drawTicks: false },
+                border: { display: false },
+                ticks: {
+                    color: colors.pointLine,
+                    font: { size: 10 },
+                    maxTicksLimit: 6,
+                    callback: function(value) {
+                        return (Number(value) / divisor).toFixed(1);
+                    }
+                },
+                title: {
+                    display: showAxisTitle,
+                    text: overlay.axisTitle || '点位(千)',
+                    color: colors.pointLine,
+                    font: { size: 10 }
+                }
+            };
+        }
 
         state.chart = new Chart(canvas.getContext('2d'), {
             type: 'line',
             data: {
                 labels: labels,
-                datasets: [{
-                    label: series.title,
-                    data: values,
-                    borderColor: cfg.lineColor,
-                    backgroundColor: 'transparent',
-                    borderWidth: 1.6,
-                    pointRadius: 0,
-                    pointHitRadius: 7,
-                    tension: 0.08,
-                    fill: false
-                }]
+                datasets: datasets
             },
             options: {
                 responsive: true,
@@ -7565,39 +7948,25 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         callbacks: {
                             title: function(items) { return items.length ? items[0].label : ''; },
                             label: function(context) {
+                                if (overlay && context.dataset.yAxisID === 'y1') {
+                                    const pointValue = Number(context.raw);
+                                    if (!Number.isFinite(pointValue)) {
+                                        return overlay.title + ': --';
+                                    }
+                                    return overlay.title + ': ' +
+                                        pointValue.toLocaleString('zh-CN', {
+                                            minimumFractionDigits: 2,
+                                            maximumFractionDigits: 2
+                                        }) + ' ' + (overlay.unit || '点');
+                                }
                                 const value = Number(context.raw);
-                                return series.title + ': ' + value.toFixed(2) + unit +
-                                    ' · ' + classifyValue(cfg, value);
+                                return (overlay ? '市盈率 PE' : series.title) + ': ' +
+                                    value.toFixed(2) + unit + ' · ' + classifyValue(cfg, value);
                             }
                         }
                     }
                 },
-                scales: {
-                    x: {
-                        ticks: {
-                            color: colors.text,
-                            maxTicksLimit: xTickLimit,
-                            maxRotation: 0,
-                            autoSkip: true,
-                            font: { size: window.innerWidth <= 480 ? 9 : 10 }
-                        },
-                        grid: { display: false },
-                        border: { color: colors.grid }
-                    },
-                    y: {
-                        suggestedMin: cfg.yStart,
-                        suggestedMax: cfg.suggestedMax,
-                        min: cfg.yEnd === 100 ? 0 : undefined,
-                        max: cfg.yEnd === 100 ? 100 : undefined,
-                        ticks: {
-                            color: colors.text,
-                            font: { size: 10 },
-                            callback: function(value) { return Number(value).toFixed(0); }
-                        },
-                        grid: { color: colors.grid },
-                        border: { color: colors.grid }
-                    }
-                }
+                scales: scalesConfig
             }
         });
         setupMacroSelection(canvas, panel);
@@ -7643,11 +8012,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         panel.hidden = false;
         setOpenCards(key, panelId);
         const title = panel.querySelector('[data-macro-part="title"]');
-        if (title) title.textContent = series.title;
+        if (title) title.textContent = series.overlay
+            ? series.title + ' · 指数点位' : series.title;
         updateMacroHistoryMeta(key);
         const source = panel.querySelector('[data-macro-part="source"]');
         if (source) source.href = cfg.sourceUrl;
-        renderLegend(cfg);
+        renderLegend(cfg, series, themeColors());
         renderMacroHistory(key);
         requestAnimationFrame(function() {
             const behavior = window.matchMedia &&
@@ -7700,7 +8070,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
         if (window.MutationObserver) {
             new MutationObserver(function() {
-                if (state.key) renderMacroHistory(state.key);
+                if (!state.key) return;
+                renderLegend(
+                    MACRO_CONFIG[state.key], MACRO_HISTORY[state.key], themeColors()
+                );
+                renderMacroHistory(state.key);
             }).observe(document.documentElement, {
                 attributes: true,
                 attributeFilter: ['data-theme']
@@ -14664,7 +15038,7 @@ def main():
             }
 
         try:
-            macro_history = fut_macro_history.result(timeout=60)
+            macro_history = fut_macro_history.result(timeout=180)
         except Exception as e:
             print(f"⚠️ 宏观历史序列抓取失败: {e}")
             macro_history = _read_macro_history_cache()
@@ -14680,6 +15054,17 @@ def main():
         )
     )
     print(f"📈 宏观与估值历史序列: {macro_history_point_counts}")
+
+    # 宽基指数点位：按 PE 观测日对齐后单独缓存，供估值历史图右侧坐标轴使用
+    pe_dates_by_key = {
+        pe_key: [
+            row[0] for row in ((macro_history.get(pe_key) or {}).get("points") or [])
+            if row
+        ]
+        for pe_key in INDEX_PE_OVERLAY
+    }
+    index_point_history = fetch_index_point_history(pe_dates_by_key)
+
     fed_prob_count = len(fed_monitor.get('probabilities', []))
     fed_status = "✅" if fed_monitor.get('meeting_text') != "--" and fed_prob_count > 0 else "⚠️"
     print(f"🏛️ 美联储利率观测器 {fed_status}: 下一次会议 {fed_monitor.get('meeting_text', '--')} | 期货价格 {fed_monitor.get('futures_price', '--')} | 当前概率 {fed_prob_count} 档 | 更新时间 {fed_monitor.get('update_text', '--')}")
@@ -14965,7 +15350,8 @@ def main():
             is_debug_mode=is_debug,
             filename=args.out,
             index_annual_data=index_annual_data,
-            macro_history=macro_history
+            macro_history=macro_history,
+            index_point_history=index_point_history
         )
         print(f"\n🎉 升级版网页构建成功！文件路径: {abs_path}")
         try:
