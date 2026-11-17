@@ -604,17 +604,22 @@ def fetch_index_annual_data(force=False):
             print(f"📅 读取缓存 {cache_file} 失败: {e}，将重新抓取...")
             cached = None
 
+    # 说明：快照里的 `_meta.generated_at` 才是「抓取时间」。
+    # 不能用文件 mtime —— CI 每次 checkout 都会把 mtime 刷成当天，
+    # 那样会永远判定「今天已抓过」，当年那一行就再也不更新了。
+    meta = (cached or {}).get("_meta") or {}
+    cached_day = str(meta.get("generated_at") or "")[:10]
+
     if cached:
         missing = set(ANNUAL_INDEX_TARGETS) - set(cached.keys())
         if missing:
             print(f"📅 缓存 {cache_file} 缺少以下指数，将重新抓取: {sorted(missing)}")
+        elif cached_day == now_beijing().strftime("%Y-%m-%d") and not force:
+            print(f"📅 命中当日快照 {cache_file}（{cached_day} 已抓取过），跳过网络请求")
+            print(f"📊 指数年度数据最终获取成功: {len([k for k in cached if k != '_meta'])}/{len(ANNUAL_INDEX_TARGETS)} （来源：本地快照）")
+            return cached
         else:
-            cached_day = datetime.fromtimestamp(os.path.getmtime(cache_file)).strftime("%Y-%m-%d")
-            if not force and cached_day == now_beijing().strftime("%Y-%m-%d"):
-                print(f"📅 命中当日快照 {cache_file}（{cached_day} 已抓取过），跳过网络请求")
-                print(f"📊 指数年度数据最终获取成功: {len(cached)}/{len(ANNUAL_INDEX_TARGETS)} （来源：本地快照）")
-                return cached
-            print(f"📅 快照 {cache_file} 为 {cached_day} 生成，今日需刷新「当年」一行（6 只指数，约 2s）")
+            print(f"📅 快照 {cache_file} 生成于 {cached_day or '未知'}，今日需刷新「当年」一行（6 只指数，约 2s）")
 
     print("📅 正在获取指数年度数据 (2000年至今)...")
     result = {}
@@ -996,10 +1001,13 @@ def fetch_index_annual_data(force=False):
     # ===== 2. 本轮个别指数抓取失败时，用旧快照补齐（历史年份不丢） =====
     if cached:
         for name, payload in cached.items():
+            if name == "_meta":
+                continue
             result.setdefault(name, payload)
 
     # ===== 3. 写回快照（data/index_annual.json 随仓库提交） =====
     if result:
+        result["_meta"] = {"generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S")}
         try:
             tmp = cache_file + ".tmp"
             with open(tmp, "w", encoding="utf-8", newline="\n") as f:
