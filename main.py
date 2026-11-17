@@ -5049,6 +5049,19 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     CRYPTO_LOCAL = {"BTC", "ETH", "SOL", "BNB"}
     col_count = 22
 
+    def _te_attr(value):
+        """把 tsdata 抓来的字符串指标清洗成纯数字，供 data-* 属性使用。
+
+        这些字段来自第三方页面解析，可能是 "1.23"、"-0.45"、"1.2%"、"" 或
+        "暂无数据"。直接拼进 HTML 属性会有注入风险，也会让前端 parseFloat 出 NaN，
+        因此这里只放行能转成浮点的值，其余一律返回空串（前端显示 --）。
+        """
+        text = str(value or "").strip().rstrip("%").replace(",", "")
+        try:
+            return f"{float(text):g}"
+        except (TypeError, ValueError):
+            return ""
+
     # Keep report generation usable by callers that supply only a subset of
     # metrics (for example the local HTML sync helper).
     _missing = {"status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""}
@@ -6161,9 +6174,17 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             clean_pur = fee_pur.strip('%') if fee_pur else ''
             fee_pur_val = float(clean_pur) if clean_pur.replace('.', '', 1).isdigit() else 999.0
 
+        # 对比表用到的补充指标（夏普/跟踪误差/同类平均）：主表不展示这几列，
+        # 但 tsdata 已经抓过，挂到 tr 的 data-* 上供对比弹窗读取，避免再发一轮请求。
+        _te = r.get('te_data') or {}
+        te_sharp1y = _te_attr(_te.get('sharp_1y'))
+        te_sharp3y = _te_attr(_te.get('sharp_3y'))
+        te_track = _te_attr(_te.get('tracking_error'))
+        te_peer = _te_attr(_te.get('peer_avg'))
+
         rows_html += f"""
-        <tr data-group="{group}" data-macro="{macro_category}" data-buy-status="{r.get('buy_status', '')}" class="fund-row" data-code="{r['code']}">
-            <td class="fav-col" data-val="0"><button class="star-btn" data-code="{r['code']}" title="点击添加/取消自选">☆</button></td>
+        <tr data-group="{group}" data-macro="{macro_category}" data-buy-status="{r.get('buy_status', '')}" class="fund-row" data-code="{r['code']}" data-navdate="{r['latest_date']}" data-sharp1y="{te_sharp1y}" data-sharp3y="{te_sharp3y}" data-te="{te_track}" data-peer="{te_peer}">
+            <td class="fav-col" data-val="0"><span class="fav-tools"><button class="star-btn" data-code="{r['code']}" title="点击添加/取消自选">☆</button><input type="checkbox" class="cmp-check" data-code="{r['code']}" title="勾选加入对比（最多 6 只）" aria-label="加入对比"></span></td>
             <td class="code" data-val="{r['code']}">{r['code']}</td>
             <td class="name" data-val="{r['name']}">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
@@ -11273,6 +11294,240 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             text-align: right;
         }}
 
+        /* ===== 基金对比（前缀 fcmp-：不与 QDII 对比页的 .cmp-* 冲突） ===== */
+        :root {{ --cmp-sel-bg: rgba(26, 115, 232, 0.10); }}
+        [data-theme="dark"] {{ --cmp-sel-bg: rgba(138, 180, 248, 0.14); }}
+
+        /* 首列：星标 + 对比勾选竖排（列宽 45px，横排会溢出） */
+        .fav-tools {{
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1px;
+            line-height: 1;
+        }}
+        .cmp-check {{
+            width: 12px;
+            height: 12px;
+            margin: 0;
+            padding: 0;
+            cursor: pointer;
+            accent-color: var(--link-color);
+        }}
+        .cmp-check:focus-visible {{ outline: 2px solid var(--link-color); outline-offset: 1px; }}
+
+        /* 选中行：背景打在 td 上，才能压过 tr:hover */
+        #fundTable tbody tr.cmp-selected > td {{ background-color: var(--cmp-sel-bg); }}
+        #fundTable tbody tr.cmp-selected > td:first-child {{ box-shadow: inset 3px 0 0 var(--link-color); }}
+
+        /* 底部浮条 */
+        .fcmp-bar {{
+            position: fixed;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: 14px;
+            z-index: 900;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            max-width: min(1100px, calc(100vw - 32px));
+            padding: 8px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: var(--table-bg);
+            color: var(--text);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+            font-size: 12px;
+        }}
+        .fcmp-bar[hidden] {{ display: none; }}
+        .fcmp-bar-count {{ white-space: nowrap; font-weight: 600; color: var(--link-color); }}
+        .fcmp-bar-chips {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            overflow-x: auto;
+            max-width: 60vw;
+            scrollbar-width: thin;
+        }}
+        .fcmp-bar-actions {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
+        .fcmp-bar-hint {{
+            position: absolute;
+            top: -22px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: #d93025;
+            white-space: nowrap;
+        }}
+        .fcmp-bar-hint[hidden] {{ display: none; }}
+        .fcmp-chip {{
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            white-space: nowrap;
+            background: var(--hover-bg);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 2px 4px 2px 8px;
+            font-size: 11px;
+        }}
+        .fcmp-chip-x {{
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            color: var(--footer-text);
+            font-size: 12px;
+            line-height: 1;
+            padding: 0 2px;
+        }}
+        .fcmp-chip-x:hover {{ color: #d93025; }}
+        .fcmp-btn-primary {{
+            background: var(--btn-active-bg);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }}
+        .fcmp-btn-primary:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+        .fcmp-btn-ghost {{
+            background: transparent;
+            color: var(--footer-text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }}
+        .fcmp-btn-ghost:hover {{ color: var(--text); border-color: var(--footer-text); }}
+        #fundView.cmp-bar-on .table-container {{ padding-bottom: 64px; }}
+
+        /* 对比弹窗 */
+        #cmpBody {{
+            padding: 10px 12px;
+            gap: 10px;
+            max-height: calc(92vh - 52px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+        }}
+        .fcmp-controls {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+        .fcmp-periods {{ display: flex; gap: 6px; flex-wrap: wrap; }}
+        .fcmp-period-btn {{
+            border: 1px solid var(--border);
+            background: var(--btn-bg);
+            color: var(--btn-text);
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 11px;
+            cursor: pointer;
+        }}
+        .fcmp-period-btn.active {{
+            background: var(--btn-active-bg);
+            color: var(--btn-active-text);
+            border-color: transparent;
+        }}
+        .fcmp-chart-box {{ position: relative; height: 320px; min-height: 240px; }}
+        .fcmp-empty {{
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 0 20px;
+            font-size: 12px;
+            color: var(--footer-text);
+            background: var(--table-bg);
+        }}
+        .fcmp-empty[hidden] {{ display: none; }}
+        .fcmp-table-wrap {{
+            overflow: auto;
+            max-height: 46vh;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }}
+        .fcmp-table {{
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 12px;
+            min-width: 720px;
+            width: 100%;
+        }}
+        .fcmp-table th,
+        .fcmp-table td {{
+            border-bottom: 1px solid var(--border);
+            padding: 6px 8px;
+            vertical-align: middle;
+            text-align: right;
+            white-space: nowrap;
+        }}
+        .fcmp-table thead th {{
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            background: var(--table-bg);
+            font-weight: 600;
+            color: var(--header-text);
+            vertical-align: top;
+        }}
+        .fcmp-table th:first-child,
+        .fcmp-table td.fcmp-label {{
+            position: sticky;
+            left: 0;
+            z-index: 2;
+            background: var(--table-bg);
+            text-align: left;
+            min-width: 132px;
+            max-width: 132px;
+            white-space: normal;
+        }}
+        .fcmp-table thead th:first-child {{ z-index: 4; }}
+        .fcmp-table tr.fcmp-group td {{
+            background: var(--hover-bg);
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--header-text);
+            text-align: left;
+        }}
+        .fcmp-table tr:last-child td {{ border-bottom: none; }}
+        .fcmp-val {{ font-variant-numeric: tabular-nums; }}
+        .fcmp-col-head {{ display: block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .fcmp-col-code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--footer-text); }}
+        .fcmp-col-x {{
+            float: right;
+            border: none;
+            background: transparent;
+            color: var(--footer-text);
+            cursor: pointer;
+            font-size: 13px;
+            line-height: 1;
+            padding: 0 0 0 4px;
+        }}
+        .fcmp-col-x:hover {{ color: #d93025; }}
+        .fcmp-sub {{ font-size: 10px; color: var(--footer-text); font-weight: 400; }}
+        .fcmp-note {{ font-size: 11px; color: var(--footer-text); line-height: 1.7; }}
+
+        @media (max-width: 992px) {{
+            .fcmp-bar {{
+                left: 8px;
+                right: 8px;
+                bottom: 8px;
+                transform: none;
+                max-width: none;
+                flex-wrap: wrap;
+                gap: 6px;
+                padding: 8px;
+            }}
+            .fcmp-bar-chips {{ order: 3; flex-basis: 100%; max-width: 100%; }}
+            .fcmp-bar-hint {{ position: static; transform: none; order: 4; flex-basis: 100%; }}
+            #fundView.cmp-bar-on .table-container {{ padding-bottom: 96px; }}
+            .fcmp-chart-box {{ height: 240px; }}
+            .fcmp-table {{ min-width: 640px; }}
+            .fcmp-table th:first-child,
+            .fcmp-table td.fcmp-label {{ min-width: 104px; max-width: 104px; font-size: 11px; }}
+        }}
     </style>
 </head>
 <body>
@@ -11641,7 +11896,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <table id="fundTable">
                     <thead>
                         <tr>
-                            <th data-col="0" onclick="handleHeaderClick(0)"><span class="th-full">收藏</span><span class="th-simple">★</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="0" title="☆ 点击加入自选；下方方框勾选可加入对比（最多 6 只）" onclick="handleHeaderClick(0)"><span class="th-full">收藏</span><span class="th-simple">★</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="1" onclick="handleHeaderClick(1)"><span class="th-full">代码</span><span class="th-simple">代码</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="2" onclick="handleHeaderClick(2)"><span class="th-full">基金名称 / 赎回费率阶梯</span><span class="th-simple">名称</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="3" onclick="handleHeaderClick(3)"><span class="th-full">最新规模</span><span class="th-simple">规模</span> <span class="sort-icon">⇅</span></th>
@@ -11674,11 +11929,22 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             <div class="footer-note">
                 <div class="footer-left">
-                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方是最近 8 个季度的前十大持仓 + 持有人结构饼图（QDII 基金另附国家/地区配置），<strong>季度条可横向滚动</strong>，滚到最右侧点「<strong>加载更早季度</strong>」即可回溯该基金全部历史季度；下方依次为年度收益率与双轴走势图。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>，浮窗内「上季 / 本季」两列并排对照、点表头可按占净值或环比变化量排序、底部可展开本季退出披露名单的个股；季度切换支持 chips 与 ‹ › 翻页。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
+                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；勾选 ☆ 下方的方框可把基金加入对比（最多 6 只），底部浮条点「开始对比」即可看归一化净值曲线与指标横向对比；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方是最近 8 个季度的前十大持仓 + 持有人结构饼图（QDII 基金另附国家/地区配置），<strong>季度条可横向滚动</strong>，滚到最右侧点「<strong>加载更早季度</strong>」即可回溯该基金全部历史季度；下方依次为年度收益率与双轴走势图。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>，浮窗内「上季 / 本季」两列并排对照、点表头可按占净值或环比变化量排序、底部可展开本季退出披露名单的个股；季度切换支持 chips 与 ‹ › 翻页。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
                 </div>
                 <div class="footer-right">
                     <span>⏱️ 统计更新于: <strong>{update_time_str}</strong></span>
                 </div>
+            </div>
+
+            <!-- 对比选择浮条：放在 #fundView 内部，切到其它视图时随父级 display:none 一起隐藏 -->
+            <div class="fcmp-bar" id="cmpBar" hidden>
+                <span class="fcmp-bar-count" id="cmpBarCount">已选 0 只</span>
+                <div class="fcmp-bar-chips" id="cmpBarChips"></div>
+                <div class="fcmp-bar-actions">
+                    <button type="button" class="fcmp-btn-ghost" id="cmpClearBtn">清空</button>
+                    <button type="button" class="fcmp-btn-primary" id="cmpStartBtn" disabled>开始对比</button>
+                </div>
+                <div class="fcmp-bar-hint" id="cmpBarHint" hidden></div>
             </div>
         </section>
 
@@ -11813,6 +12079,35 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <div class="dca-chart-box">
                     <canvas id="dcaChart"></canvas>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 基金对比浮窗：归一化净值曲线 + 指标横向对比 -->
+    <div class="modal-overlay" id="cmpModal">
+        <div class="modal-card modal-card-wide">
+            <div class="modal-header">
+                <h3 id="cmpTitle">⚖ 基金对比</h3>
+                <button class="modal-close" id="cmpCloseBtn" title="关闭">&times;</button>
+            </div>
+            <div class="modal-body" id="cmpBody">
+                <div class="fcmp-controls">
+                    <span class="fcmp-sub">对比区间</span>
+                    <div class="fcmp-periods" id="cmpPeriods">
+                        <button type="button" class="fcmp-period-btn" data-period="month">近1月</button>
+                        <button type="button" class="fcmp-period-btn active" data-period="quarter">近3月</button>
+                        <button type="button" class="fcmp-period-btn" data-period="half">近6月</button>
+                        <button type="button" class="fcmp-period-btn" data-period="year">近1年</button>
+                        <button type="button" class="fcmp-period-btn" data-period="all">全区间</button>
+                    </div>
+                    <span class="fcmp-note" id="cmpAnchorNote"></span>
+                </div>
+                <div class="fcmp-chart-box">
+                    <canvas id="cmpChartCanvas"></canvas>
+                    <div class="fcmp-empty" id="cmpChartEmpty" hidden></div>
+                </div>
+                <div class="fcmp-table-wrap" id="cmpTableWrap"></div>
+                <div class="fcmp-note" id="cmpFoot"></div>
             </div>
         </div>
     </div>
@@ -12536,6 +12831,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         }}
                     }}
                 }}
+
+                // 勾选是显式选择，不随筛选丢失；这里只更新浮条里的"被隐藏数量"
+                if (window.CmpManager) window.CmpManager.refreshBar();
             }}
 
             macroBtns.forEach(btn => {{
@@ -13616,6 +13914,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             document.addEventListener('keydown', function(e) {{
                 if (e.key !== 'Escape') return;
+                if (window.CmpManager && CmpManager.isOpen()) {{ CmpManager.close(); return; }}
                 if (hdState.code) {{ closeHoldingsDetail(); return; }}
                 if (fundDetailCode) closeFundDetail();
             }});
@@ -13631,7 +13930,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 }}
 
                 const target = e.target.closest('tr.fund-row');
-                if (!target || e.target.tagName === 'A' || e.target.closest('.star-btn')) return;
+                if (!target || e.target.tagName === 'A' || e.target.closest('.star-btn') || e.target.closest('.cmp-check')) return;
                 openFundDetail(target.dataset.code);
             }});
         }});
@@ -13682,6 +13981,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     }}
                 }}
             }});
+
+            // 排序只搬移同一批 <tr>，勾选状态不会丢；这里同步一次高亮，避免"高亮跟着位置走"
+            if (window.CmpManager) window.CmpManager.syncRowStates();
         }}
 
         document.addEventListener("DOMContentLoaded", function () {{
@@ -14192,6 +14494,753 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 bindQdiiSort();
             }}
         }})();
+
+        // ===================== 基金对比（勾选 → 归一化曲线 + 指标横向对比） =====================
+        // 设计约束：
+        //   1) 不新增表格列（22 列是硬编码的），勾选框塞进首列与 ☆ 竖排；
+        //   2) 不重新抓数据：曲线复用 window.__FUND_NAV_DATA__，夏普等走行上的 data-*；
+        //   3) 类名统一 fcmp- 前缀，避免与 QDII 对比页的 .cmp-* 串味。
+        const CmpManager = (function () {{
+            const STORAGE_KEY = 'fundCmpSelection_v1';
+            const MAX_SEL = 6;
+            const MAX_CHART_POINTS = 1200;
+            const COL = {{
+                SCALE: 3, FEE: 4, FEE_PUR: 5, MAXDD: 10, REBOUND: 11, RECOVERY: 12,
+                RECOVERY_DAYS: 13, TODAY: 14, WEEK: 15, MONTH: 16, QUARTER: 17,
+                HALF: 18, YEAR: 19, YTD: 20
+            }};
+            const PERIOD_MONTHS = {{ month: 1, quarter: 3, half: 6, year: 12, all: 0 }};
+            const PERIOD_LABEL = {{ month: '近1月', quarter: '近3月', half: '近6月', year: '近1年', all: '全区间' }};
+            const PALETTE = {{
+                light: ['#1a73e8', '#e8710a', '#188038', '#9334e6', '#d93025', '#12b5cb'],
+                dark:  ['#6ea8fe', '#f6ae2d', '#5bb974', '#c58af9', '#f28b82', '#4dd0c4']
+            }};
+
+            let selected = [];
+            let period = 'quarter';
+            let chart = null;
+            let isOpen = false;
+            let hintTimer = null;
+
+            // ---------- 小工具 ----------
+            function esc(s) {{
+                return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {{
+                    if (c === '&') return '&amp;';
+                    if (c === '<') return '&lt;';
+                    if (c === '>') return '&gt;';
+                    if (c === '"') return '&quot;';
+                    return '&#39;';
+                }});
+            }}
+            function isDark() {{
+                return document.documentElement.getAttribute('data-theme') === 'dark';
+            }}
+            function palette() {{
+                return isDark() ? PALETTE.dark : PALETTE.light;
+            }}
+            function chartTheme() {{
+                if (typeof themeColors === 'function') {{
+                    try {{ return themeColors(); }} catch (e) {{ /* 回退到常量 */ }}
+                }}
+                return {{
+                    text: isDark() ? '#b9c0c8' : '#5f6368',
+                    grid: isDark() ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'
+                }};
+            }}
+            function fmtPct(v, digits) {{
+                if (v == null || !isFinite(v)) return '--';
+                return v.toFixed(digits == null ? 2 : digits) + '%';
+            }}
+            function fmtNum(v, digits) {{
+                if (v == null || !isFinite(v)) return '--';
+                return v.toFixed(digits == null ? 2 : digits);
+            }}
+
+            // ---------- 选择状态 ----------
+            function rowMap() {{
+                const map = {{}};
+                document.querySelectorAll('#fundTable tbody tr.fund-row').forEach(function (row) {{
+                    map[row.dataset.code] = row;
+                }});
+                return map;
+            }}
+            function readSel() {{
+                try {{
+                    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+                    return Array.isArray(raw) ? raw : [];
+                }} catch (e) {{
+                    return [];
+                }}
+            }}
+            function writeSel() {{
+                try {{
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(selected));
+                }} catch (e) {{ /* 隐私模式下写入会失败，忽略 */ }}
+            }}
+            function sanitize(list) {{
+                const map = rowMap();
+                const out = [];
+                list.forEach(function (code) {{
+                    const key = String(code);
+                    if (map[key] && out.indexOf(key) < 0) out.push(key);
+                }});
+                return out.slice(0, MAX_SEL);
+            }}
+            function isSel(code) {{
+                return selected.indexOf(code) >= 0;
+            }}
+            function flashHint(msg) {{
+                const hint = document.getElementById('cmpBarHint');
+                if (!hint) return;
+                hint.textContent = msg;
+                hint.hidden = false;
+                if (hintTimer) clearTimeout(hintTimer);
+                hintTimer = setTimeout(function () {{ hint.hidden = true; }}, 2400);
+            }}
+            function toggle(code, checked) {{
+                const key = String(code);
+                if (checked) {{
+                    if (isSel(key)) return true;
+                    if (selected.length >= MAX_SEL) {{
+                        flashHint('最多同时对比 ' + MAX_SEL + ' 只基金，请先取消一只');
+                        return false;
+                    }}
+                    selected.push(key);
+                }} else {{
+                    selected = selected.filter(function (c) {{ return c !== key; }});
+                }}
+                writeSel();
+                syncRowStates();
+                refreshBar();
+                if (isOpen) {{
+                    if (selected.length < 2) closeModal();
+                    else render();
+                }}
+                return true;
+            }}
+
+            // ---------- 行状态 / 浮条 ----------
+            function syncRowStates() {{
+                const map = rowMap();
+                Object.keys(map).forEach(function (code) {{
+                    const row = map[code];
+                    const on = isSel(code);
+                    row.classList.toggle('cmp-selected', on);
+                    const cb = row.querySelector('.cmp-check');
+                    if (cb && cb.checked !== on) cb.checked = on;
+                }});
+                const view = document.getElementById('fundView');
+                if (view) view.classList.toggle('cmp-bar-on', selected.length > 0);
+            }}
+            function refreshBar() {{
+                const bar = document.getElementById('cmpBar');
+                if (!bar) return;
+                const map = rowMap();
+                let hiddenCount = 0;
+                selected.forEach(function (code) {{
+                    const row = map[code];
+                    if (row && row.style.display === 'none') hiddenCount++;
+                }});
+                bar.hidden = selected.length === 0;
+
+                const countEl = document.getElementById('cmpBarCount');
+                if (countEl) {{
+                    countEl.textContent = hiddenCount
+                        ? '已选 ' + selected.length + ' 只（' + hiddenCount + ' 只被筛选隐藏）'
+                        : '已选 ' + selected.length + ' 只';
+                }}
+                const chips = document.getElementById('cmpBarChips');
+                if (chips) {{
+                    chips.innerHTML = selected.map(function (code) {{
+                        const name = (typeof fundNames !== 'undefined' && fundNames[code]) || code;
+                        const short = name.length > 10 ? name.slice(0, 10) + '…' : name;
+                        return '<span class="fcmp-chip" title="' + esc(name) + '">' + esc(short)
+                            + '<button type="button" class="fcmp-chip-x" data-code="' + esc(code) + '" aria-label="移除">×</button></span>';
+                    }}).join('');
+                }}
+                const startBtn = document.getElementById('cmpStartBtn');
+                if (startBtn) startBtn.disabled = selected.length < 2;
+
+                const view = document.getElementById('fundView');
+                if (view) view.classList.toggle('cmp-bar-on', selected.length > 0);
+            }}
+
+            // ---------- 日期与序列 ----------
+            // 不用 setMonth 直接减：3-31 减 1 月会溢出成 3-03，这里先落到 1 号再 clamp。
+            function shiftMonths(dateStr, months) {{
+                const parts = String(dateStr).split('-');
+                const y = parseInt(parts[0], 10);
+                const m = parseInt(parts[1], 10) - 1;
+                const d = parseInt(parts[2], 10);
+                const target = new Date(y, m - months, 1);
+                const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+                const day = Math.min(d, lastDay);
+                const pad = function (n) {{ return n < 10 ? '0' + n : String(n); }};
+                return target.getFullYear() + '-' + pad(target.getMonth() + 1) + '-' + pad(day);
+            }}
+            // 区间末端取「所选基金里最晚的净值日」：早收市的用前向填充补到这一天
+            function commonAnchor(codes) {{
+                let anchor = '';
+                codes.forEach(function (code) {{
+                    const data = fundNavData[code];
+                    if (data && data.dates && data.dates.length) {{
+                        const last = data.dates[data.dates.length - 1];
+                        if (last > anchor) anchor = last;
+                    }}
+                }});
+                return anchor;
+            }}
+            function sliceOne(code, anchor, months) {{
+                const raw = fundNavData[code];
+                const name = (typeof fundNames !== 'undefined' && fundNames[code]) || code;
+                if (!raw || !Array.isArray(raw.dates) || !raw.dates.length) {{
+                    return {{ code: code, name: name, dates: [], navs: [], status: 'nodata' }};
+                }}
+                let dates = raw.dates;
+                let navs = raw.navs || [];
+                if (dates[0] > dates[dates.length - 1]) {{
+                    dates = dates.slice().reverse();
+                    navs = navs.slice().reverse();
+                }}
+                let i0 = 0;
+                if (months > 0) {{
+                    const start = shiftMonths(anchor, months);
+                    while (i0 < dates.length && dates[i0] < start) i0++;
+                }}
+                const d2 = [];
+                const n2 = [];
+                for (let i = i0; i < dates.length; i++) {{
+                    const v = Number(navs[i]);
+                    if (isFinite(v) && v > 0 && (anchor === '' || dates[i] <= anchor)) {{
+                        d2.push(dates[i]);
+                        n2.push(v);
+                    }}
+                }}
+                const status = d2.length === 0 ? 'outside' : (d2.length < 2 ? 'thin' : 'ok');
+                return {{ code: code, name: name, dates: d2, navs: n2, status: status }};
+            }}
+            function alignAndNormalize(slices) {{
+                const dateSet = new Set();
+                slices.forEach(function (s) {{
+                    s.dates.forEach(function (d) {{ dateSet.add(d); }});
+                }});
+                const labels = Array.from(dateSet).sort();
+
+                const rows = slices.map(function (s) {{
+                    const byDate = new Map();
+                    s.dates.forEach(function (d, i) {{ byDate.set(d, s.navs[i]); }});
+
+                    let lastVal = null;
+                    let started = false;
+                    const filled = labels.map(function (d) {{
+                        if (byDate.has(d)) {{
+                            lastVal = byDate.get(d);
+                            started = true;
+                            return lastVal;
+                        }}
+                        return started ? lastVal : null;   // 起点之前不外推
+                    }});
+
+                    let base = null;
+                    for (let i = 0; i < filled.length; i++) {{
+                        if (filled[i] != null) {{ base = filled[i]; break; }}
+                    }}
+                    const norm = filled.map(function (v) {{
+                        if (v == null || !base) return null;
+                        return Math.round((v / base * 100) * 10000) / 10000;
+                    }});
+
+                    let peak = null, mdd = 0, first = null, lastV = null, prev = null, count = 0, startIdx = -1;
+                    const logRets = [];
+                    norm.forEach(function (v, i) {{
+                        if (v == null) return;
+                        count++;
+                        if (startIdx < 0) startIdx = i;
+                        if (first == null) first = v;
+                        peak = (peak == null || v > peak) ? v : peak;
+                        const dd = (v / peak - 1) * 100;
+                        if (dd < mdd) mdd = dd;
+                        if (prev != null && prev > 0) logRets.push(Math.log(v / prev));
+                        prev = v;
+                        lastV = v;
+                    }});
+
+                    let vol = null;
+                    if (logRets.length >= 20) {{
+                        let sum = 0;
+                        logRets.forEach(function (r) {{ sum += r; }});
+                        const mean = sum / logRets.length;
+                        let acc = 0;
+                        logRets.forEach(function (r) {{ acc += (r - mean) * (r - mean); }});
+                        vol = Math.sqrt(acc / (logRets.length - 1)) * Math.sqrt(252) * 100;
+                    }}
+
+                    return {{
+                        code: s.code,
+                        name: s.name,
+                        status: s.status,
+                        norm: norm,
+                        ret: (lastV != null && first != null) ? (lastV - 100) : null,
+                        mdd: count ? mdd : null,
+                        vol: vol,
+                        points: count,
+                        startDate: startIdx >= 0 ? labels[startIdx] : '',
+                        lateStart: startIdx > 0
+                    }};
+                }});
+
+                return {{
+                    labels: labels,
+                    rows: rows,
+                    anchor: labels.length ? labels[labels.length - 1] : ''
+                }};
+            }}
+            // 只抽稀展示用序列，指标始终用完整序列算
+            function thinForChart(payload, maxPoints) {{
+                const labels = payload.labels;
+                if (labels.length <= maxPoints) return payload;
+                const step = Math.ceil(labels.length / maxPoints);
+                const keepSet = new Set();
+                for (let i = 0; i < labels.length; i += step) keepSet.add(i);
+                keepSet.add(labels.length - 1);
+                payload.rows.forEach(function (r) {{
+                    for (let i = 0; i < r.norm.length; i++) {{
+                        if (r.norm[i] != null) {{ keepSet.add(i); break; }}
+                    }}
+                    for (let i = r.norm.length - 1; i >= 0; i--) {{
+                        if (r.norm[i] != null) {{ keepSet.add(i); break; }}
+                    }}
+                }});
+                const keep = Array.from(keepSet).sort(function (a, b) {{ return a - b; }});
+                return {{
+                    labels: keep.map(function (i) {{ return labels[i]; }}),
+                    rows: payload.rows.map(function (r) {{
+                        return Object.assign({{}}, r, {{
+                            norm: keep.map(function (i) {{ return r.norm[i]; }})
+                        }});
+                    }}),
+                    anchor: payload.anchor
+                }};
+            }}
+
+            // ---------- 主表指标（直接读行内 data-val，避免重复计算） ----------
+            function readDomMetrics(code) {{
+                const row = rowMap()[code];
+                if (!row) return null;
+                const num = function (idx) {{
+                    const td = row.children[idx];
+                    if (!td) return null;
+                    const v = parseFloat(td.getAttribute('data-val'));
+                    return (isNaN(v) || v === -9999) ? null : v;
+                }};
+                const attrNum = function (name) {{
+                    const raw = row.getAttribute(name);
+                    if (raw == null || raw === '') return null;
+                    const v = parseFloat(raw);
+                    return isFinite(v) ? v : null;
+                }};
+                const scaleTd = row.children[COL.SCALE];
+                const nameTd = row.children[2];
+                return {{
+                    code: code,
+                    name: (typeof fundNames !== 'undefined' && fundNames[code])
+                        || (nameTd ? nameTd.getAttribute('data-val') : code),
+                    navdate: row.getAttribute('data-navdate') || '',
+                    latestNav: num(9),
+                    scale: scaleTd ? scaleTd.textContent.trim() : '--',
+                    fee: num(COL.FEE),
+                    feePur: num(COL.FEE_PUR),
+                    maxdd: num(COL.MAXDD),
+                    rebound: num(COL.REBOUND),
+                    recovery: num(COL.RECOVERY),
+                    recoveryDays: num(COL.RECOVERY_DAYS),
+                    today: num(COL.TODAY),
+                    week: num(COL.WEEK),
+                    month: num(COL.MONTH),
+                    quarter: num(COL.QUARTER),
+                    half: num(COL.HALF),
+                    year: num(COL.YEAR),
+                    ytd: num(COL.YTD),
+                    sharp1y: attrNum('data-sharp1y'),
+                    sharp3y: attrNum('data-sharp3y'),
+                    trackErr: attrNum('data-te'),
+                    peerAvg: attrNum('data-peer')
+                }};
+            }}
+
+            // ---------- 渲染 ----------
+            function pctCell(v) {{
+                if (v == null || !isFinite(v)) return '<td class="fcmp-val">--</td>';
+                const cls = v > 0 ? 'gain-positive' : (v < 0 ? 'gain-negative' : '');
+                const sign = v > 0 ? '+' : '';
+                return '<td class="fcmp-val ' + cls + '">' + sign + v.toFixed(2) + '%</td>';
+            }}
+            function plainCell(text) {{
+                return '<td class="fcmp-val">' + text + '</td>';
+            }}
+
+            function renderTable(payload, domRows) {{
+                const wrap = document.getElementById('cmpTableWrap');
+                if (!wrap) return;
+                const pal = palette();
+                const cols = payload.rows.map(function (r, i) {{
+                    return {{
+                        series: r,
+                        dom: domRows[r.code] || null,
+                        color: pal[i % pal.length]
+                    }};
+                }});
+                const colspan = cols.length + 1;
+
+                let html = '<table class="fcmp-table"><thead><tr><th>指标</th>';
+                cols.forEach(function (c) {{
+                    const name = c.series.name || (c.dom && c.dom.name) || c.series.code;
+                    html += '<th><div>'
+                        + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'
+                        + c.color + ';margin-right:4px;"></span>'
+                        + '<span class="fcmp-col-code">' + esc(c.series.code) + '</span>'
+                        + '<button type="button" class="fcmp-col-x" data-code="' + esc(c.series.code)
+                        + '" title="从对比中移除">×</button></div>'
+                        + '<div class="fcmp-col-head" title="' + esc(name) + '">' + esc(name) + '</div></th>';
+                }});
+                html += '</tr></thead><tbody>';
+
+                const rowOf = function (label, cellFn) {{
+                    let cells = '';
+                    cols.forEach(function (c) {{ cells += cellFn(c); }});
+                    return '<tr><td class="fcmp-label">' + label + '</td>' + cells + '</tr>';
+                }};
+
+                // A. 曲线口径
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">📈 区间表现（起点 = 100 · '
+                    + PERIOD_LABEL[period] + '）</td></tr>';
+                html += rowOf('区间收益', function (c) {{ return pctCell(c.series.ret); }});
+                html += rowOf('区间最大回撤', function (c) {{
+                    if (c.series.mdd == null) return plainCell('--');
+                    return '<td class="fcmp-val" style="color:#d93025;">'
+                        + Math.abs(c.series.mdd).toFixed(2) + '%</td>';
+                }});
+                html += rowOf('区间年化波动', function (c) {{ return plainCell(fmtPct(c.series.vol)); }});
+                html += rowOf('数据起点 / 点数', function (c) {{
+                    if (!c.series.points) {{
+                        return '<td class="fcmp-val fcmp-sub">'
+                            + (c.series.status === 'nodata' ? '无净值序列' : '区间内无净值') + '</td>';
+                    }}
+                    const tag = c.series.lateStart ? '（较晚）' : '';
+                    return '<td class="fcmp-val"><span class="fcmp-sub">' + esc(c.series.startDate)
+                        + tag + ' · ' + c.series.points + ' 点</span></td>';
+                }});
+
+                // B. 主表口径
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">📋 主表口径（后端按各自最新净值日计算）</td></tr>';
+                const domRow = function (label, key, kind) {{
+                    return rowOf(label, function (c) {{
+                        const d = c.dom;
+                        if (!d) return plainCell('--');
+                        const v = d[key];
+                        if (kind === 'int') return plainCell(v == null ? '--' : (v + ' 天'));
+                        if (kind === 'text') return plainCell(v == null || v === '' ? '--' : esc(String(v)));
+                        if (kind === 'num2') return plainCell(fmtNum(v, 2));
+                        return pctCell(v);
+                    }});
+                }};
+                html += domRow('近一周', 'week', 'pct');
+                html += domRow('近一月', 'month', 'pct');
+                html += domRow('近三月', 'quarter', 'pct');
+                html += domRow('近半年', 'half', 'pct');
+                html += domRow('近一年', 'year', 'pct');
+                html += domRow('今年内', 'ytd', 'pct');
+                html += domRow('今日涨跌', 'today', 'pct');
+                html += rowOf('最大回撤（当前窗口）', function (c) {{
+                    if (!c.dom || c.dom.maxdd == null) return plainCell('--');
+                    return '<td class="fcmp-val" style="color:#d93025;">' + c.dom.maxdd.toFixed(2) + '%</td>';
+                }});
+                html += domRow('自低点反弹', 'rebound', 'pct');
+                html += domRow('修复程度', 'recovery', 'pct');
+                html += domRow('修复时间', 'recoveryDays', 'int');
+                html += rowOf('最新净值', function (c) {{
+                    if (!c.dom || c.dom.latestNav == null) return plainCell('--');
+                    return '<td class="fcmp-val">' + c.dom.latestNav.toFixed(4)
+                        + (c.dom.navdate ? '<div class="fcmp-sub">' + esc(c.dom.navdate) + '</div>' : '')
+                        + '</td>';
+                }});
+                html += domRow('最新规模', 'scale', 'text');
+                html += rowOf('运作费（管+托+销）', function (c) {{
+                    if (!c.dom || c.dom.fee == null) return plainCell('--');
+                    return plainCell(c.dom.fee.toFixed(2) + '%');
+                }});
+                html += rowOf('申购费率', function (c) {{
+                    if (!c.dom || c.dom.feePur == null || c.dom.feePur >= 999) return plainCell('--');
+                    return plainCell(c.dom.feePur.toFixed(2) + '%');
+                }});
+
+                // C. 补充指标
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🧮 补充指标（来源：天天基金 tsdata）</td></tr>';
+                html += domRow('夏普（近1年）', 'sharp1y', 'num2');
+                html += domRow('夏普（近3年）', 'sharp3y', 'num2');
+                html += domRow('年化跟踪误差', 'trackErr', 'pct');
+                html += domRow('同类平均', 'peerAvg', 'pct');
+
+                html += '</tbody></table>';
+                wrap.innerHTML = html;
+            }}
+
+            function renderFoot(payload) {{
+                const el = document.getElementById('cmpFoot');
+                if (!el) return;
+                const noNav = payload.rows.filter(function (r) {{ return r.status === 'nodata'; }}).length;
+                const outside = payload.rows.filter(function (r) {{ return r.status === 'outside'; }}).length;
+                let msg = '① <strong>区间收益 / 区间最大回撤 / 区间年化波动</strong>由归一化曲线计算（首日 = 100），'
+                    + '基准日取所选基金里最晚的净值日；主表「近一月 / 近三月…」由后端按各基金自身最新净值日回溯自然月，'
+                    + '两者口径不同，相差 0.01~0.3 个百分点属正常。'
+                    + '② 「最大回撤 / 自低点反弹 / 修复程度」沿用主表当前统计窗口。'
+                    + '③ 交易日不同的品种（A股 / QDII / 加密 7×24）按日期并集 + 前向填充对齐，曲线的平段表示当日无净值。';
+                if (noNav) msg += '<br>④ 有 ' + noNav + ' 只没有净值序列，只参与指标表，不出曲线。';
+                if (outside) msg += '<br>④ 有 ' + outside + ' 只在所选区间内没有净值（新成立或数据缺失），曲线从略。';
+                el.innerHTML = msg;
+            }}
+
+            function renderChart(payload) {{
+                const canvas = document.getElementById('cmpChartCanvas');
+                const emptyEl = document.getElementById('cmpChartEmpty');
+                if (!canvas) return;
+                if (chart && typeof chart.destroy === 'function') {{
+                    chart.destroy();
+                    chart = null;
+                }}
+                const setEmpty = function (msg) {{
+                    if (emptyEl) {{
+                        emptyEl.textContent = msg;
+                        emptyEl.hidden = false;
+                    }}
+                    canvas.style.visibility = 'hidden';
+                }};
+                const clearEmpty = function () {{
+                    if (emptyEl) emptyEl.hidden = true;
+                    canvas.style.visibility = 'visible';
+                }};
+
+                if (typeof Chart === 'undefined') {{
+                    setEmpty('图表库尚未加载完成，稍后会自动重绘（下方指标表不受影响）。');
+                    return;
+                }}
+                const drawable = payload.rows.filter(function (r) {{ return r.points > 0; }});
+                if (!drawable.length) {{
+                    setEmpty('所选基金在该区间内都没有可用净值，换一个区间试试。');
+                    return;
+                }}
+                clearEmpty();
+
+                const thin = thinForChart(payload, MAX_CHART_POINTS);
+                const pal = palette();
+                const theme = chartTheme();
+
+                chart = new Chart(canvas.getContext('2d'), {{
+                    type: 'line',
+                    data: {{
+                        labels: thin.labels,
+                        datasets: thin.rows.map(function (r, i) {{
+                            return {{
+                                label: r.code + ' ' + (r.name || ''),
+                                data: r.norm,
+                                borderColor: pal[i % pal.length],
+                                backgroundColor: pal[i % pal.length],
+                                borderWidth: 1.6,
+                                pointRadius: 0,
+                                pointHoverRadius: 4,
+                                tension: 0.12,
+                                spanGaps: false,
+                                fill: false
+                            }};
+                        }})
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        interaction: {{ mode: 'index', intersect: false }},
+                        plugins: {{
+                            legend: {{
+                                position: 'bottom',
+                                labels: {{ boxWidth: 10, boxHeight: 10, font: {{ size: 10 }}, color: theme.text }}
+                            }},
+                            tooltip: {{
+                                mode: 'index',
+                                intersect: false,
+                                callbacks: {{
+                                    label: function (ctx) {{
+                                        const v = ctx.parsed.y;
+                                        if (v == null) return ctx.dataset.label + '：--';
+                                        const diff = v - 100;
+                                        const sign = diff >= 0 ? '+' : '';
+                                        return ctx.dataset.label + '：' + v.toFixed(2) + '（' + sign + diff.toFixed(2) + '%）';
+                                    }}
+                                }}
+                            }}
+                        }},
+                        scales: {{
+                            x: {{
+                                ticks: {{ maxTicksLimit: 8, maxRotation: 0, font: {{ size: 9 }}, color: theme.text }},
+                                grid: {{ display: false }}
+                            }},
+                            y: {{
+                                ticks: {{ font: {{ size: 9 }}, color: theme.text }},
+                                grid: {{ color: theme.grid }},
+                                title: {{ display: true, text: '区间起点 = 100', color: theme.text, font: {{ size: 10 }} }}
+                            }}
+                        }}
+                    }}
+                }});
+            }}
+
+            function render() {{
+                if (!selected.length) return;
+                const codes = selected.slice();
+                const months = PERIOD_MONTHS[period] == null ? 0 : PERIOD_MONTHS[period];
+                const anchor = commonAnchor(codes);
+                const slices = codes.map(function (code) {{ return sliceOne(code, anchor, months); }});
+                const payload = alignAndNormalize(slices);
+
+                const domRows = {{}};
+                codes.forEach(function (code) {{ domRows[code] = readDomMetrics(code); }});
+
+                const titleEl = document.getElementById('cmpTitle');
+                if (titleEl) {{
+                    titleEl.textContent = '⚖ 基金对比 · ' + selected.length + ' 只 · ' + PERIOD_LABEL[period];
+                }}
+                const anchorNote = document.getElementById('cmpAnchorNote');
+                if (anchorNote) {{
+                    anchorNote.textContent = payload.anchor
+                        ? ('基准日 ' + payload.anchor + '（取所选基金最晚净值日）')
+                        : '所选基金均无净值序列';
+                }}
+                renderChart(payload);
+                renderTable(payload, domRows);
+                renderFoot(payload);
+            }}
+
+            // ---------- 开关 ----------
+            function openModal() {{
+                if (selected.length < 2) {{
+                    flashHint('至少选择 2 只基金才能对比');
+                    return;
+                }}
+                const modal = document.getElementById('cmpModal');
+                if (!modal) return;
+                modal.classList.add('show');
+                isOpen = true;
+                document.querySelectorAll('.fcmp-period-btn').forEach(function (btn) {{
+                    btn.classList.toggle('active', btn.dataset.period === period);
+                }});
+                render();
+            }}
+            function closeModal() {{
+                const modal = document.getElementById('cmpModal');
+                if (modal) modal.classList.remove('show');
+                isOpen = false;
+                if (chart && typeof chart.destroy === 'function') {{
+                    chart.destroy();
+                    chart = null;
+                }}
+            }}
+
+            // ---------- 初始化 ----------
+            function init() {{
+                selected = sanitize(readSel());
+                writeSel();
+
+                const table = document.getElementById('fundTable');
+                if (table) {{
+                    table.addEventListener('change', function (e) {{
+                        const cb = e.target.closest('.cmp-check');
+                        if (!cb) return;
+                        if (!toggle(cb.dataset.code, cb.checked)) cb.checked = false;
+                    }});
+                }}
+
+                const chips = document.getElementById('cmpBarChips');
+                if (chips) {{
+                    chips.addEventListener('click', function (e) {{
+                        const btn = e.target.closest('.fcmp-chip-x');
+                        if (btn) toggle(btn.dataset.code, false);
+                    }});
+                }}
+                const startBtn = document.getElementById('cmpStartBtn');
+                if (startBtn) startBtn.addEventListener('click', openModal);
+                const clearBtn = document.getElementById('cmpClearBtn');
+                if (clearBtn) {{
+                    clearBtn.addEventListener('click', function () {{
+                        selected = [];
+                        writeSel();
+                        syncRowStates();
+                        refreshBar();
+                        if (isOpen) closeModal();
+                    }});
+                }}
+                const closeBtn = document.getElementById('cmpCloseBtn');
+                if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+                const modal = document.getElementById('cmpModal');
+                if (modal) {{
+                    modal.addEventListener('click', function (e) {{
+                        if (e.target === modal) closeModal();
+                    }});
+                }}
+
+                const periods = document.getElementById('cmpPeriods');
+                if (periods) {{
+                    periods.addEventListener('click', function (e) {{
+                        const btn = e.target.closest('.fcmp-period-btn');
+                        if (!btn) return;
+                        period = btn.dataset.period;
+                        document.querySelectorAll('.fcmp-period-btn').forEach(function (b) {{
+                            b.classList.toggle('active', b === btn);
+                        }});
+                        render();
+                    }});
+                }}
+
+                const tableWrap = document.getElementById('cmpTableWrap');
+                if (tableWrap) {{
+                    tableWrap.addEventListener('click', function (e) {{
+                        const btn = e.target.closest('.fcmp-col-x');
+                        if (!btn) return;
+                        toggle(btn.dataset.code, false);
+                    }});
+                }}
+
+                // 主题切换后重绘（监听注册在既有 themeToggle 之后，能读到新主题）
+                const themeBtn = document.getElementById('themeToggle');
+                if (themeBtn) {{
+                    themeBtn.addEventListener('click', function () {{
+                        if (isOpen) setTimeout(render, 0);
+                    }});
+                }}
+                // 资源（Chart / 净值脚本）就绪后补画一次
+                window.addEventListener('load', function () {{
+                    if (isOpen) render();
+                }});
+
+                syncRowStates();
+                refreshBar();
+            }}
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', init);
+            }} else {{
+                init();
+            }}
+
+            return {{
+                open: openModal,
+                close: closeModal,
+                isOpen: function () {{ return isOpen; }},
+                toggle: toggle,
+                syncRowStates: syncRowStates,
+                refreshBar: refreshBar
+            }};
+        }})();
+        window.CmpManager = CmpManager;
 
     </script>
     {macro_history_script}

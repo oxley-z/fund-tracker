@@ -25,3 +25,6 @@
 #   3) 入库后还能用 git log 追溯某只基金某季度的持仓是何时变更的。
 $*
 _sync_existing.py
+
+# 本地预览/联调用的临时构建产物（python main.py --out ./_cmp_build/index.html）
+_cmp_build/
