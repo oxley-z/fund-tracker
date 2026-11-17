@@ -1539,6 +1539,27 @@ INDEX_POINT_SOURCE_LABELS = {
     "eastmoney": "东方财富指数日线",
 }
 
+# ===== 指数「年内最大收盘价回撤」=====
+# 口径：每个自然年内，用当年内的收盘价滚动高点算最大回撤（peak 起算点不跨年），
+#      即「年内从阶段高点到之后阶段低点的最大跌幅」，与年度涨跌幅（12/31 对 12/31）不同。
+# 数据源用指数日线（腾讯/新浪），只缓存算好的年度结果，日线本身不入库。
+ANNUAL_DD_CACHE = os.path.join("data", "index_annual_drawdown.json")
+ANNUAL_DD_CACHE_VERSION = 1
+ANNUAL_DD_START_YEAR = 2000          # 与「指数历年回报（2000 年至今）」对齐
+ANNUAL_DD_MIN_BARS = 5               # 年内有效交易日少于该值则不参与（新上市/数据残缺）
+ANNUAL_DD_TARGETS = {
+    # 坑：东财 100.NDX 实际返回的是纳斯达克综合指数（2000-03-10 收盘 5048.62，
+    # 那是综合指数的历史高点），与卡片上的「纳指100」不同标的，只能走腾讯/新浪的 .NDX
+    "纳指100":        [("tx_us", "usNDX"), ("sina_us", ".NDX")],
+    "标普500":        [("eastmoney", "100.SPX"), ("tx_us", "us.INX"), ("sina_us", ".INX")],
+    # 费城半导体没有长期免费日线，新浪只有 2014 年起，故该指数从 2014 年算起
+    "费城半导体指数": [("sina_us", ".SOX"), ("eastmoney", "100.SOX")],
+    "沪深300":        [("eastmoney", "1.000300"), ("tx_a", "sh000300"), ("sina_a", "sh000300")],
+    "科创50":         [("eastmoney", "1.000688"), ("tx_a", "sh000688"), ("sina_a", "sh000688")],
+    # 东财的 HSTECH 用官方回溯序列（2014-12-31=3000）会与 2020 年起的年度收益错位，改用腾讯
+    "恒生科技":       [("tx_hk", "hkHSTECH"), ("eastmoney", "124.HSTECH")],
+}
+
 MACRO_HISTORY_VALUE_LIMITS = {
     "gold_london": (100.0, 20000.0),
     "silver_london": (2.0, 80.0),
@@ -2224,20 +2245,24 @@ def _fetch_tencent_index_daily(kind, symbol, start_year=2016):
     return _compact_macro_points(points)
 
 
-def _fetch_eastmoney_index_daily(secid):
-    """东方财富日线：只做一次快速尝试，失败立即交给下一个源。"""
+def _fetch_eastmoney_index_daily(secid, beg="20160101", timeout=8):
+    """东方财富日线：只做一次快速尝试，失败立即交给下一个源。
+
+    beg 可覆盖起点（年内回撤要回溯到 2000 年）；东财一次请求就返回全历史，
+    比腾讯按年滚动拼接（每只 20+ 请求、易被限流）快得多。
+    """
     query = urllib.parse.urlencode({
         "secid": secid,
         "fields1": "f1,f2,f3,f4,f5,f6",
         "fields2": "f51,f53",
         "klt": "101",
         "fqt": "1",
-        "beg": "20160101",
+        "beg": beg,
         "end": now_beijing().strftime("%Y%m%d"),
         "lmt": "1000000",
     })
     url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{query}"
-    payload = json.loads(_http_text(url, "https://quote.eastmoney.com/", timeout=8))
+    payload = json.loads(_http_text(url, "https://quote.eastmoney.com/", timeout=timeout))
     rows = (payload.get("data") or {}).get("klines") or []
     points = {}
     for row in rows:
@@ -2314,6 +2339,153 @@ def fetch_index_point_history(pe_dates_by_key):
     else:
         print("📈 宽基指数点位: 本轮未取到新数据，使用本地缓存")
     return result
+
+
+def _annual_mdd_from_points(points):
+    """按自然年切分日线收盘价，算每年内的最大收盘价回撤。
+
+    年内口径：高点只能取当年内的收盘价（不跨年回溯），低点必须紧跟其后，
+    因此「2020 年从 3 月高点跌到 6 月低点」才算，跨年的跌幅不计入任何一年。
+    返回 {year: {mdd, peak_date, trough_date, first, last, n}}，mdd 为负百分比。
+    """
+    by_year = {}
+    for row in points or []:
+        try:
+            date_str = str(row[0])
+            value = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if len(date_str) < 10 or value <= 0:
+            continue
+        try:
+            year = int(date_str[:4])
+        except ValueError:
+            continue
+        by_year.setdefault(year, []).append((date_str, value))
+
+    out = {}
+    for year, rows in by_year.items():
+        rows.sort(key=lambda item: item[0])
+        if len(rows) < ANNUAL_DD_MIN_BARS:
+            continue
+        peak_value = None
+        peak_date = None
+        worst = 0.0
+        worst_peak = None
+        worst_trough = None
+        for date_str, value in rows:
+            if peak_value is None or value > peak_value:
+                peak_value = value
+                peak_date = date_str
+            if peak_value:
+                drawdown = value / peak_value - 1.0
+                if drawdown < worst:
+                    worst = drawdown
+                    worst_peak = peak_date
+                    worst_trough = date_str
+        out[year] = {
+            "mdd": round(worst * 100.0, 2),
+            "peak_date": worst_peak or rows[0][0],
+            "trough_date": worst_trough or rows[0][0],
+            "first": rows[0][0],
+            "last": rows[-1][0],
+            "n": len(rows),
+        }
+    return out
+
+
+def _read_annual_dd_cache():
+    try:
+        with open(ANNUAL_DD_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_annual_dd_cache(payload):
+    try:
+        os.makedirs(os.path.dirname(ANNUAL_DD_CACHE) or ".", exist_ok=True)
+        tmp = ANNUAL_DD_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, ANNUAL_DD_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ 年内回撤缓存写入失败: {e}")
+
+
+def _fetch_annual_dd_daily(sources):
+    """按配置顺序抓指数日线，拿到足够长的序列就返回 (points, 来源)。"""
+    beg = f"{ANNUAL_DD_START_YEAR}0101"
+    for kind, symbol in sources:
+        try:
+            if kind == "eastmoney":
+                points = _fetch_eastmoney_index_daily(symbol, beg=beg, timeout=15)
+            elif kind.startswith("tx"):
+                points = _fetch_tencent_index_daily(kind, symbol, start_year=ANNUAL_DD_START_YEAR)
+            elif kind.startswith("sina"):
+                points = _fetch_sina_index_daily(kind, symbol)
+            else:
+                points = []
+        except Exception as exc:
+            print(f"    [warn] 年内回撤 {symbol} {kind} 获取失败: {exc}")
+            points = []
+        if len(points) >= ANNUAL_DD_MIN_BARS:
+            return points, INDEX_POINT_SOURCE_LABELS.get(kind, kind)
+    return [], None
+
+
+def fetch_index_annual_drawdown():
+    """抓取/更新各指数「年内最大收盘价回撤」，结果落独立缓存。
+
+    东财一次请求就返回全历史（约 1s/只），所以每次跑都整段重算，逻辑简单；
+    新数据比缓存短（降级到新浪 3000 根）时按年份合并，历史年份不会丢。
+    """
+    cached = _read_annual_dd_cache()
+    cached_items = cached.get("items") or {}
+    version_ok = cached.get("version") == ANNUAL_DD_CACHE_VERSION
+
+    result = {
+        "generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
+        "version": ANNUAL_DD_CACHE_VERSION,
+        "items": {},
+    }
+    refreshed = 0
+    for name, sources in ANNUAL_DD_TARGETS.items():
+        old = cached_items.get(name) or {}
+        old_years = (old.get("years") or {}) if version_ok else {}
+
+        daily, used_source = _fetch_annual_dd_daily(sources)
+        if not daily:
+            if old_years:
+                result["items"][name] = old
+                print(f"    [warn] 年内回撤 {name} 数据源全失败，沿用缓存")
+            continue
+
+        fresh_years = _annual_mdd_from_points(daily)
+        if not fresh_years:
+            continue
+        # 历史年份已定型：本次能算到的年份用新值，算不到的保留旧值
+        years = dict(old_years)
+        for year, record in fresh_years.items():
+            years[str(year)] = record
+
+        sorted_years = sorted(years.keys(), key=lambda y: int(y))
+        result["items"][name] = {
+            "source": used_source or old.get("source") or "",
+            "start": years[sorted_years[0]]["first"],
+            "end": years[sorted_years[-1]]["last"],
+            "years": years,
+        }
+        refreshed += 1
+
+    if refreshed:
+        _write_annual_dd_cache(result)
+        print(f"📉 年内最大回撤: 更新 {refreshed}/{len(ANNUAL_DD_TARGETS)} 条")
+    else:
+        print("📉 年内最大回撤: 本轮未取到新数据，使用本地缓存")
+    return result
+
 
 
 # ==============================================================================
@@ -5391,7 +5563,8 @@ CMP_META_JS = r'''
             };
             // 只认「纯数值」单元格：带日期、区间标签或文字的列一律跳过，避免误标
             function parseCellNum(td) {
-                const t = (td.textContent || '').replace(/\s+/g, '');
+                // 去掉可能已加上的「优」角标，保证重复调用时仍然解析得出数值
+                const t = (td.textContent || '').replace(/\s+/g, '').replace(/^优/, '');
                 if (!t || t === '--') return null;
                 const m = t.match(/^([+\-]?)(\d[\d,]*(?:\.\d+)?)(%|亿|天)?$/);
                 if (!m) return null;
@@ -5417,12 +5590,159 @@ CMP_META_JS = r'''
                         if (v == null || Math.abs(v - best) > 1e-9) return;
                         cells[i].classList.add('fcmp-best');
                         cells[i].setAttribute('title', '本行更优');
+                        // 除了琥珀底色，再补一个「优」角标 —— 底色在深色主题/低亮度屏幕上不够醒目
+                        if (!cells[i].querySelector('.fcmp-best-tag')) {
+                            const tag = document.createElement('i');
+                            tag.className = 'fcmp-best-tag';
+                            tag.textContent = '优';
+                            cells[i].insertBefore(tag, cells[i].firstChild);
+                        }
                     });
                 });
             }
 '''
 
-def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None, index_valuation_history=None, index_point_history=None):
+# 年内最大收盘价回撤图：负值柱 + 分档配色 + 平均线，样式对齐「纳指100 每年腰斩时刻」那张图
+ANNUAL_DD_JS = r'''
+        function initAnnualDDChart(idxName) {
+            var canvas = document.getElementById('annual-dd-chart-' + idxName);
+            if (!canvas || typeof Chart === 'undefined') return;
+            if (canvas._chartInstance) {
+                try { canvas._chartInstance.destroy(); } catch (e) {}
+                canvas._chartInstance = null;
+            }
+            var rows = [];
+            try { rows = JSON.parse(canvas.getAttribute('data-dd')) || []; } catch (e) { return; }
+            if (!rows.length) return;
+
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var textColor = isDark ? '#b9c0c8' : '#5f6368';
+            var labels = rows.map(function (r) { return r.partial ? String(r.year) + '*' : String(r.year); });
+            var values = rows.map(function (r) { return r.mdd == null ? 0 : r.mdd; });
+
+            // 分档配色：≥20% 深红（腰斩级）、10~20% 浅红、不足 10% 绿
+            var fills = values.map(function (v) {
+                if (v <= -20) return isDark ? 'rgba(198, 40, 40, 0.92)' : 'rgba(183, 28, 28, 0.90)';
+                if (v <= -10) return isDark ? 'rgba(239, 154, 154, 0.85)' : 'rgba(230, 124, 115, 0.90)';
+                return 'rgba(76, 175, 80, 0.80)';
+            });
+            var borders = values.map(function (v) {
+                if (v <= -20) return '#9b1c1c';
+                if (v <= -10) return '#d9776e';
+                return '#3d8b40';
+            });
+
+            var valid = values.filter(function (v) { return isFinite(v); });
+            var avg = valid.length ? valid.reduce(function (a, b) { return a + b; }, 0) / valid.length : 0;
+            var deepest = valid.length ? Math.min.apply(null, valid) : -20;
+
+            // 柱底文字：太浅的年份不画，避免和相邻年份挤在一起
+            var valueLabels = {
+                id: 'annualDDLabels_' + idxName,
+                afterDatasetsDraw: function (chart) {
+                    var ctx = chart.ctx;
+                    var meta = chart.getDatasetMeta(0);
+                    var area = chart.chartArea;
+                    ctx.save();
+                    ctx.font = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    meta.data.forEach(function (bar, i) {
+                        var v = values[i];
+                        if (!isFinite(v) || v > -1) return;
+                        var barH = Math.abs(bar.y - bar.base);
+                        if (barH < 14) return;
+                        var label = v.toFixed(1) + '%';
+                        if (bar.width < 26) label = v.toFixed(0) + '%';
+                        if (bar.width < 12) return;
+                        var y = Math.min(bar.y + 2, area.bottom + 2);
+                        ctx.fillStyle = v <= -20 ? (isDark ? '#ff8a80' : '#b71c1c') : textColor;
+                        ctx.font = (v <= -20 ? '700 ' : '600 ') + '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
+                        ctx.fillText(label, bar.x, y);
+                    });
+                    ctx.restore();
+                }
+            };
+
+            var avgLine = {
+                id: 'annualDDAvg_' + idxName,
+                afterDatasetsDraw: function (chart) {
+                    var ctx = chart.ctx;
+                    var area = chart.chartArea;
+                    var y = chart.scales.y.getPixelForValue(avg);
+                    if (y < area.top || y > area.bottom) return;
+                    ctx.save();
+                    ctx.strokeStyle = '#f39c12';
+                    ctx.setLineDash([5, 4]);
+                    ctx.lineWidth = 1.2;
+                    ctx.beginPath();
+                    ctx.moveTo(area.left, y);
+                    ctx.lineTo(area.right, y);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            };
+
+            var yMin = Math.min(-20, Math.floor(deepest * 1.14 / 5) * 5);
+
+            canvas._chartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '年内最大回撤',
+                        data: values,
+                        backgroundColor: fills,
+                        borderColor: borders,
+                        borderWidth: 1,
+                        borderRadius: 2,
+                        barPercentage: 0.82,
+                        categoryPercentage: 0.92,
+                        maxBarThickness: 44
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: { padding: { top: 6, bottom: 4 } },
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(30, 30, 30, 0.92)',
+                            padding: 9,
+                            cornerRadius: 6,
+                            callbacks: {
+                                title: function (items) { return '年份: ' + items[0].label.replace('*', '（进行中）'); },
+                                label: function (c) {
+                                    var row = rows[c.dataIndex] || {};
+                                    var out = ['年内最大回撤: ' + (c.parsed.y || 0).toFixed(2) + '%'];
+                                    if (row.peak) out.push('高点（收盘）: ' + row.peak);
+                                    if (row.trough) out.push('低点（收盘）: ' + row.trough);
+                                    return out;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { font: { size: 9 }, maxRotation: 90, autoSkip: false },
+                            grid: { display: false }
+                        },
+                        y: {
+                            max: 0,
+                            min: yMin,
+                            ticks: { font: { size: 9 }, stepSize: 10, callback: function (v) { return v + '%'; } },
+                            grid: { color: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)' }
+                        }
+                    }
+                },
+                plugins: [avgLine, valueLabels]
+            });
+        }
+'''
+
+def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None, index_valuation_history=None, index_point_history=None, index_annual_drawdown=None):
     CPO_CODES = {"022365", "540010", "002112", "011892", "021528", "009645", "011370", "011452", "016371", "001956", "016234", "016173", "006616", "018291", "020661", "017462", "001438", "008984", "180031", "004320", "027063"}
     STORAGE_CODES = {"025500", "025209", "018816", "014320"}
     SEMICONDUCTOR_CODES = {"024418", "024975", "020640", "019633", "024424", "017811", "013841", "007491", "020629", "017747", "026633", "162214", "007343", "018777"}
@@ -7342,6 +7662,57 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 ensure_ascii=False
             )
 
+            # ===== 年内最大收盘价回撤（独立视图）=====
+            _dd_item = ((index_annual_drawdown or {}).get("items") or {}).get(idx_name) or {}
+            _dd_years = _dd_item.get("years") or {}
+            _dd_rows = []
+            for _y in sorted(_dd_years, key=lambda x: int(x)):
+                _rec = _dd_years[_y] or {}
+                _rows_for_year = _rec.get("last", "")
+                _dd_rows.append({
+                    "year": int(_y),
+                    "mdd": _rec.get("mdd"),
+                    "peak": _rec.get("peak_date"),
+                    "trough": _rec.get("trough_date"),
+                    # 当年还没走完（最后一个交易日不在 12 月）→ 标记为进行中
+                    "partial": not str(_rows_for_year).startswith(f"{_y}-12"),
+                })
+            dd_data_json = json.dumps(_dd_rows, ensure_ascii=False)
+            _mdd_vals = [row["mdd"] for row in _dd_rows if row["mdd"] is not None]
+            if _mdd_vals:
+                _dd_avg = sum(_mdd_vals) / len(_mdd_vals)
+                _dd_deep = min(_mdd_vals)
+                _dd_deep_year = [row["year"] for row in _dd_rows if row["mdd"] == _dd_deep][0]
+                _dd_n20 = sum(1 for v in _mdd_vals if v <= -20)
+                _dd_n10 = sum(1 for v in _mdd_vals if v > -10)
+                _dd_total = len(_mdd_vals)
+                dd_stats_html = f'''
+                <div class="annual-stats-footer annual-dd-stats">
+                    <div class="annual-stat-item">
+                        <span class="annual-stat-label">平均每年最大回撤</span>
+                        <span class="annual-stat-value" style="color:#c62828;">{_dd_avg:.1f}%</span>
+                        <span class="annual-stat-sub">{_dd_total} 年</span>
+                    </div>
+                    <div class="annual-stat-item">
+                        <span class="annual-stat-label">最深回撤</span>
+                        <span class="annual-stat-value" style="color:#c62828;">{_dd_deep:.1f}%</span>
+                        <span class="annual-stat-sub">{_dd_deep_year} 年</span>
+                    </div>
+                    <div class="annual-stat-item">
+                        <span class="annual-stat-label">回撤达 20%</span>
+                        <span class="annual-stat-value">{_dd_n20} 次</span>
+                        <span class="annual-stat-sub">占比 {_dd_n20 / _dd_total * 100:.0f}%</span>
+                    </div>
+                    <div class="annual-stat-item">
+                        <span class="annual-stat-label">回撤不足 10%</span>
+                        <span class="annual-stat-value" style="color:#188038;">{_dd_n10} 年</span>
+                        <span class="annual-stat-sub">仅 {_dd_n10 / _dd_total * 100:.0f}%</span>
+                    </div>
+                </div>
+                '''
+            else:
+                dd_stats_html = '<div class="annual-dd-empty">该指数暂无日线数据，无法计算年内回撤</div>'
+
             index_annual_html += f'''
             <div class="metric-card" style="margin-bottom:0; padding: 16px; display: flex; flex-direction: column;">
                 <div class="metric-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:15px; flex-shrink: 0; flex-wrap: wrap; gap: 8px;">
@@ -7352,6 +7723,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         <button class="mode-toggle-btn" data-idx="{idx_name}" data-mode="card" onclick="toggleAnnualView('{idx_name}', 'card')">📋 卡片</button>
                         <button class="mode-toggle-btn active" data-idx="{idx_name}" data-mode="heatmap" onclick="toggleAnnualView('{idx_name}', 'heatmap')">🔥 热力图</button>
                         <button class="mode-toggle-btn" data-idx="{idx_name}" data-mode="bar" onclick="toggleAnnualView('{idx_name}', 'bar')">📊 柱状图</button>
+                        <button class="mode-toggle-btn" data-idx="{idx_name}" data-mode="dd" onclick="toggleAnnualView('{idx_name}', 'dd')" title="每个自然年内的最大收盘价回撤（年内峰值→随后谷值）">📉 年内回撤</button>
                     </div>
                 </div>
                 <div id="annual-view-{idx_name}" class="annual-view-container" style="flex: 1; min-height: 0;">
@@ -7420,6 +7792,27 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             index_annual_html += f'<div id="annual-bar-{idx_name}" class="annual-mode-content" style="display:none;">'
             index_annual_html += f'<div style="height: 280px; width: 100%; position: relative;"><canvas id="annual-bar-chart-{idx_name}" data-bar=\'{bar_data_json}\'></canvas></div>'
             index_annual_html += stats_html
+            index_annual_html += '</div>'
+
+            # --- 视图 4：年内最大收盘价回撤（默认隐藏）---
+            _dd_span = ""
+            if _dd_item.get("start"):
+                _dd_span = f"数据区间 {_dd_item.get('start')} ~ {_dd_item.get('end', '')}"
+            index_annual_html += f'<div id="annual-dd-{idx_name}" class="annual-mode-content" style="display:none;">'
+            index_annual_html += f'<div style="height: 300px; width: 100%; position: relative;"><canvas id="annual-dd-chart-{idx_name}" data-dd=\'{dd_data_json}\'></canvas></div>'
+            index_annual_html += dd_stats_html
+            index_annual_html += (
+                '<div class="annual-dd-note">'
+                '口径：每个自然年内的<b>最大收盘价回撤</b>（年内阶段高点 → 随后阶段低点，高点不跨年回溯），'
+                '不是年度涨跌幅，也不是跨年度最大回撤。'
+                '<span class="annual-dd-legend">'
+                '<i style="background:#b71c1c;"></i>≥20%　'
+                '<i style="background:#ef8a8a;"></i>10%~20%　'
+                '<i style="background:#4caf50;"></i>不足10%'
+                '</span>'
+                f'<span class="annual-dd-src">{_dd_span}　{_dd_item.get("source", "")}</span>'
+                '</div>'
+            )
             index_annual_html += '</div>'
 
             index_annual_html += '</div>'  # 关闭 annual-view-container
@@ -8936,9 +9329,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             display: flex;
             flex-direction: column;
             gap: 20px;
-            max-width: 1440px;
+            /* 原来是 1440px + 左右各 5%：2K/带鱼屏上两侧会空出 400px 以上。
+               现在内容随屏幕走（上限 2160），左右只留 18px 呼吸位。 */
+            max-width: 2160px;
             margin: 0 auto;
-            padding: 24px 5%;
+            padding: 24px 18px;
             width: 100%;
             box-sizing: border-box;
         }}
@@ -11553,6 +11948,51 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .annual-mode-content {{
             padding-top: 4px;
         }}
+        /* ===== 指数历年回报 - 年内最大回撤视图 ===== */
+        /* 切到回撤视图时卡片撑满整行：20+ 根柱子在半栏宽度里会挤成一片 */
+        .index-annual-grid > .metric-card.annual-card-wide {{
+            grid-column: 1 / -1;
+        }}
+        .annual-dd-stats {{
+            margin-top: 6px;
+        }}
+        .annual-dd-stats .annual-stat-value {{
+            font-variant-numeric: tabular-nums;
+        }}
+        .annual-dd-note {{
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed var(--border);
+            font-size: 10.5px;
+            line-height: 1.65;
+            color: var(--footer-text);
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px 10px;
+        }}
+        .annual-dd-note b {{ color: var(--text); }}
+        .annual-dd-legend {{
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            white-space: nowrap;
+        }}
+        .annual-dd-legend i {{
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            border-radius: 2px;
+            margin-left: 4px;
+        }}
+        .annual-dd-src {{ margin-left: auto; white-space: nowrap; }}
+        .annual-dd-empty {{
+            padding: 28px 0;
+            text-align: center;
+            font-size: 12px;
+            color: var(--footer-text);
+        }}
+
         /* ===== 指数历年回报 - 热力图单格悬停高亮 ===== */
         .annual-heatmap-cell {{
             transition: transform 0.15s ease, outline 0.15s ease;
@@ -11580,12 +12020,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         #fundView.simple-mode .th-full {{ display: none; }}
         #fundView.simple-mode .th-simple {{ display: inline; }}
 
-        /* 简洁模式：整体布局参照首页 —— 两侧各留 5% 空白 */
+        /* 简洁模式：与首页同一套留白规则（左右 18px，上限 2160） */
         #fundView.simple-mode {{
-            padding-left: 5%;
-            padding-right: 5%;
+            padding-left: 18px;
+            padding-right: 18px;
             box-sizing: border-box;
-            max-width: 1440px;
+            max-width: 2160px;
             margin: 0 auto;
             width: 100%;
         }}
@@ -11711,6 +12151,31 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             accent-color: var(--link-color);
         }}
         .cmp-check:focus-visible {{ outline: 2px solid var(--link-color); outline-offset: 1px; }}
+
+        /* 对比选择是「按需打开」的：默认首列只放自选星标，
+           点工具栏的「⚖ 基金对比」后才把星标换成勾选框（两者只显示一个），
+           避免每行常驻一个方框，把收藏列的视觉噪音拉满。 */
+        .fav-tools .cmp-check {{ display: none; }}
+        #fundView.cmp-mode .fav-tools .cmp-check {{ display: inline-block; }}
+        #fundView.cmp-mode .fav-tools .star-btn {{ display: none; }}
+
+        .cmp-head-cmp {{ display: none; }}
+        #fundView.cmp-mode .cmp-head-normal {{ display: none; }}
+        #fundView.cmp-mode .cmp-head-cmp {{ display: inline; }}
+
+        /* 工具栏上的对比开关：未开启时描边按钮，开启后实心，状态一眼可辨 */
+        #cmpToggleBtn.cmp-toggle-btn {{
+            background: transparent;
+            color: var(--link-color);
+            border: 1px solid var(--link-color);
+            font-weight: 600;
+        }}
+        #cmpToggleBtn.cmp-toggle-btn:hover {{ background: var(--hover-bg); }}
+        #cmpToggleBtn.cmp-toggle-btn.active {{
+            background: var(--link-color);
+            color: #fff;
+            border-color: var(--link-color);
+        }}
 
         /* 选中行：背景打在 td 上，才能压过 tr:hover */
         #fundTable tbody tr.cmp-selected > td {{ background-color: var(--cmp-sel-bg); }}
@@ -11918,6 +12383,25 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
         [data-theme="dark"] .fcmp-table td.fcmp-best {{
             background: rgba(249, 171, 0, 0.22);
+        }}
+        /* 「优」角标：光靠底色在暗色主题/低亮度屏上不好认，补一个文字标记 */
+        .fcmp-best-tag {{
+            display: inline-block;
+            margin-right: 3px;
+            padding: 0 3px;
+            border-radius: 3px;
+            background: #f9ab00;
+            color: #3d2b00;
+            font-size: 9px;
+            font-style: normal;
+            font-weight: 800;
+            line-height: 13px;
+            vertical-align: 1px;
+            letter-spacing: 0;
+        }}
+        [data-theme="dark"] .fcmp-best-tag {{
+            background: #ffc14d;
+            color: #2b1d00;
         }}
         .fcmp-legend {{
             display: inline-flex;
@@ -12389,6 +12873,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             <option value="all">统计区间全序列</option>
                         </select>
                         <button id="gDcaApplyBtn">计算并刷新排序</button>
+                        <button id="cmpToggleBtn" type="button" class="cmp-toggle-btn" aria-pressed="false" title="进入对比选择：首列由「自选星标」切换为「勾选框」，最多选 6 只">⚖ 基金对比</button>
                     </div>
                 </div>
             </div>
@@ -12397,7 +12882,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <table id="fundTable">
                     <thead>
                         <tr>
-                            <th data-col="0" title="☆ 点击加入自选；下方方框勾选可加入对比（最多 6 只）" onclick="handleHeaderClick(0)"><span class="th-full">收藏</span><span class="th-simple">★</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="0" title="☆ 点击加入自选；点「⚖ 基金对比」后可勾选加入对比（最多 6 只）" onclick="handleHeaderClick(0)"><span class="th-full cmp-head-normal">收藏</span><span class="th-simple cmp-head-normal">★</span><span class="cmp-head-cmp">对比</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="1" onclick="handleHeaderClick(1)"><span class="th-full">代码</span><span class="th-simple">代码</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="2" onclick="handleHeaderClick(2)"><span class="th-full">基金名称 / 赎回费率阶梯</span><span class="th-simple">名称</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="3" onclick="handleHeaderClick(3)"><span class="th-full">最新规模</span><span class="th-simple">规模</span> <span class="sort-icon">⇅</span></th>
@@ -12430,7 +12915,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             <div class="footer-note">
                 <div class="footer-left">
-                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；勾选 ☆ 下方的方框可把基金加入对比（最多 6 只），底部浮条点「开始对比」即可看归一化净值曲线与指标横向对比（含资产配置、持股集中度、十大重仓、持有人结构、申购限额，每行更优值带琥珀底色）；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方是最近 8 个季度的前十大持仓 + 持有人结构饼图（QDII 基金另附国家/地区配置），<strong>季度条可横向滚动</strong>，滚到最右侧点「<strong>加载更早季度</strong>」即可回溯该基金全部历史季度；下方依次为年度收益率与双轴走势图。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>，浮窗内「上季 / 本季」两列并排对照、点表头可按占净值或环比变化量排序、底部可展开本季退出披露名单的个股；季度切换支持 chips 与 ‹ › 翻页。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
+                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；点工具栏「<strong>⚖ 基金对比</strong>」后首列切换成勾选框（此时自选星标隐藏），勾选最多 6 只，底部浮条点「开始对比」即可看归一化净值曲线与指标横向对比（含资产配置、持股集中度、十大重仓、持有人结构、申购限额，每行更优值标「<strong>优</strong>」）；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方是最近 8 个季度的前十大持仓 + 持有人结构饼图（QDII 基金另附国家/地区配置），<strong>季度条可横向滚动</strong>，滚到最右侧点「<strong>加载更早季度</strong>」即可回溯该基金全部历史季度；下方依次为年度收益率与双轴走势图。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>，浮窗内「上季 / 本季」两列并排对照、点表头可按占净值或环比变化量排序、底部可展开本季退出披露名单的个股；季度切换支持 chips 与 ‹ › 翻页。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
                 </div>
                 <div class="footer-right">
                     <span>⏱️ 统计更新于: <strong>{update_time_str}</strong></span>
@@ -12841,9 +13326,16 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             if (cardView) cardView.style.display = (mode === 'card') ? 'block' : 'none';
             if (heatmapView) heatmapView.style.display = (mode === 'heatmap') ? 'block' : 'none';
             if (barView) barView.style.display = (mode === 'bar') ? 'block' : 'none';
+            const ddView = document.getElementById('annual-dd-' + idxName);
+            if (ddView) ddView.style.display = (mode === 'dd') ? 'block' : 'none';
+            // 年内回撤要跟 20 多根柱子并排看，双列卡片太窄会把年份挤成一团，切到该视图时撑满整行
+            const cardEl = container.closest('.metric-card');
+            if (cardEl) cardEl.classList.toggle('annual-card-wide', mode === 'dd');
 
             if (mode === 'bar') {{
                 setTimeout(() => initAnnualBarChart(idxName), 60);
+            }} else if (mode === 'dd') {{
+                setTimeout(() => initAnnualDDChart(idxName), 60);
             }}
         }}
 
@@ -12953,6 +13445,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 plugins: [avgLinePlugin]
             }});
         }}
+
+        {ANNUAL_DD_JS}
 
         // 自选管理模块 (Local Storage)
         const FavManager = {{
@@ -15024,6 +15518,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             let period = 'quarter';
             let chart = null;
             let isOpen = false;
+            let cmpMode = false;   // 对比选择模式：由工具栏「⚖ 基金对比」开关，默认关闭
             let hintTimer = null;
 
             // ---------- 小工具 ----------
@@ -15129,12 +15624,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 Object.keys(map).forEach(function (code) {{
                     const row = map[code];
                     const on = isSel(code);
-                    row.classList.toggle('cmp-selected', on);
+                    // 行高亮只在对比模式里显示，否则首列没勾选框、行却被染色会让人摸不着头脑
+                    row.classList.toggle('cmp-selected', on && cmpMode);
                     const cb = row.querySelector('.cmp-check');
                     if (cb && cb.checked !== on) cb.checked = on;
                 }});
                 const view = document.getElementById('fundView');
-                if (view) view.classList.toggle('cmp-bar-on', selected.length > 0);
+                if (view) view.classList.toggle('cmp-bar-on', cmpMode && selected.length > 0);
             }}
             function refreshBar() {{
                 const bar = document.getElementById('cmpBar');
@@ -15145,7 +15641,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     const row = map[code];
                     if (row && row.style.display === 'none') hiddenCount++;
                 }});
-                bar.hidden = selected.length === 0;
+                bar.hidden = !cmpMode || selected.length === 0;
 
                 const countEl = document.getElementById('cmpBarCount');
                 if (countEl) {{
@@ -15166,7 +15662,22 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 if (startBtn) startBtn.disabled = selected.length < 2;
 
                 const view = document.getElementById('fundView');
-                if (view) view.classList.toggle('cmp-bar-on', selected.length > 0);
+                if (view) view.classList.toggle('cmp-bar-on', cmpMode && selected.length > 0);
+            }}
+
+            // ---------- 对比模式开关 ----------
+            function setMode(on) {{
+                cmpMode = !!on;
+                const view = document.getElementById('fundView');
+                if (view) view.classList.toggle('cmp-mode', cmpMode);
+                const btn = document.getElementById('cmpToggleBtn');
+                if (btn) {{
+                    btn.classList.toggle('active', cmpMode);
+                    btn.setAttribute('aria-pressed', cmpMode ? 'true' : 'false');
+                    btn.textContent = cmpMode ? '✕ 退出对比' : '⚖ 基金对比';
+                }}
+                syncRowStates();
+                refreshBar();
             }}
 
             // ---------- 日期与序列 ----------
@@ -15682,6 +16193,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 }}
                 const startBtn = document.getElementById('cmpStartBtn');
                 if (startBtn) startBtn.addEventListener('click', openModal);
+                const modeBtn = document.getElementById('cmpToggleBtn');
+                if (modeBtn) {{
+                    modeBtn.addEventListener('click', function () {{ setMode(!cmpMode); }});
+                }}
                 const clearBtn = document.getElementById('cmpClearBtn');
                 if (clearBtn) {{
                     clearBtn.addEventListener('click', function () {{
@@ -15751,6 +16266,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 close: closeModal,
                 isOpen: function () {{ return isOpen; }},
                 toggle: toggle,
+                setMode: setMode,
+                isMode: function () {{ return cmpMode; }},
                 syncRowStates: syncRowStates,
                 refreshBar: refreshBar
             }};
@@ -16713,13 +17230,14 @@ def main():
         print("=======================================================\n")
 
     print(f"统计区间: {args.start} 至 {args.end}")
-    print("⏳ 正在并行抓取：核心宏观指标 / 指数估值 / 指数年度数据 / 美联储利率观测器...")
+    print("⏳ 正在并行抓取：核心宏观指标 / 指数估值 / 指数年度数据 / 年内回撤 / 美联储利率观测器...")
 
     # 每个并行任务用自己独立的 opener（RequestsOpener.session 非线程安全）
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         fut_metrics    = ex.submit(lambda: fetch_home_market_metrics(get_direct_opener()))
         fut_valuations = ex.submit(lambda: fetch_index_valuations(get_direct_opener()))
         fut_annual     = ex.submit(fetch_index_annual_data)
+        fut_annual_dd  = ex.submit(fetch_index_annual_drawdown)
         fut_fed        = ex.submit(lambda: fetch_fed_rate_monitor(get_direct_opener()))
         fut_macro_history = ex.submit(fetch_macro_history)
 
@@ -16760,6 +17278,12 @@ def main():
         except Exception as e:
             print(f"⚠️ 指数年度数据抓取失败: {e}")
             index_annual_data = {}
+
+        try:
+            index_annual_drawdown = fut_annual_dd.result(timeout=180)
+        except Exception as e:
+            print(f"⚠️ 年内最大回撤抓取失败: {e}")
+            index_annual_drawdown = {}
 
         try:
             fed_monitor = fut_fed.result(timeout=60)
@@ -17091,7 +17615,8 @@ def main():
             filename=args.out,
             index_annual_data=index_annual_data,
             macro_history=macro_history,
-            index_point_history=index_point_history
+            index_point_history=index_point_history,
+            index_annual_drawdown=index_annual_drawdown
         )
         print(f"\n🎉 升级版网页构建成功！文件路径: {abs_path}")
         try:
