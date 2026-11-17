@@ -224,6 +224,9 @@ CACHE_DIR = "cache"
 # 季报持仓缓存必须跨 CI 运行保留（/cache 在 .gitignore 里，CI 每次都是空目录），
 # 因此放到已提交的 data/ 下，配合「只在披露期刷新」避免每天全量重抓。
 HOLDINGS_CACHE_DIR = os.path.join("data", "holdings")
+# 资产配置（股票/债券/现金/其他）随季报更新，节奏和持仓一致，
+# 同样放 data/ 下跟着仓库走，CI 首次跑完后续几天就不必再发请求。
+ASSET_ALLOC_CACHE_DIR = os.path.join("data", "asset_alloc")
 NAV_CACHE_DIR = os.path.join(CACHE_DIR, "nav")
 HOLDER_CACHE_DIR = os.path.join(CACHE_DIR, "holder")
 COUNTRY_CACHE_DIR = os.path.join(CACHE_DIR, "country")
@@ -231,6 +234,7 @@ FEE_CACHE_DIR = os.path.join(CACHE_DIR, "fees")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(HOLDINGS_CACHE_DIR, exist_ok=True)
+os.makedirs(ASSET_ALLOC_CACHE_DIR, exist_ok=True)
 os.makedirs(NAV_CACHE_DIR, exist_ok=True)
 os.makedirs(HOLDER_CACHE_DIR, exist_ok=True)
 os.makedirs(COUNTRY_CACHE_DIR, exist_ok=True)
@@ -3051,6 +3055,183 @@ def fetch_fund_holder_structure(opener, code):
     return result
 
 
+ASSET_ALLOC_CACHE_VERSION = 1
+ASSET_ALLOC_REFRESH_DAYS = 7       # 资产配置只有季报节点才变，7 天回源一次足够
+
+
+def _alloc_num(raw):
+    """'78.79' / '--' / '' / None → float 或 None。"""
+    s = str(raw if raw is not None else "").strip()
+    if not s or s.lower() in ("none", "null", "nan", "--", "-"):
+        return None
+    m = re.search(r'-?\d+(?:\.\d+)?', s)
+    if not m:
+        return None
+    try:
+        return round(float(m.group(0)), 2)
+    except ValueError:
+        return None
+
+
+def fetch_fund_asset_alloc(opener, code):
+    """读取基金资产配置：股票 / 债券 / 现金 / 其他 占基金净值比。
+
+    数据源：天天基金移动端 FundMNAssetAllocation（一次返回全部披露期）。
+    F10 的 FundArchivesDatas.aspx?type=zcpz 对此项目已返回空串，故不走该通道。
+
+    返回结构（顶层字段 = 最近一期）：
+        {"date": "2026-09-30", "stock": 78.79, "bond": 0.0, "cash": 12.9,
+         "other": 8.31, "fund": None, "net": 47.15,
+         "periods": [{"date", "stock", "bond", "cash", "other"}, ...], "_v": 1}
+    """
+    cache_file = os.path.join(ASSET_ALLOC_CACHE_DIR, f"{code}_alloc.json")
+    cached = None
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data.get("_v") == ASSET_ALLOC_CACHE_VERSION and data.get("periods"):
+                cached = data
+                fetched = str(data.get("fetched") or "")
+                try:
+                    age = (now_beijing().date() - datetime.strptime(fetched, "%Y-%m-%d").date()).days
+                except Exception:
+                    age = 9999
+                if age < ASSET_ALLOC_REFRESH_DAYS:
+                    return data
+        except Exception:
+            cached = None
+
+    query_code = MAIN_CODE_MAP.get(code, code)
+    payload = None
+    try:
+        url = ("https://fundmobapi.eastmoney.com/FundMNewApi/FundMNAssetAllocation"
+               f"?FCODE={query_code}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6")
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)",
+        })
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+    except Exception:
+        payload = None
+
+    periods, seen = [], set()
+    for item in (payload or {}).get("Datas") or []:
+        date_str = str(item.get("FSRQ") or "")[:10]
+        if not re.match(r'\d{4}-\d{2}-\d{2}', date_str) or date_str in seen:
+            continue
+        stock = _alloc_num(item.get("GP"))
+        bond = _alloc_num(item.get("ZQ"))
+        cash = _alloc_num(item.get("HB"))
+        other = _alloc_num(item.get("QT"))
+        if stock is None and bond is None and cash is None and other is None:
+            continue
+        seen.add(date_str)
+        periods.append({
+            "date": date_str,
+            "stock": stock,
+            "bond": bond,
+            "cash": cash,
+            "other": other,
+        })
+
+    if not periods:
+        # 接口挂了就沿用上次成功抓取的结果，别让看板整块变 --
+        return cached
+
+    periods.sort(key=lambda x: x["date"], reverse=True)
+    latest = periods[0]
+    result = {
+        "date": latest["date"],
+        "stock": latest["stock"],
+        "bond": latest["bond"],
+        "cash": latest["cash"],
+        "other": latest["other"],
+        "fund": _alloc_num(((payload or {}).get("Datas") or [{}])[0].get("JJ")),
+        "net": _alloc_num(((payload or {}).get("Datas") or [{}])[0].get("JZC")),
+        "periods": periods[:24],
+        "fetched": now_beijing().strftime("%Y-%m-%d"),
+        "_v": ASSET_ALLOC_CACHE_VERSION,
+    }
+    try:
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return result
+
+
+def build_cmp_meta(r):
+    """组装对比弹窗用的深度资料（只进 __FUND_CMP_META__，不参与主表渲染）。
+
+    返回字段：
+      alloc    : {date, stock, bond, cash, other}   资产配置（占净值比）
+      holder   : {date, inst, indiv}                持有人结构（机构 / 个人）
+      top      : [[name, code, ratio], ...]         最新一期前十大重仓
+      top_date : 该期标签（2026Q3）
+      top_sum  : 前十大合计占净值   top3_sum: 前三大合计
+      prev_sum : 上一期前十大合计（用于看集中度变化）
+      top_count: 该期披露的持仓条数（中报/年报是全量）
+      buy_status / buy_limit：申购状态与单日限额
+    """
+    meta = {
+        "buy_status": r.get("buy_status") or "--",
+        "buy_limit": r.get("buy_limit") or "无限额",
+        "alloc": None,
+        "holder": None,
+        "top": [],
+        "top_date": "",
+        "top_sum": None,
+        "top3_sum": None,
+        "prev_sum": None,
+        "top_count": 0,
+    }
+
+    alloc = r.get("asset_alloc")
+    if isinstance(alloc, dict) and alloc.get("date"):
+        meta["alloc"] = {
+            "date": alloc.get("date"),
+            "stock": alloc.get("stock"),
+            "bond": alloc.get("bond"),
+            "cash": alloc.get("cash"),
+            "other": alloc.get("other"),
+        }
+
+    holder = r.get("holder_struct")
+    if isinstance(holder, dict) and (holder.get("inst") is not None or holder.get("indiv") is not None):
+        meta["holder"] = {
+            "date": holder.get("date") or "--",
+            "inst": holder.get("inst"),
+            "indiv": holder.get("indiv"),
+        }
+
+    periods = [p for p in (r.get("holdings") or []) if isinstance(p, dict) and p.get("holdings")]
+    if periods:
+        periods.sort(key=lambda p: _parse_holdings_quarter(p.get("date")) or (0, 0), reverse=True)
+        latest = periods[0]
+        rows = sorted(
+            (h for h in (latest.get("holdings") or []) if (h.get("ratio") or 0) > 0),
+            key=lambda h: h.get("ratio") or 0,
+            reverse=True,
+        )
+        meta["top_date"] = _period_label(latest.get("date"))
+        meta["top_count"] = len(rows)
+        meta["top"] = [[h.get("name") or "", h.get("code") or "", round(float(h.get("ratio") or 0), 2)]
+                       for h in rows[:10]]
+        if meta["top"]:
+            meta["top_sum"] = round(sum(item[2] for item in meta["top"]), 2)
+            meta["top3_sum"] = round(sum(item[2] for item in meta["top"][:3]), 2)
+        if len(periods) > 1:
+            prev = sorted(
+                (h for h in (periods[1].get("holdings") or []) if (h.get("ratio") or 0) > 0),
+                key=lambda h: h.get("ratio") or 0,
+                reverse=True,
+            )[:10]
+            if prev:
+                meta["prev_sum"] = round(sum(float(h.get("ratio") or 0) for h in prev), 2)
+    return meta
+
+
 # 季度持仓披露时间表：(窗口起, 窗口止, 年份偏移, 季度)
 # A 股基金季报法定披露截止日：一季报 4/22、中报 8/31、三季报 10/31、四季报次年 1/22。
 # 实际披露从截止日前 1~2 周陆续开始，个别基金会延迟，因此窗口设为
@@ -3831,6 +4012,7 @@ def fetch_fund_detail_meta(opener, code):
                 is_qdii_fund = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
                 cached["holdings"] = fetch_holdings(opener, code)
                 cached["holder_struct"] = fetch_fund_holder_structure(opener, code)
+                cached["asset_alloc"] = fetch_fund_asset_alloc(opener, code)
                 cached["countries_info"] = fetch_fund_country_distribution(opener, code, is_qdii=is_qdii_fund)
                 cached["profile"] = fetch_fund_profile(opener, code)
                 return cached
@@ -4223,12 +4405,13 @@ def fetch_fund_detail_meta(opener, code):
     is_qdii_fund = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
     meta["holdings"] = fetch_holdings(opener, code)
     meta["holder_struct"] = fetch_fund_holder_structure(opener, code)
+    meta["asset_alloc"] = fetch_fund_asset_alloc(opener, code)
     meta["countries_info"] = fetch_fund_country_distribution(opener, code, is_qdii=is_qdii_fund)
     meta["profile"] = fetch_fund_profile(opener, code)
 
     if meta.get("fee_manage") not in (None, "--") and meta.get("fee_redemption") not in (None, "未知"):
         try:
-            save_meta = {k: v for k, v in meta.items() if k not in ("holdings", "holder_struct", "countries_info", "profile")}
+            save_meta = {k: v for k, v in meta.items() if k not in ("holdings", "holder_struct", "asset_alloc", "countries_info", "profile")}
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(save_meta, f, ensure_ascii=False, indent=2)
         except Exception:
@@ -5032,6 +5215,212 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         "quarter_gain": calc_gain(months=3), "half_year_gain": calc_gain(months=6), "year_gain": calc_gain(months=12),
         "ytd_gain": calc_gain(ytd=True)
     }
+
+# 对比弹窗「深度资料」区的渲染代码。
+# 单独放在普通 Python 字符串里再以 {CMP_META_JS} 注入，是因为它位于一个巨型
+# f-string 内部，直接写进去每个花括号都得写成双花括号，维护成本太高。
+CMP_META_JS = r'''
+            // ---------- 深度资料：资产配置 / 集中度 / 十大重仓 / 持有人 / 申购 ----------
+            const ALLOC_PARTS = [
+                { key: 'stock', name: '股票', color: '#1a73e8' },
+                { key: 'bond',  name: '债券', color: '#188038' },
+                { key: 'cash',  name: '现金', color: '#e8a33d' },
+                { key: 'other', name: '其他', color: '#9334e6' }
+            ];
+            function metaOf(code) {
+                if (typeof cmpMetaData === 'undefined' || !cmpMetaData) return null;
+                return cmpMetaData[code] || null;
+            }
+            function allocWidth(v, total) {
+                return (total > 0 ? (v / total * 100) : 0).toFixed(2) + '%';
+            }
+            function allocBar(items) {
+                let bar = '<div class="fcmp-alloc-bar">';
+                items.forEach(function (it) {
+                    bar += '<span style="width:' + it.w + ';background:' + it.color + ';" title="'
+                        + esc(it.name + ' ' + it.v.toFixed(2) + '%') + '"></span>';
+                });
+                return bar + '</div>';
+            }
+            function allocKeys(items) {
+                return items.map(function (it) {
+                    return '<span class="fcmp-alloc-key"><i style="background:' + it.color + ';"></i>'
+                        + esc(it.name) + ' ' + it.v.toFixed(2) + '%</span>';
+                }).join('');
+            }
+            // 资产配置：堆叠条 + 四项占比文字（占比按合计归一，杠杆/衍生品超 100% 时不溢出）
+            function allocCell(code) {
+                const m = metaOf(code);
+                const a = m && m.alloc;
+                if (!a) return '<td class="fcmp-val fcmp-sub">--</td>';
+                const items = [];
+                ALLOC_PARTS.forEach(function (p) {
+                    const raw = a[p.key];
+                    const v = (raw == null || !isFinite(raw)) ? null : Number(raw);
+                    if (v != null && v > 0) items.push({ name: p.name, color: p.color, v: v });
+                });
+                const total = items.reduce(function (s, it) { return s + it.v; }, 0);
+                if (!total) return '<td class="fcmp-val fcmp-sub">--</td>';
+                items.forEach(function (it) { it.w = allocWidth(it.v, total); });
+                return '<td class="fcmp-val fcmp-alloc-cell">' + allocBar(items)
+                    + '<div class="fcmp-alloc-legend">' + allocKeys(items) + '</div>'
+                    + '<div class="fcmp-sub">' + esc(a.date || '') + ' 报告期</div></td>';
+            }
+            function holderCell(code) {
+                const m = metaOf(code);
+                const h = m && m.holder;
+                if (!h) return '<td class="fcmp-val fcmp-sub">--</td>';
+                const inst = (h.inst == null || !isFinite(h.inst)) ? null : Number(h.inst);
+                const indiv = (h.indiv == null || !isFinite(h.indiv)) ? null : Number(h.indiv);
+                const total = (inst || 0) + (indiv || 0);
+                const items = [];
+                if (inst != null && inst > 0) items.push({ name: '机构', color: '#1a73e8', v: inst, w: allocWidth(inst, total) });
+                if (indiv != null && indiv > 0) items.push({ name: '个人', color: '#9aa0a6', v: indiv, w: allocWidth(indiv, total) });
+                const bar = items.length ? allocBar(items) : '';
+                return '<td class="fcmp-val fcmp-alloc-cell">' + bar
+                    + '<div class="fcmp-alloc-legend">' + allocKeys(items) + '</div>'
+                    + '<div class="fcmp-sub">' + esc(h.date || '') + '</div></td>';
+            }
+            // 十大重仓：● 标记多只基金共同持有的个股
+            function topCell(code, nameCount) {
+                const m = metaOf(code);
+                const list = (m && m.top) || [];
+                if (!list.length) return '<td class="fcmp-val fcmp-sub">--</td>';
+                let rows = '';
+                list.forEach(function (item, i) {
+                    const name = String(item[0] || '');
+                    const ratio = Number(item[2]);
+                    const shared = (nameCount && nameCount[name]) || 0;
+                    const dot = shared > 1
+                        ? '<span class="fcmp-shared" title="' + shared + ' 只基金共同重仓">●</span>'
+                        : '<span class="fcmp-shared fcmp-shared-off">·</span>';
+                    const tip = name + (item[1] ? ' ' + item[1] : '') + ' · ' + (isFinite(ratio) ? ratio.toFixed(2) : '--') + '%';
+                    rows += '<div class="fcmp-top-item">' + dot
+                        + '<span class="fcmp-top-rank">' + (i + 1) + '</span>'
+                        + '<span class="fcmp-top-name" title="' + esc(tip) + '">' + esc(name) + '</span>'
+                        + '<span class="fcmp-top-ratio">' + (isFinite(ratio) ? ratio.toFixed(2) : '--') + '%</span></div>';
+                });
+                return '<td class="fcmp-val fcmp-top-cell">' + rows
+                    + '<div class="fcmp-sub">' + esc(m.top_date || '') + ' · 该期共 ' + (m.top_count || list.length) + ' 只</div></td>';
+            }
+            function buyCell(code) {
+                const m = metaOf(code);
+                if (!m) return '<td class="fcmp-val fcmp-sub">--</td>';
+                const st = String(m.buy_status || '--');
+                const lim = String(m.buy_limit || '');
+                // 非场外基金（加密 / 商品 / 指数点）没有申购状态，不能写成「开放申购」
+                if (!st || st === '--') return '<td class="fcmp-val fcmp-sub">--</td>';
+                const paused = st.indexOf('暂停') >= 0 || st.indexOf('封闭') >= 0;
+                const limited = !paused && lim && lim !== '--' && lim !== '无限额';
+                let cls = 'fcmp-buy-open', tag = '开放申购';
+                if (paused) { cls = 'fcmp-buy-paused'; tag = '暂停申购'; }
+                else if (limited) { cls = 'fcmp-buy-limited'; tag = '限大额'; }
+                const sub = paused ? '当前不可买入'
+                    : (limited ? '单日可买 ' + esc(lim) : '不限额度');
+                const extra = (st && st !== '--' && st !== tag && st !== '开放申购' && st !== '限大额申购')
+                    ? '<div class="fcmp-sub">' + esc(st) + '</div>' : '';
+                return '<td class="fcmp-val fcmp-buy-cell"><span class="fcmp-buy ' + cls + '">' + tag + '</span>'
+                    + '<div class="fcmp-sub">' + sub + '</div>' + extra + '</td>';
+            }
+
+            function renderCmpMetaSections(cols, rowOf, colspan) {
+                // 统计各股在被选基金里出现的次数，用于标记「共同重仓」
+                const nameCount = {};
+                cols.forEach(function (c) {
+                    const m = metaOf(c.series.code);
+                    ((m && m.top) || []).forEach(function (item) {
+                        const n = String(item[0] || '');
+                        if (!n) return;
+                        nameCount[n] = (nameCount[n] || 0) + 1;
+                    });
+                });
+                let html = '';
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🧺 资产配置'
+                    + '<span class="fcmp-group-hint">股票 / 债券 / 现金 / 其他，占基金净值比</span></td></tr>';
+                html += rowOf('资产配置', function (c) { return allocCell(c.series.code); });
+
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🎯 持股集中度'
+                    + '<span class="fcmp-group-hint">前十大合计越高越集中</span></td></tr>';
+                html += rowOf('前十大占净值', function (c) {
+                    const m = metaOf(c.series.code);
+                    if (!m || m.top_sum == null) return '<td class="fcmp-val fcmp-sub">--</td>';
+                    let sub = '';
+                    if (m.prev_sum != null) {
+                        const d = m.top_sum - m.prev_sum;
+                        sub = '<div class="fcmp-sub">上季 ' + m.prev_sum.toFixed(2) + '% · '
+                            + (d > 0 ? '+' : '') + d.toFixed(2) + 'pp</div>';
+                    }
+                    return '<td class="fcmp-val">' + m.top_sum.toFixed(2) + '%' + sub + '</td>';
+                });
+                html += rowOf('前三占净值', function (c) {
+                    const m = metaOf(c.series.code);
+                    if (!m || m.top3_sum == null) return '<td class="fcmp-val fcmp-sub">--</td>';
+                    return '<td class="fcmp-val">' + m.top3_sum.toFixed(2) + '%</td>';
+                });
+                html += rowOf('披露持仓数', function (c) {
+                    const m = metaOf(c.series.code);
+                    if (!m || !m.top_count) return '<td class="fcmp-val fcmp-sub">--</td>';
+                    return '<td class="fcmp-val">' + m.top_count + ' 只</td>';
+                });
+
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🏆 十大重仓股'
+                    + '<span class="fcmp-group-hint">● = 多只基金共同持有</span></td></tr>';
+                html += rowOf('重仓明细', function (c) { return topCell(c.series.code, nameCount); });
+
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">👥 持有人结构</td></tr>';
+                html += rowOf('机构 / 个人', function (c) { return holderCell(c.series.code); });
+
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🛒 申购状态'
+                    + '<span class="fcmp-group-hint">限购基金同时标注单日可买额度</span></td></tr>';
+                html += rowOf('申购 / 限额', function (c) { return buyCell(c.series.code); });
+                return html;
+            }
+
+            // 每行「更优」标注：方向固定写在这里，避免在每处 cell 渲染里重复判断
+            const BEST_DIR = {
+                '区间收益': 'max',
+                '区间最大回撤': 'min',
+                '区间年化波动': 'min',
+                '近一周': 'max', '近一月': 'max', '近三月': 'max',
+                '近半年': 'max', '近一年': 'max', '今年内': 'max', '今日涨跌': 'max',
+                '最大回撤（当前窗口）': 'min',
+                '自低点反弹': 'max', '修复程度': 'max',
+                // 「修复时间」不标注：没修复的基金后端会给 0 天，直接取最小会误判成最快
+                '最新规模': 'max', '运作费（管+托+销）': 'min', '申购费率': 'min',
+                '夏普（近1年）': 'max', '夏普（近3年）': 'max', '年化跟踪误差': 'min'
+            };
+            // 只认「纯数值」单元格：带日期、区间标签或文字的列一律跳过，避免误标
+            function parseCellNum(td) {
+                const t = (td.textContent || '').replace(/\s+/g, '');
+                if (!t || t === '--') return null;
+                const m = t.match(/^([+\-]?)(\d[\d,]*(?:\.\d+)?)(%|亿|天)?$/);
+                if (!m) return null;
+                const v = parseFloat(m[2].replace(/,/g, ''));
+                if (!isFinite(v)) return null;
+                return m[1] === '-' ? -v : v;
+            }
+            function markBest(wrap) {
+                wrap.querySelectorAll('tbody tr').forEach(function (tr) {
+                    const labelTd = tr.querySelector('td.fcmp-label');
+                    if (!labelTd) return;
+                    const dir = BEST_DIR[(labelTd.textContent || '').trim()];
+                    if (!dir) return;
+                    const cells = Array.prototype.slice.call(tr.querySelectorAll('td.fcmp-val'));
+                    const vals = cells.map(parseCellNum);
+                    const valid = vals.filter(function (v) { return v != null; });
+                    if (valid.length < 2) return;
+                    const best = dir === 'max' ? Math.max.apply(null, valid) : Math.min.apply(null, valid);
+                    let allSame = true;
+                    valid.forEach(function (v) { if (Math.abs(v - best) > 1e-9) allSame = false; });
+                    if (allSame) return;
+                    vals.forEach(function (v, i) {
+                        if (v == null || Math.abs(v - best) > 1e-9) return;
+                        cells[i].classList.add('fcmp-best');
+                        cells[i].setAttribute('title', '本行更优');
+                    });
+                });
+            }
+'''
 
 def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None, index_valuation_history=None, index_point_history=None):
     CPO_CODES = {"022365", "540010", "002112", "011892", "021528", "009645", "011370", "011452", "016371", "001956", "016234", "016173", "006616", "018291", "020661", "017462", "001438", "008984", "180031", "004320", "027063"}
@@ -6081,6 +6470,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     nav_data_version = hashlib.sha256(nav_data_script.encode("utf-8")).hexdigest()[:12]
 
     rows_html = ""
+    cmp_meta = {}
     for r in results:
         INDEX_URL_MAP = {
             # ---- 主流指数（Yahoo 指数符号需加 ^ 前缀）----
@@ -6232,6 +6622,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             <td class="dca-col" data-val="-9999">--</td>
         </tr>
         """
+
+        # 对比弹窗的深度资料（资产配置 / 集中度 / 十大重仓 / 持有人 / 申购）
+        cmp_meta[r['code']] = build_cmp_meta(r)
 
         display_holdings = []
         holdings_cards = []
@@ -8292,6 +8685,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 })();
 </script>
 """.replace("__MACRO_HISTORY_JSON__", macro_history_json)
+
+    # 对比弹窗的深度资料很小（≈100KB），直接内联，不必再拆一个 js 文件。
+    cmp_meta_json = json.dumps(cmp_meta, ensure_ascii=False, separators=(",", ":"))
 
     html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -11508,6 +11904,111 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .fcmp-col-x:hover {{ color: #d93025; }}
         .fcmp-sub {{ font-size: 10px; color: var(--footer-text); font-weight: 400; }}
         .fcmp-note {{ font-size: 11px; color: var(--footer-text); line-height: 1.7; }}
+        .fcmp-group-hint {{
+            margin-left: 8px;
+            font-size: 10px;
+            font-weight: 400;
+            color: var(--footer-text);
+        }}
+        /* 本行更优：琥珀色底 + 左侧竖条，和涨跌红绿区分开，不抢主表色语义 */
+        .fcmp-table td.fcmp-best {{
+            background: rgba(249, 171, 0, 0.16);
+            box-shadow: inset 2px 0 0 #f9ab00;
+            font-weight: 700;
+        }}
+        [data-theme="dark"] .fcmp-table td.fcmp-best {{
+            background: rgba(249, 171, 0, 0.22);
+        }}
+        .fcmp-legend {{
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--footer-text);
+        }}
+        .fcmp-legend i {{
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            background: rgba(249, 171, 0, 0.16);
+            box-shadow: inset 2px 0 0 #f9ab00;
+        }}
+        /* 资产配置 / 持有人 的堆叠条 */
+        /* 用 td.xxx 提高优先级：上面 .fcmp-table td 的 text-align:right 会盖掉单类名规则 */
+        .fcmp-table td.fcmp-alloc-cell {{ text-align: left; white-space: normal; min-width: 132px; }}
+        .fcmp-alloc-bar {{
+            display: flex;
+            width: 100%;
+            height: 7px;
+            min-width: 96px;
+            border-radius: 4px;
+            overflow: hidden;
+            background: var(--border);
+        }}
+        .fcmp-alloc-bar span {{ display: block; height: 100%; }}
+        .fcmp-alloc-legend {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2px 8px;
+            margin-top: 3px;
+            font-size: 10px;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+        }}
+        .fcmp-alloc-key {{ white-space: nowrap; }}
+        .fcmp-alloc-key i {{
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            margin-right: 3px;
+            border-radius: 50%;
+            vertical-align: middle;
+        }}
+        /* 十大重仓 */
+        .fcmp-table td.fcmp-top-cell {{ text-align: left; white-space: normal; min-width: 138px; }}
+        .fcmp-top-item {{
+            display: flex;
+            align-items: baseline;
+            gap: 3px;
+            font-size: 11px;
+            line-height: 1.55;
+        }}
+        .fcmp-top-rank {{
+            color: var(--footer-text);
+            font-size: 9px;
+            min-width: 9px;
+            text-align: right;
+        }}
+        .fcmp-top-name {{
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .fcmp-top-ratio {{
+            color: var(--footer-text);
+            font-variant-numeric: tabular-nums;
+        }}
+        .fcmp-shared {{ color: #e8710a; font-size: 9px; line-height: 1; }}
+        .fcmp-shared-off {{ color: transparent; }}
+        /* 申购状态胶囊 */
+        .fcmp-table td.fcmp-buy-cell {{ text-align: left; white-space: normal; }}
+        .fcmp-buy {{
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 9px;
+            font-size: 10px;
+            font-weight: 600;
+            line-height: 1.6;
+        }}
+        .fcmp-buy-open {{ color: #188038; background: rgba(24, 128, 56, 0.12); }}
+        .fcmp-buy-limited {{ color: #b06000; background: rgba(232, 113, 10, 0.14); }}
+        .fcmp-buy-paused {{ color: #d93025; background: rgba(217, 48, 37, 0.12); }}
+        [data-theme="dark"] .fcmp-buy-open {{ color: #6fcf97; background: rgba(111, 207, 151, 0.16); }}
+        [data-theme="dark"] .fcmp-buy-limited {{ color: #f6ae2d; background: rgba(246, 174, 45, 0.16); }}
+        [data-theme="dark"] .fcmp-buy-paused {{ color: #f28b82; background: rgba(242, 139, 130, 0.16); }}
 
         @media (max-width: 992px) {{
             .fcmp-bar {{
@@ -11929,7 +12430,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             <div class="footer-note">
                 <div class="footer-left">
-                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；勾选 ☆ 下方的方框可把基金加入对比（最多 6 只），底部浮条点「开始对比」即可看归一化净值曲线与指标横向对比；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方是最近 8 个季度的前十大持仓 + 持有人结构饼图（QDII 基金另附国家/地区配置），<strong>季度条可横向滚动</strong>，滚到最右侧点「<strong>加载更早季度</strong>」即可回溯该基金全部历史季度；下方依次为年度收益率与双轴走势图。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>，浮窗内「上季 / 本季」两列并排对照、点表头可按占净值或环比变化量排序、底部可展开本季退出披露名单的个股；季度切换支持 chips 与 ‹ › 翻页。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
+                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；勾选 ☆ 下方的方框可把基金加入对比（最多 6 只），底部浮条点「开始对比」即可看归一化净值曲线与指标横向对比（含资产配置、持股集中度、十大重仓、持有人结构、申购限额，每行更优值带琥珀底色）；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方是最近 8 个季度的前十大持仓 + 持有人结构饼图（QDII 基金另附国家/地区配置），<strong>季度条可横向滚动</strong>，滚到最右侧点「<strong>加载更早季度</strong>」即可回溯该基金全部历史季度；下方依次为年度收益率与双轴走势图。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>，浮窗内「上季 / 本季」两列并排对照、点表头可按占净值或环比变化量排序、底部可展开本季退出披露名单的个股；季度切换支持 chips 与 ‹ › 翻页。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
                 </div>
                 <div class="footer-right">
                     <span>⏱️ 统计更新于: <strong>{update_time_str}</strong></span>
@@ -12101,6 +12602,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         <button type="button" class="fcmp-period-btn" data-period="all">全区间</button>
                     </div>
                     <span class="fcmp-note" id="cmpAnchorNote"></span>
+                    <span class="fcmp-legend"><i></i>底色 = 本行更优</span>
                 </div>
                 <div class="fcmp-chart-box">
                     <canvas id="cmpChartCanvas"></canvas>
@@ -12112,10 +12614,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         </div>
     </div>
 
+    <script>window.__FUND_CMP_META__={cmp_meta_json};</script>
     <script>
         var fundNavData = window.__FUND_NAV_DATA__ || {{}};
         var fundNames = {json.dumps(fund_names_json, ensure_ascii=False)};
         var fundParsedDates = {{}};
+        var cmpMetaData = window.__FUND_CMP_META__ || {{}};
         var holdingDetailHtml = window.__FUND_HOLDING_DETAILS__ || {{}};
         var fullHoldingsData = window.__FUND_FULL_HOLDINGS__ || {{}};
         var detailMoreData = window.__FUND_DETAIL_MORE__ || {{}};
@@ -14868,6 +15372,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 }};
             }}
 
+            // ---------- 深度资料（资产配置 / 集中度 / 重仓 / 持有人 / 申购）----------
+{CMP_META_JS}
             // ---------- 渲染 ----------
             function pctCell(v) {{
                 if (v == null || !isFinite(v)) return '<td class="fcmp-val">--</td>';
@@ -14981,8 +15487,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 html += domRow('年化跟踪误差', 'trackErr', 'pct');
                 html += domRow('同类平均', 'peerAvg', 'pct');
 
+                // D. 深度资料（资产配置 / 集中度 / 十大重仓 / 持有人 / 申购）
+                html += renderCmpMetaSections(cols, rowOf, colspan);
+
                 html += '</tbody></table>';
                 wrap.innerHTML = html;
+                markBest(wrap);
             }}
 
             function renderFoot(payload) {{
@@ -14994,9 +15504,14 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     + '基准日取所选基金里最晚的净值日；主表「近一月 / 近三月…」由后端按各基金自身最新净值日回溯自然月，'
                     + '两者口径不同，相差 0.01~0.3 个百分点属正常。'
                     + '② 「最大回撤 / 自低点反弹 / 修复程度」沿用主表当前统计窗口。'
-                    + '③ 交易日不同的品种（A股 / QDII / 加密 7×24）按日期并集 + 前向填充对齐，曲线的平段表示当日无净值。';
-                if (noNav) msg += '<br>④ 有 ' + noNav + ' 只没有净值序列，只参与指标表，不出曲线。';
-                if (outside) msg += '<br>④ 有 ' + outside + ' 只在所选区间内没有净值（新成立或数据缺失），曲线从略。';
+                    + '③ 交易日不同的品种（A股 / QDII / 加密 7×24）按日期并集 + 前向填充对齐，曲线的平段表示当日无净值。'
+                    + '<br>④ 琥珀色底色标的是该行更优值（收益/夏普/规模取大，回撤/波动/费用/跟踪误差取小），'
+                    + '仓位与集中度属于风格差异，不做优劣判断。'
+                    + '<br>⑤ 资产配置取最近报告期（季报，占基金净值比，四项可能因杠杆/衍生品合计超 100%）；'
+                    + '十大重仓与集中度取最新一期披露，季报只有前十大、中报年报为全量；'
+                    + '持有人结构为半年报 / 年报节点，申购限额来自天天基金当日状态，可能随公告变动。';
+                if (noNav) msg += '<br>⑥ 有 ' + noNav + ' 只没有净值序列，只参与指标表，不出曲线。';
+                if (outside) msg += '<br>⑦ 有 ' + outside + ' 只在所选区间内没有净值（新成立或数据缺失），曲线从略。';
                 el.innerHTML = msg;
             }}
 
@@ -16351,6 +16866,7 @@ def main():
                 "buy_limit_val": meta.get("buy_limit_val", -1),
                 "holdings": meta.get("holdings", []),
                 "holder_struct": meta.get("holder_struct", None),
+                "asset_alloc": meta.get("asset_alloc", None),
                 "countries_info": meta.get("countries_info", {"date": "--", "countries": []}),
                 "profile": meta.get("profile", {"inception_date": "", "fund_type": "", "objective": "", "managers": []}),
                 "source": "天天基金",

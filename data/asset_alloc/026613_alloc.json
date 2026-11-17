@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-30",
+  "stock": null,
+  "bond": 5.26,
+  "cash": 0.7,
+  "other": 0.0,
+  "fund": 94.47,
+  "net": 4.05,
+  "periods": [
+    {
+      "date": "2026-09-30",
+      "stock": null,
+      "bond": 5.26,
+      "cash": 0.7,
+      "other": 0.0
+    },
+    {
+      "date": "2026-06-30",
+      "stock": null,
+      "bond": 3.82,
+      "cash": 2.87,
+      "other": 0.0
+    }
+  ],
+  "fetched": "2026-11-17",
+  "_v": 1
+}

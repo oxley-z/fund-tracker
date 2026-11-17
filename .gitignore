@@ -23,6 +23,8 @@
 #   2) 实测压缩后仅占 .git 约 1 MB、年增约 2 MB，成本可忽略；
 #      改用 Actions cache 反而有 LRU 淘汰 + 7 天过期导致的静默降级风险。
 #   3) 入库后还能用 git log 追溯某只基金某季度的持仓是何时变更的。
+# 同理 data/asset_alloc/ 是资产配置缓存（每只基金一个 <code>_alloc.json，
+# 7 天回源一次），也必须入库，否则 CI 每次都要为 180+ 只基金重发请求。
 $*
 _sync_existing.py
 

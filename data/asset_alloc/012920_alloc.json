@@ -1,0 +1,83 @@
+{
+  "date": "2026-09-30",
+  "stock": 74.04,
+  "bond": null,
+  "cash": 11.85,
+  "other": 12.4,
+  "fund": 1.71,
+  "net": 96.44,
+  "periods": [
+    {
+      "date": "2026-09-30",
+      "stock": 74.04,
+      "bond": null,
+      "cash": 11.85,
+      "other": 12.4
+    },
+    {
+      "date": "2026-06-30",
+      "stock": 81.93,
+      "bond": null,
+      "cash": 8.9,
+      "other": 8.66
+    },
+    {
+      "date": "2026-03-31",
+      "stock": 74.67,
+      "bond": null,
+      "cash": 16.27,
+      "other": 8.23
+    },
+    {
+      "date": "2025-12-31",
+      "stock": 77.93,
+      "bond": null,
+      "cash": 14.53,
+      "other": 6.77
+    },
+    {
+      "date": "2025-09-30",
+      "stock": 85.65,
+      "bond": 0.02,
+      "cash": 9.97,
+      "other": 4.36
+    },
+    {
+      "date": "2025-06-30",
+      "stock": 91.72,
+      "bond": 0.08,
+      "cash": 7.83,
+      "other": 0.37
+    },
+    {
+      "date": "2025-03-31",
+      "stock": 72.46,
+      "bond": 0.08,
+      "cash": 22.5,
+      "other": 4.96
+    },
+    {
+      "date": "2024-12-31",
+      "stock": 75.47,
+      "bond": 0.12,
+      "cash": 11.82,
+      "other": 12.59
+    },
+    {
+      "date": "2024-09-30",
+      "stock": 86.17,
+      "bond": null,
+      "cash": 9.52,
+      "other": 4.31
+    },
+    {
+      "date": "2024-06-30",
+      "stock": 74.18,
+      "bond": null,
+      "cash": 20.92,
+      "other": 4.9
+    }
+  ],
+  "fetched": "2026-11-17",
+  "_v": 1
+}
