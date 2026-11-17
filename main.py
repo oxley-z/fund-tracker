@@ -220,10 +220,20 @@ US_ETF_NAMES = {
 US_ETF_LOCAL = set(US_ETF_NAMES.keys())
 # ===================================================================================
 
+# 全历史时序数据的统一「最早起点」：能取到多早就取多早，取不到就落到标的的
+# 成立/上市日（例如沪深300 2005-04、科创50 2019-12、恒生科技 2020-07）。
+# 首页指数历年回报、年内最大回撤、宏观历史、基金净值都以它为准。
+HISTORY_START = "2000-01-01"
+# --refresh-history 时置 True：忽略已有快照，重新抓全历史（仅调试/修数据时用）
+REFRESH_HISTORY = False
+
 CACHE_DIR = "cache"
 # 季报持仓缓存必须跨 CI 运行保留（/cache 在 .gitignore 里，CI 每次都是空目录），
 # 因此放到已提交的 data/ 下，配合「只在披露期刷新」避免每天全量重抓。
 HOLDINGS_CACHE_DIR = os.path.join("data", "holdings")
+# 基金全历史净值快照：历史部分只抓一次并入库（本地 + 远程），
+# 之后每次构建只补「上次最后一条 → 今天」的增量，把 300+ 页/只 的翻页降到 1~2 页。
+FUND_NAV_FULL_DIR = os.path.join("data", "fund_nav")
 # 资产配置（股票/债券/现金/其他）随季报更新，节奏和持仓一致，
 # 同样放 data/ 下跟着仓库走，CI 首次跑完后续几天就不必再发请求。
 ASSET_ALLOC_CACHE_DIR = os.path.join("data", "asset_alloc")
@@ -234,6 +244,7 @@ FEE_CACHE_DIR = os.path.join(CACHE_DIR, "fees")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(HOLDINGS_CACHE_DIR, exist_ok=True)
+os.makedirs(FUND_NAV_FULL_DIR, exist_ok=True)
 os.makedirs(ASSET_ALLOC_CACHE_DIR, exist_ok=True)
 os.makedirs(NAV_CACHE_DIR, exist_ok=True)
 os.makedirs(HOLDER_CACHE_DIR, exist_ok=True)
@@ -566,7 +577,7 @@ def fetch_sina_us_kline(symbol_code, start_date_str="2000-01-01"):
 # ==============================================================================
 # 【保留】2000年后主要指数年度收益率及收盘点位获取模块（仅数据抓取，不再用于页面展示）
 # ==============================================================================
-def fetch_index_annual_data():
+def fetch_index_annual_data(force=False):
     """获取 2000 年以来主要指数年度收益率和年末收盘点位。
 
     数据源方案（与 zhishuniandushouyi.py 保持一致）：
@@ -574,33 +585,36 @@ def fetch_index_annual_data():
     - 沪深300 / 科创50：搜狐财经历史行情 API
     - 恒生科技：腾讯财经港股 K 线 -> 东方财富 -> 天天基金 513180 净值
 
-    缓存策略：
-    - 缓存文件：cache/index_annual.json
-    - 存在即直接读取返回，不再发起任何网络请求
-    - 需刷新时手动删除该文件后重新运行
+    缓存策略（只抓一次，入库）：
+    - 快照文件：data/index_annual.json（data/ 会随仓库提交，本地与 CI 共用）
+    - 历史年份不会变，只有「当年那一行」每天在动，所以同一自然日内
+      第二次及以后的构建直接读快照、不发任何请求；跨天才刷新一次（6 只指数，约 2s）。
+    - 需要强制重抓时用 `python main.py --refresh-history`。
     """
-    # ===== 1. 优先读取本地缓存（带完整性校验） =====
-    cache_file = os.path.join(CACHE_DIR, "index_annual.json")
+    # ===== 1. 优先读取本地快照（带完整性校验） =====
+    cache_file = os.path.join("data", "index_annual.json")
+    cached = None
     if os.path.exists(cache_file):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 cached = json.load(f)
-
-            if isinstance(cached, dict) and cached:
-                cached_keys = set(cached.keys())
-                expected_keys = set(ANNUAL_INDEX_TARGETS)
-                missing = expected_keys - cached_keys
-
-                if not missing:
-                    print(f"📅 检测到本地缓存 {cache_file}，直接使用（共 {len(cached)} 个指数）")
-                    print(f"📊 指数年度数据最终获取成功: {len(cached)}/{len(ANNUAL_INDEX_TARGETS)} （来源：本地缓存）")
-                    return cached
-                else:
-                    print(f"📅 缓存 {cache_file} 缺少以下指数，将重新抓取: {sorted(missing)}")
-            else:
-                print(f"📅 缓存文件 {cache_file} 内容为空或格式不正确，将重新抓取...")
+            if not (isinstance(cached, dict) and cached):
+                cached = None
         except Exception as e:
             print(f"📅 读取缓存 {cache_file} 失败: {e}，将重新抓取...")
+            cached = None
+
+    if cached:
+        missing = set(ANNUAL_INDEX_TARGETS) - set(cached.keys())
+        if missing:
+            print(f"📅 缓存 {cache_file} 缺少以下指数，将重新抓取: {sorted(missing)}")
+        else:
+            cached_day = datetime.fromtimestamp(os.path.getmtime(cache_file)).strftime("%Y-%m-%d")
+            if not force and cached_day == now_beijing().strftime("%Y-%m-%d"):
+                print(f"📅 命中当日快照 {cache_file}（{cached_day} 已抓取过），跳过网络请求")
+                print(f"📊 指数年度数据最终获取成功: {len(cached)}/{len(ANNUAL_INDEX_TARGETS)} （来源：本地快照）")
+                return cached
+            print(f"📅 快照 {cache_file} 为 {cached_day} 生成，今日需刷新「当年」一行（6 只指数，约 2s）")
 
     print("📅 正在获取指数年度数据 (2000年至今)...")
     result = {}
@@ -979,14 +993,22 @@ def fetch_index_annual_data():
 
     print(f"📊 指数年度数据最终获取成功: {len(result)}/{len(ANNUAL_INDEX_TARGETS)}")
 
-    # ===== 2. 抓取成功后写入本地缓存 =====
+    # ===== 2. 本轮个别指数抓取失败时，用旧快照补齐（历史年份不丢） =====
+    if cached:
+        for name, payload in cached.items():
+            result.setdefault(name, payload)
+
+    # ===== 3. 写回快照（data/index_annual.json 随仓库提交） =====
     if result:
         try:
-            with open(cache_file, "w", encoding="utf-8") as f:
+            tmp = cache_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)
-            print(f"💾 已写入本地缓存: {cache_file}")
+                f.write("\n")
+            os.replace(tmp, cache_file)
+            print(f"💾 已写入指数年度快照: {cache_file}")
         except Exception as e:
-            print(f"⚠️ 写入缓存失败: {e}")
+            print(f"⚠️ 写入快照失败: {e}")
 
     return result
 
@@ -1503,7 +1525,9 @@ def fetch_home_market_metrics(opener):
 # 核心宏观指标历史序列（卡片展开图）
 # ==============================================================================
 MACRO_HISTORY_CACHE = os.path.join("data", "macro_history.json")
-MACRO_HISTORY_START = "2006-01-01"
+# 与首页「指数历年回报（2000 年至今）」对齐；各序列按自身可得性落地
+# （VIX/黄金/汇率可回溯到 2000，沪金 2008、白银/铜 2011、Brent 2016、BTC 2017）。
+MACRO_HISTORY_START = HISTORY_START
 
 # 宽基指数估值图右轴：指数收盘点位（东方财富日线）。
 # 蛋卷只给 PE，不给点位；点位需要按 PE 的观测日对齐后再叠加展示。
@@ -2020,8 +2044,17 @@ def write_macro_history_cache(history):
 
 
 def fetch_macro_history():
-    """并行获取首页全部可展开卡片的历史序列，网络失败时回退本地缓存。"""
+    """并行获取首页全部可展开卡片的历史序列，网络失败时回退本地缓存。
+
+    ★ 历史序列（2000 年起）已随 data/macro_history.json 入库，同一自然日内
+      重复构建直接复用，不再重复发请求；跨天才增量刷新一次。
+    """
     cached = _read_macro_history_cache()
+    cached_day = str(cached.get("generated_at") or "")[:10]
+    if (not REFRESH_HISTORY and cached_day == now_beijing().strftime("%Y-%m-%d")
+            and any(isinstance(item, dict) and item.get("points") for item in cached.values())):
+        print("📈 宏观历史序列: 命中当日快照，跳过网络请求")
+        return cached
     remote = {}
     jobs = {
         "vix": lambda: fetch_cboe_macro_history("VIX"),
@@ -2300,6 +2333,11 @@ def fetch_index_point_history(pe_dates_by_key):
     也不会被宏观缓存的整体覆盖写丢掉。某条抓取失败时沿用上一次缓存点位。
     """
     cached = _read_index_point_cache()
+    cached_day = str(cached.get("generated_at") or "")[:10]
+    if (not REFRESH_HISTORY and cached_day == now_beijing().strftime("%Y-%m-%d")
+            and any(isinstance(item, dict) and item.get("points") for item in cached.values())):
+        print("📈 宽基指数点位: 命中当日快照，跳过网络请求")
+        return cached
     result = {"generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S")}
     updated = 0
     for key, spec in INDEX_POINT_TARGETS.items():
@@ -2444,6 +2482,12 @@ def fetch_index_annual_drawdown():
     cached = _read_annual_dd_cache()
     cached_items = cached.get("items") or {}
     version_ok = cached.get("version") == ANNUAL_DD_CACHE_VERSION
+    # 历史年份已定型，只有当年那一列每天在动：同一自然日已算过就不再发请求。
+    cached_day = str(cached.get("generated_at") or "")[:10]
+    if (not REFRESH_HISTORY and version_ok and cached_items
+            and cached_day == now_beijing().strftime("%Y-%m-%d")):
+        print("📉 年内最大回撤: 命中当日缓存，跳过网络请求")
+        return cached
 
     result = {
         "generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
@@ -4591,76 +4635,251 @@ def fetch_fund_detail_meta(opener, code):
 
     return meta
 
-def fetch_from_eastmoney(opener, code, start_date, end_date):
-    cache_file = os.path.join(NAV_CACHE_DIR, f"{code}.json")
-    if os.path.exists(cache_file):
+# ==============================================================================
+# 基金全历史净值快照（data/fund_nav/<code>.json）
+# ------------------------------------------------------------------------------
+# 背景：
+#   看板要展示「2000 年以来 / 基金成立以来」的净值与年度收益。历史净值接口
+#   (lsjz) 每页只有 20 条，一只 20 年的老基金要翻 300+ 页；187 只基金每天就是
+#   5 万次请求，既跑不完也容易被限流。而历史净值本身是静态的 —— 每天只新增尾部。
+#
+# 做法：
+#   1) 首次（快照缺失）用 pingzhongdata 的 Data_ACWorthTrend 一次拿全历史
+#      （1 个请求/只，含累计净值），写入 data/fund_nav/<code>.json；
+#      该目录随仓库提交，本地与 CI 都直接复用，不再重复抓历史；
+#   2) 之后每次构建只补「快照最后一天 → 今天」的增量（lsjz，1~2 页/只）；
+#   3) 快照损坏或首次抓取失败时，退回 lsjz 全量翻页的旧路径，保证仍能出图。
+# ==============================================================================
+FUND_NAV_FULL_VERSION = 1
+
+
+def _fund_nav_full_path(code):
+    return os.path.join(FUND_NAV_FULL_DIR, f"{code}.json")
+
+
+def _nav_rows_from_raw(raw):
+    """[[date, nav], ...] -> [{'date','nav'}, ...]，按日期升序、去重、只留正净值。"""
+    dedup = {}
+    for item in raw or []:
         try:
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                cache = json.load(f)
-            if cache.get('start_date', '') <= start_date and cache.get('end_date', '') >= end_date:
-                return cache.get('data', [])
-        except Exception: pass
+            date_str = str(item[0])[:10]
+            nav = float(item[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if len(date_str) == 10 and nav > 0:
+            dedup[date_str] = round(nav, 4)
+    return [{"date": d, "nav": dedup[d]} for d in sorted(dedup.keys())]
 
-    all_data = []
-    page_index = 1
-    page_size = 20           # ★ 东方财富 API 上限就是 20，不要再改大
-    max_pages = 200          # ★ 20 条/页 × 200 页 = 4000 条，够覆盖 10 年数据
-    empty_streak = 0         # 连续空页计数，防止死循环
 
-    while page_index <= max_pages:
-        base_url = "https://api.fund.eastmoney.com/f10/lsjz"
-        params = {
-            "callback": "jQuery11230_lsjz", "fundCode": code, "pageIndex": page_index, "pageSize": page_size,
-            "startDate": start_date, "endDate": end_date, "_": str(int(time.time() * 1000))
+def _read_fund_nav_full(code):
+    """读取全历史快照；不存在/版本不符/损坏时返回 []。"""
+    path = _fund_nav_full_path(code)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or data.get("v") != FUND_NAV_FULL_VERSION:
+            return []
+        return _nav_rows_from_raw(data.get("d") or [])
+    except Exception:
+        return []
+
+
+def _write_fund_nav_full(code, rows, source=""):
+    if not rows:
+        return False
+    path = _fund_nav_full_path(code)
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        payload = {
+            "v": FUND_NAV_FULL_VERSION,
+            "code": code,
+            "source": source,
+            "first": rows[0]["date"],
+            "last": rows[-1]["date"],
+            "count": len(rows),
+            "updated": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
+            "d": [[r["date"], r["nav"]] for r in rows],
         }
-        url = f"{base_url}?{urllib.parse.urlencode(params)}"
-        headers = {"User-Agent": DEFAULT_HEADERS["User-Agent"], "Referer": f"https://fundf10.eastmoney.com/jjjz_{code}.html"}
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        print(f"    ⚠️ {code} 净值快照写入失败: {e}")
+        return False
+
+
+def _fetch_fund_nav_full_remote(code, timeout=20):
+    """pingzhongdata 一次返回全部历史累计净值（Data_ACWorthTrend）。
+
+    ★ 口径：累计净值（ACWorth），分红/拆分不产生跳水，与 lsjz 的 LJJZ 同口径。
+    """
+    url = f"http://fund.eastmoney.com/pingzhongdata/{code}.js"
+    headers = {**DEFAULT_HEADERS, "Referer": "http://fund.eastmoney.com/"}
+    _bj = timezone(timedelta(hours=8))
+    for _attempt in range(3):
         try:
             req = urllib.request.Request(url, headers=headers)
-            with opener.open(req, timeout=8) as resp:
-                html = resp.read().decode('utf-8')
-                match = re.search(r'jQuery11230_lsjz\((.*)\)', html)
-                if match:
-                    res_json = json.loads(match.group(1))
-                    lsjz = res_json.get("Data", {}).get("LSJZList", [])
-                    if not lsjz:
-                        empty_streak += 1
-                        if empty_streak >= 2:   # 连续两页空 → 到底了
-                            break
-                        page_index += 1
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                text = resp.read().decode("utf-8", errors="ignore")
+        except Exception:
+            time.sleep(1.5)
+            continue
+
+        raw = []
+        m = re.search(r"Data_ACWorthTrend\s*=\s*(\[.*?\]);", text, re.DOTALL)
+        if m:
+            try:
+                for it in json.loads(m.group(1)):
+                    if not isinstance(it, (list, tuple)) or len(it) < 2:
                         continue
-                    empty_streak = 0
-                    for item in lsjz:
-                        # ★ 优先用累计净值 LJJZ（剔除分红影响）：
-                        #   - 涨幅统计与天天基金页面口径一致
-                        #   - 最大回撤不再把分红跳水误算成回撤
-                        #   - LJJZ 缺失时回退 DWJZ
-                        nav_str = item.get("LJJZ")
-                        if not nav_str or str(nav_str).strip() in ("--", ""):
-                            nav_str = item.get("DWJZ")
-                        if not nav_str or str(nav_str).strip() in ("--", ""):
-                            continue
-                        try:
-                            all_data.append({"date": item["FSRQ"], "nav": float(nav_str)})
-                        except (ValueError, TypeError):
-                            continue
-                    # ★ 只在返回不足一页时才认为到底；等于 20 就继续翻页
-                    if len(lsjz) < page_size:
-                        break
-                    page_index += 1
-                else:
-                    break
+                    ts, nav = it[0], it[1]
+                    if ts is None or nav is None:
+                        continue
+                    try:
+                        day = datetime.fromtimestamp(ts / 1000, tz=_bj).strftime("%Y-%m-%d")
+                        raw.append([day, float(nav)])
+                    except Exception:
+                        continue
+            except Exception:
+                raw = []
+        if not raw:
+            m = re.search(r"Data_netWorthTrend\s*=\s*(\[\{.+?\}\]);", text, re.DOTALL)
+            if m:
+                try:
+                    for it in json.loads(m.group(1)):
+                        if it.get("x") is not None and it.get("y") is not None:
+                            day = datetime.fromtimestamp(it["x"] / 1000, tz=_bj).strftime("%Y-%m-%d")
+                            raw.append([day, float(it["y"])])
+                except Exception:
+                    raw = []
+        rows = _nav_rows_from_raw(raw)
+        if rows:
+            return rows
+        time.sleep(1.5)
+    return []
+
+
+def _fetch_fund_nav_tail(code, start_date, end_date, max_pages=12, timeout=10):
+    """lsjz 分页抓 [start_date, end_date] 的累计净值（接口新→旧），返回升序列表。"""
+    page_size = 20           # ★ 东方财富 API 上限就是 20，不要再改大
+    collected = []
+    empty_streak = 0
+    for page_index in range(1, max_pages + 1):
+        params = {
+            "callback": "jQuery11230_lsjz", "fundCode": code,
+            "pageIndex": page_index, "pageSize": page_size,
+            "startDate": start_date, "endDate": end_date,
+            "_": str(int(time.time() * 1000)),
+        }
+        url = "https://api.fund.eastmoney.com/f10/lsjz?" + urllib.parse.urlencode(params)
+        headers = {
+            "User-Agent": DEFAULT_HEADERS["User-Agent"],
+            "Referer": f"https://fundf10.eastmoney.com/jjjz_{code}.html",
+        }
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
         except Exception:
             break
-
-    if all_data:
-        cache = {'start_date': start_date, 'end_date': end_date, 'data': all_data}
+        match = re.search(r"jQuery11230_lsjz\((.*)\)", html)
+        if not match:
+            break
         try:
-            with open(cache_file, 'w', encoding='utf-8') as f:
-                json.dump(cache, f, ensure_ascii=False, indent=2)
-        except Exception: pass
+            lsjz = json.loads(match.group(1)).get("Data", {}).get("LSJZList", [])
+        except Exception:
+            break
+        if not lsjz:
+            empty_streak += 1
+            if empty_streak >= 2:
+                break
+            continue
+        empty_streak = 0
+        oldest = None
+        for item in lsjz:
+            # ★ 优先累计净值 LJJZ（剔除分红影响），缺失时回退单位净值 DWJZ
+            nav_str = item.get("LJJZ")
+            if not nav_str or str(nav_str).strip() in ("--", ""):
+                nav_str = item.get("DWJZ")
+            if not nav_str or str(nav_str).strip() in ("--", ""):
+                continue
+            try:
+                day = str(item["FSRQ"])[:10]
+                collected.append({"date": day, "nav": round(float(nav_str), 4)})
+                oldest = day if oldest is None or day < oldest else oldest
+            except (ValueError, TypeError, KeyError):
+                continue
+        # 已经翻到起点之前就没有必要继续了
+        if oldest and oldest <= start_date:
+            break
+        if len(lsjz) < page_size:
+            break
+    dedup = {r["date"]: r["nav"] for r in collected if r["date"] >= start_date}
+    return [{"date": d, "nav": dedup[d]} for d in sorted(dedup.keys())]
 
-    return all_data if all_data else None
+
+def _merge_nav_rows(base, extra):
+    merged = {r["date"]: r["nav"] for r in base}
+    for r in extra:
+        merged[r["date"]] = r["nav"]
+    return [{"date": d, "nav": merged[d]} for d in sorted(merged.keys())]
+
+
+def load_fund_nav_full(code, end_date, refresh=False):
+    """返回该基金的全历史累计净值（升序）；历史只抓一次，之后只补增量。
+
+    - 快照存在且已覆盖到 end_date：完全不发请求；
+    - 快照存在但落后：只请求落后区间（通常 1 页）；
+    - 快照缺失 / refresh=True：pingzhongdata 一次拿全历史后写回。
+    """
+    path = _fund_nav_full_path(code)
+    refresh = refresh or REFRESH_HISTORY
+    rows = [] if refresh else _read_fund_nav_full(code)
+    source = "snapshot" if rows else ""
+    dirty = False
+
+    if not rows:
+        rows = _fetch_fund_nav_full_remote(code)
+        if rows:
+            source = "pingzhongdata"
+            dirty = True
+        else:
+            # 兜底：lsjz 全量翻页（慢，但至少能出图）
+            rows = _fetch_fund_nav_tail(code, HISTORY_START, end_date, max_pages=400)
+            if rows:
+                source = "lsjz-full"
+                _write_fund_nav_full(code, rows, source)
+            return rows
+
+    last_date = rows[-1]["date"]
+    if str(last_date) < str(end_date):
+        tail = _fetch_fund_nav_tail(code, last_date, end_date)
+        if tail:
+            merged = _merge_nav_rows(rows, tail)
+            if len(merged) != len(rows) or merged[-1]["nav"] != rows[-1]["nav"]:
+                rows = merged
+                dirty = True
+
+    if dirty or not os.path.exists(path):
+        _write_fund_nav_full(code, rows, source or "snapshot")
+    return rows
+
+
+def fetch_from_eastmoney(opener, code, start_date, end_date):
+    """返回 [start_date, end_date] 区间内的累计净值序列。
+
+    ★ 数据来自 data/fund_nav 全历史快照 + 每日增量，不再是每次从头翻页；
+      start_date 只做区间裁剪（默认 2000-01-01，即成立以来的全部历史）。
+    """
+    rows = load_fund_nav_full(code, end_date)
+    if not rows:
+        return None
+    out = [r for r in rows if start_date <= r["date"] <= end_date]
+    return out or None
 
 # ==============================================================================
 # 基金年度收益抓取模块（合并自 get_lishi_shouyi.py）
@@ -7327,6 +7546,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <button class="period-btn" data-period="half" data-code="{r['code']}">近半年</button>
                     <button class="period-btn" data-period="year" data-code="{r['code']}">近一年</button>
                     <button class="period-btn" data-period="ytd" data-code="{r['code']}">今年内</button>
+                    <button class="period-btn" data-period="all" data-code="{r['code']}">成立以来</button>
                 </div>
                 <canvas id="chart-{r['code']}" width="400" height="200"></canvas>
             </div>
@@ -13927,6 +14147,24 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             const dates = data.dates;
             const navs = data.navs;
             const latest = new Date(dates[dates.length - 1]);
+            // 成立以来：全历史点太多（老基金 4000+ 个交易日），抽稀到 ~1200 点再画，
+            // 目视趋势一致，但 Chart.js 不卡、点也不会糊成一条带。
+            if (period === 'all') {{
+                const MAX_POINTS = 1200;
+                if (dates.length <= MAX_POINTS) return {{ dates: dates, navs: navs }};
+                const step = Math.ceil(dates.length / MAX_POINTS);
+                const outDates = [], outNavs = [];
+                for (let i = 0; i < dates.length; i += step) {{
+                    outDates.push(dates[i]);
+                    outNavs.push(navs[i]);
+                }}
+                const lastIdx = dates.length - 1;
+                if (outDates[outDates.length - 1] !== dates[lastIdx]) {{
+                    outDates.push(dates[lastIdx]);
+                    outNavs.push(navs[lastIdx]);
+                }}
+                return {{ dates: outDates, navs: outNavs }};
+            }}
             let startDate = new Date(latest);
             if (period === 'week') startDate.setDate(latest.getDate() - 7);
             else if (period === 'month') startDate.setMonth(latest.getMonth() - 1);
@@ -17189,8 +17427,11 @@ def _test_macro_metrics():
         print(f"{k:15s} {str(val):>12s}  [{src}]")
 
 def main():
+    global REFRESH_HISTORY
     today_str = now_beijing().strftime("%Y-%m-%d")
-    default_start = "2025-01-01"
+    # ★ 统计区间默认从 2000 年起：净值本身已是全历史快照，起点只影响区间裁剪，
+    #   不再触发额外的网络请求（成立晚于 2000 的标的自动从成立日开始）。
+    default_start = HISTORY_START
     cutoff_date = "2026-04-01"
 
     parser = argparse.ArgumentParser(description="场外基金量化与资产配置看板生成引擎")
@@ -17199,8 +17440,12 @@ def main():
     parser.add_argument("--start", type=str, default=default_start)
     parser.add_argument("--end", type=str, default=today_str)
     parser.add_argument("--out", type=str, default="fund_drawdown_dashboard.html")
+    parser.add_argument("--refresh-history", action="store_true",
+                        help="强制重抓全历史快照（data/fund_nav、data/index_annual.json）；"
+                             "默认只在快照缺失或落后时补增量")
 
     args = parser.parse_args()
+    REFRESH_HISTORY = bool(args.refresh_history)
 
     if args.mode: is_debug = (args.mode == "debug")
     else: is_debug = IS_DEBUG
@@ -17236,7 +17481,7 @@ def main():
     with ThreadPoolExecutor(max_workers=6) as ex:
         fut_metrics    = ex.submit(lambda: fetch_home_market_metrics(get_direct_opener()))
         fut_valuations = ex.submit(lambda: fetch_index_valuations(get_direct_opener()))
-        fut_annual     = ex.submit(fetch_index_annual_data)
+        fut_annual     = ex.submit(fetch_index_annual_data, REFRESH_HISTORY)
         fut_annual_dd  = ex.submit(fetch_index_annual_drawdown)
         fut_fed        = ex.submit(lambda: fetch_fed_rate_monitor(get_direct_opener()))
         fut_macro_history = ex.submit(fetch_macro_history)
@@ -17341,29 +17586,19 @@ def main():
         is_qdii = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
         res = analyze_fund_metrics(raw_data_sorted, args.end, cutoff_date, is_qdii=is_qdii)
         if res:
-            # ★ 新增：抓取并计算年度收益率
+            # ★ 年度收益率：直接从全历史净值快照算，不再额外请求 pingzhongdata。
+            #   历史年份与当年同源同口径（累计净值 + 拆股断点修正），
+            #   也就不会出现「热力图当年收益」与「折线图今年内」错位的老问题。
             annual_returns = {}
             try:
-                annual_returns = fetch_fund_annual_returns(code)
+                annual_returns = compute_annual_returns_from_nav(raw_data_sorted)
             except Exception as e:
-                print(f"    ⚠️ {code} 年度收益抓取异常: {e}")
-
-            # ★ 最新年份用 nav_data 覆盖：pingzhongdata 的累计净值比 lsjz 接口
-            #   （折线图数据源）滞后 1-2 个交易日，会让「热力图当年收益」和
-            #   「折线图今年内」在净值大幅波动时对不上。这里改用与折线图完全同源
-            #   同口径的 nav_data 重算最新年份，历史年份仍用 pingzhongdata 的全量数据。
-            #   复用 compute_annual_returns_from_nav 以便同时享受拆股断点修正。
-            if annual_returns and raw_data_sorted:
+                print(f"    ⚠️ {code} 年度收益计算异常: {e}")
+            if not annual_returns:
                 try:
-                    _cur_year = str(raw_data_sorted[-1]['date'])[:4]
-                    _prev_end = f"{int(_cur_year) - 1}-12-31"
-                    # 只有 nav_data 覆盖到上一年末时，该年收益才是完整的自然年口径
-                    if any(str(r['date']) <= _prev_end for r in raw_data_sorted):
-                        _calc = compute_annual_returns_from_nav(raw_data_sorted)
-                        if _cur_year in _calc:
-                            annual_returns[_cur_year] = _calc[_cur_year]
-                except Exception:
-                    pass
+                    annual_returns = fetch_fund_annual_returns(code)
+                except Exception as e:
+                    print(f"    ⚠️ {code} 年度收益兜底抓取异常: {e}")
 
             # ★ 新增：抓取年化跟踪误差 & 同类平均
             te_data = {}
