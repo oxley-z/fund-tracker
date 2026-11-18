@@ -1749,30 +1749,51 @@ def fetch_cboe_macro_history(symbol, start_date=MACRO_HISTORY_START):
 
 
 def fetch_cnn_macro_history():
-    """读取 CNN 官方恐惧贪婪指数历史序列。"""
-    url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-    req = urllib.request.Request(url, headers={
+    """读取 CNN 官方恐惧贪婪指数历史序列。
+
+    坑：不带日期的 graphdata 只回吐最近 1 年（约 270 个交易日）。CNN 的接口支持在
+    路径后追加起始日期（/graphdata/2011-01-01），才会返回从该日起的全量序列，
+    因此这里先试「带日期」再退回「不带日期」。指数本身 2011 年才发布，无法更早。
+    """
+    base = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+    candidates = (f"{base}/2011-01-01", base)
+    headers = {
         **DEFAULT_HEADERS,
         "Referer": "https://edition.cnn.com/markets/fear-and-greed",
         "Origin": "https://edition.cnn.com",
         "Accept": "application/json,text/plain,*/*",
-    })
-    with get_thread_opener().open(req, timeout=20) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    }
+    last_error = None
+    for url in candidates:
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with get_thread_opener().open(req, timeout=12) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            except Exception as exc:      # 418/502/超时都会出现，退避后重试
+                last_error = exc
+                time.sleep(1.0 + random.random())
+                continue
 
-    rows = (payload.get("fear_and_greed_historical") or {}).get("data") or []
-    points = {}
-    for row in rows:
-        try:
-            date_str = datetime.fromtimestamp(
-                float(row["x"]) / 1000.0, timezone.utc
-            ).strftime("%Y-%m-%d")
-            score = float(row["y"])
-        except (KeyError, TypeError, ValueError, OSError):
-            continue
-        if 0 <= score <= 100:
-            points[date_str] = score
-    return _compact_macro_points(points)
+            rows = (payload.get("fear_and_greed_historical") or {}).get("data") or []
+            points = {}
+            for row in rows:
+                try:
+                    date_str = datetime.fromtimestamp(
+                        float(row["x"]) / 1000.0, timezone.utc
+                    ).strftime("%Y-%m-%d")
+                    score = float(row["y"])
+                except (KeyError, TypeError, ValueError, OSError):
+                    continue
+                if 0 <= score <= 100:
+                    points[date_str] = score
+            if points:
+                return _compact_macro_points(points)
+            last_error = RuntimeError("CNN 历史序列为空")
+            break
+    if last_error:
+        raise last_error
+    return []
 
 
 def _brief_error(exc, limit=80):
@@ -1865,12 +1886,15 @@ _SINA_SOURCE_LABEL = {
     "gold_london":   "新浪财经 COMEX 黄金历史日线",
     "silver_london": "新浪财经 COMEX 白银历史日线",
     "copper_lme":    "新浪财经 COMEX 铜历史日线",
-    "brent":         "新浪财经 Brent 原油历史日线",
+    "brent":         "新浪财经 Brent 原油历史日线 + EIA 布伦特现货",
 }
 
 # 口径切换过的序列：旧缓存里切换日之前的数据属于另一种标的，必须整段丢弃，
-# 否则图上的接缝会出现一次假的跳空。brent 曾长期按 WTI(CL00Y) 记录。
-_HISTORY_EPOCH_RESET = {"brent"}
+# 否则图上的接缝会出现一次假的跳空。brent 曾长期按 WTI(CL00Y) 记录，
+# 现在由 _fetch_brent_macro_history 自己做「EIA 现货 + 新浪期货」拼接，
+# 旧缓存里只剩正确的 Brent 段，不再需要按首日截断（截断反而会在某次抓取
+# 只回近期数据时把补好的 2000-2016 段删掉）。
+_HISTORY_EPOCH_RESET = set()
 
 
 def _fetch_sina_macro_history(kind, symbol, convert_factor=1.0, start_date=MACRO_HISTORY_START):
@@ -1923,6 +1947,93 @@ def _fetch_sina_macro_history(kind, symbol, convert_factor=1.0, start_date=MACRO
             if date_str >= start_date and close > 0:
                 points[date_str] = close
     return _compact_macro_points(points)
+
+
+_EIA_BRENT_URL = "https://www.eia.gov/dnav/pet/hist/LeafHandler.ashx?n=PET&s=RBRTE&f=D"
+_EIA_WEEK_ROW = re.compile(
+    r"<td class='B6'>&nbsp;&nbsp;(\d{4})\s+([A-Za-z]{3})-\s*(\d{1,2})\s+to\s+[A-Za-z]{3}-\s*\d{1,2}</td>"
+    r"((?:\s*<td class='B3'>[^<]*</td>){5})"
+)
+_MONTH_ABBR = {m: i + 1 for i, m in enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+)}
+
+
+def _fetch_eia_brent_history(start_date=MACRO_HISTORY_START):
+    """EIA 欧洲布伦特现货（RBRTE，1987 年起，日频）解析。
+
+    新浪的 Brent 连续只回吐 2016-11 之后的约 10 年，2000-2016 段完全缺失；
+    EIA 这套现货序列可覆盖到 1987 年，且无需 API key（页面是「周-周 + 周一至周五」
+    的表格，按周一日期 + 列偏移还原成日频）。代价是发布有约 2 周滞后，
+    所以只用来补历史，最新值仍以新浪/实时报价为准。
+    """
+    req = urllib.request.Request(_EIA_BRENT_URL, headers={
+        **DEFAULT_HEADERS,
+        "Referer": "https://www.eia.gov/",
+        "Accept": "text/html,*/*",
+    })
+    with get_thread_opener().open(req, timeout=30) as resp:
+        page = resp.read().decode("utf-8", errors="replace")
+
+    points = {}
+    for year, mon, day, cells in _EIA_WEEK_ROW.findall(page):
+        mon_i = _MONTH_ABBR.get(mon)
+        if not mon_i:
+            continue
+        try:
+            week_start = datetime(int(year), mon_i, int(day))
+        except ValueError:
+            continue
+        values = re.findall(r"<td class='B3'>([^<]*)</td>", cells)
+        for offset, raw in enumerate(values):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                close = float(raw.replace(",", ""))
+            except ValueError:
+                continue
+            date_str = (week_start + timedelta(days=offset)).strftime("%Y-%m-%d")
+            if date_str >= start_date and close > 0:
+                points[date_str] = close
+    return _compact_macro_points(points)
+
+
+def _fetch_brent_macro_history():
+    """布伦特原油历史：新浪 Brent 连续（近 10 年）+ EIA 现货（补齐 2000 年起）。
+
+    两段口径不同（期货连续 vs 现货 FOB），直接拼接会在 2016 年接缝处出现台阶，
+    因此用接缝处重叠区间（最早 60 个共同交易日）的比值中位数把老数据校正到期货口径，
+    保证曲线连续；接缝之后一律用新浪期货序列。
+    """
+    recent = _fetch_sina_macro_history("global", "OIL")
+    try:
+        older = _fetch_eia_brent_history()
+    except Exception as exc:
+        print(f"    [warn] EIA 布伦特历史获取失败，仅保留新浪近 10 年: {_brief_error(exc)}")
+        older = []
+    if not older:
+        return recent
+    if not recent:
+        return older
+
+    recent_map = {str(row[0]): float(row[1]) for row in recent}
+    older_map = {str(row[0]): float(row[1]) for row in older}
+    # 用「紧挨接缝」的重叠段估基差：现货与期货的升贴水会随期限结构翻转
+    # （2016 年是贴水、2026 年是升水），取最近 60 日反而会把接缝放大。
+    overlap = sorted(set(recent_map) & set(older_map))[:60]
+    ratios = sorted(recent_map[d] / older_map[d] for d in overlap if older_map.get(d))
+    factor = ratios[len(ratios) // 2] if ratios else 1.0
+    seam = str(recent[0][0])
+
+    merged = {}
+    for date_str, value in older:
+        date_str = str(date_str)
+        if date_str < seam:
+            merged[date_str] = float(value) * factor
+    for date_str, value in recent_map.items():
+        merged[date_str] = value
+    return _compact_macro_points(merged)
 
 
 def _fetch_danjuan_pe_history(code):
@@ -2096,8 +2207,9 @@ def fetch_macro_history():
         "copper_lme": lambda: _fetch_eastmoney_macro_history("101.HG00Y"),
         # 布伦特原油：卡片实时值取 Brent(BZ=F)，历史也必须用 Brent。
         # 东财 102.CL00Y 是 WTI 连续（长期比 Brent 低 5~7 美元），已弃用；
-        # 改走新浪 OIL（Brent 连续，覆盖约 10 年），旧 WTI 段由 _HISTORY_EPOCH_RESET 丢弃。
-        "brent": lambda: _fetch_sina_macro_history("global", "OIL"),
+        # 新浪 OIL（Brent 连续）只覆盖 2016-11 之后约 10 年，前段用 EIA 布伦特
+        # 现货（RBRTE，1987 年起）按重叠期基差校正后拼接，整体回溯到 2000 年。
+        "brent": _fetch_brent_macro_history,
         "btc": _fetch_binance_macro_history,
         "pe_ndx": lambda: _fetch_danjuan_pe_history("NDX"),
         "pe_sp500": lambda: _fetch_danjuan_pe_history("SP500"),
@@ -2172,7 +2284,7 @@ def fetch_macro_history():
         "gold_shfe": ("沪金主连 (AU0)", "元/克", "新浪 AkShare 沪金历史日线"),
         "silver_london": ("伦敦银 (XAG/USD)", "美元/盎司", "东方财富 COMEX 白银历史日线"),
         "copper_lme": ("COMEX 铜", "美元/磅", "东方财富 COMEX 铜历史日线"),
-        "brent": ("布伦特原油 (BZ=F)", "美元/桶", "新浪财经 Brent 原油历史日线"),
+        "brent": ("布伦特原油 (BZ=F)", "美元/桶", "新浪 Brent 期货 + EIA 布伦特现货（2000 年起，接缝按基差校正）"),
         "btc": ("比特币 (BTC/USDT)", "USDT", "Binance 日线"),
         "pe_ndx": ("纳指100历史 PE", "倍", "蛋卷指数估值"),
         "pe_sp500": ("标普500历史 PE", "倍", "蛋卷指数估值"),
@@ -8359,7 +8471,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         "gold_shfe": (gold_shfe.get("val"), "沪金主连 (AU0)", "元/克", "新浪 AkShare 沪金历史日线"),
         "silver_london": (silver_london.get("val"), "伦敦银 (XAG/USD)", "美元/盎司", "东方财富 COMEX 白银历史日线"),
         "copper_lme": (copper_lme.get("val"), "COMEX 铜", "美元/磅", "东方财富 COMEX 铜历史日线"),
-        "brent": (brent.get("val"), "布伦特原油 (BZ=F)", "美元/桶", "东方财富原油历史日线"),
+        "brent": (brent.get("val"), "布伦特原油 (BZ=F)", "美元/桶", "新浪 Brent 期货 + EIA 布伦特现货"),
         "btc": (btc.get("val"), "比特币 (BTC/USDT)", "USDT", "Binance 日线"),
     }
     for _history_key, (_value, _title, _unit, _source) in current_history_sources.items():
@@ -17359,6 +17471,13 @@ def compute_annual_returns_from_kline(records, start_year=2000):
 
 # 模块级常量：指数年度收益率的完整历史起点
 INDEX_FULL_START = "2000-01-01"
+# 数据源给的是「2000 年第一个交易日」（如 2000-01-03），缓存命中判断留出年初余量，
+# 否则永远判不中、每天都要重新拉一遍全历史。
+INDEX_FULL_START_TOLERANCE = "2000-02-01"
+# 新浪美股指数接口只回吐最近 12 年左右（NDX 2014-02 起），腾讯按年滚动拼接能回到 2000 年；
+# 腾讯只有 usNDX/us.INX 这类代码可选，费城半导体、纳斯达克综合都没有长历史
+# （综合指数新浪给到 2004 起、半导体 2014 起，属数据源上限）。
+TENCENT_US_INDEX_CODE = {"NDX": "usNDX"}
 
 
 def fetch_index_data(symbol, start_date, end_date):
@@ -17381,7 +17500,7 @@ def fetch_index_data(symbol, start_date, end_date):
             c_end   = cache.get('end_date', '')
             c_data  = cache.get('data', [])
             if (c_start and c_end and c_data
-                    and c_start <= INDEX_FULL_START
+                    and c_start <= INDEX_FULL_START_TOLERANCE
                     and c_end >= end_date):
                 return c_data
         except Exception:
@@ -17400,6 +17519,24 @@ def fetch_index_data(symbol, start_date, end_date):
                     data = None
         except Exception:
             data = None
+
+    # ---- 数据源 1.5：腾讯按年拼接补齐 2000 年起的缺口 ----
+    # 新浪 US_MinKService 只给最近 12 年（NDX 从 2014-02 起），会让表格里纳指100 的
+    # 「成立以来 / 年度收益」被截断；腾讯 usNDX 逐年后拼可以回到 2000-01-03。
+    tx_symbol = TENCENT_US_INDEX_CODE.get(symbol)
+    if tx_symbol:
+        try:
+            extra = _fetch_tencent_index_daily("tx_us", tx_symbol, 2000)
+        except Exception:
+            extra = []
+        if extra:
+            if not data:
+                data = [{"date": d, "nav": v} for d, v in extra]
+            elif str(extra[0][0]) < data[0]["date"]:
+                merged = {r["date"]: r["nav"] for r in data}
+                for d, v in extra:
+                    merged.setdefault(str(d), v)
+                data = [{"date": d, "nav": merged[d]} for d in sorted(merged)]
 
     # ---- 数据源 2：Yahoo Finance 兜底（同样全量）----
     if not data:
