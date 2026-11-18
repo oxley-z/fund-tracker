@@ -10321,6 +10321,27 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
         .global-dca-filter-card button:hover {{ opacity: 0.9; }}
 
+        /* 定投窗口：起止日期选择（替代原来的「近半年/近一年…」下拉） */
+        .g-dca-window {{
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }}
+        .g-dca-window input[type="date"] {{
+            padding: 2px 4px;
+            border-radius: 6px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 11px;
+            outline: none;
+            /* 132px 才放得下「2026/11/18 + 日历图标」，再窄 Chrome 会把最后一位吃掉 */
+            width: 132px;
+            box-sizing: border-box;
+        }}
+        .g-dca-window input[type="date"]:focus {{ border-color: #35a853; }}
+        .g-dca-window-sep {{ color: var(--footer-text); font-size: 11px; }}
+
         .table-container {{
             width: 100%;
             flex: 1 1 0;
@@ -11126,6 +11147,33 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             color: var(--text);
             font-size: 12px;
             outline: none;
+        }}
+        /* 快捷窗口按钮组：点一下即把起止日期填成对应区间 */
+        .dca-preset-field {{ grid-column: 1 / -1; }}
+        .dca-presets {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }}
+        .dca-presets button {{
+            flex: 0 1 auto;
+            min-width: 64px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }}
+        .dca-presets button:hover {{ border-color: var(--btn-active-bg); color: var(--btn-active-bg); }}
+        .dca-presets button.active {{
+            background: var(--btn-active-bg);
+            border-color: var(--btn-active-bg);
+            color: #fff;
+            font-weight: 600;
         }}
         .dca-run-btn {{
             grid-column: 1 / -1;
@@ -11978,7 +12026,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             .global-dca-filter-card {{ flex-direction: column; align-items: stretch; padding: 10px; gap: 8px; }}
             .buy-status-filter-card {{ width: 100%; flex-basis: 100%; }}
             .global-dca-filter-body {{ flex-direction: column; align-items: stretch; width: 100%; }}
-            .global-dca-filter-card select, .global-dca-filter-card button {{ width: 100%; height: 32px; font-size: 12px; }}
+            .global-dca-filter-card select, .global-dca-filter-card button, .global-dca-filter-card input[type="date"] {{ width: 100%; height: 32px; font-size: 12px; }}
+            /* 起止日期并排：用 flex 等分，避免上面 width:100% 把第二个挤出行外 */
+            .global-dca-filter-card .g-dca-window {{ display: flex; width: 100%; gap: 6px; }}
+            .global-dca-filter-card .g-dca-window input[type="date"] {{ flex: 1 1 0; width: auto; min-width: 0; }}
             .table-container {{ height: auto; flex: none; max-height: 70vh; padding: 4px; }}
 
             /* ===== 移动端：详情浮窗内纵向堆叠，避免 4 列 × 2 饼图被挤爆 ===== */
@@ -13234,12 +13285,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             <option value="monthly" selected>每月定投</option>
                         </select>
                         <select id="gDcaDaySelect"></select>
-                        <select id="gDcaRange">
-                            <option value="half">近半年内</option>
-                            <option value="year" selected>近一年内</option>
-                            <option value="ytd">今年以来</option>
-                            <option value="all">统计区间全序列</option>
-                        </select>
+                        <span class="g-dca-window" title="定投起始 / 结束日期（含首尾，按净值交易日就近取）">
+                            <input type="date" id="gDcaStart" aria-label="定投起始日期">
+                            <span class="g-dca-window-sep">→</span>
+                            <input type="date" id="gDcaEnd" aria-label="定投结束日期">
+                        </span>
                         <button id="gDcaApplyBtn">计算并刷新排序</button>
                         <button id="cmpToggleBtn" type="button" class="cmp-toggle-btn" aria-pressed="false" title="进入对比选择：首列由「自选星标」切换为「勾选框」，最多选 6 只">⚖ 基金对比</button>
                     </div>
@@ -13398,13 +13448,22 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         <input type="number" id="dcaAmount" value="1000" min="10" step="100">
                     </div>
                     <div class="dca-field">
-                        <label>测算周期</label>
-                        <select id="dcaRange">
-                            <option value="half">近半年内</option>
-                            <option value="year" selected>近一年内</option>
-                            <option value="ytd">今年以来</option>
-                            <option value="all">统计区间全序列</option>
-                        </select>
+                        <label>定投起始日期</label>
+                        <input type="date" id="dcaStart">
+                    </div>
+                    <div class="dca-field">
+                        <label>定投结束日期</label>
+                        <input type="date" id="dcaEnd">
+                    </div>
+                    <div class="dca-field dca-preset-field">
+                        <label>快捷窗口</label>
+                        <div class="dca-presets" id="dcaPresets">
+                            <button type="button" data-months="6">近半年</button>
+                            <button type="button" data-months="12">近一年</button>
+                            <button type="button" data-months="36">近三年</button>
+                            <button type="button" data-months="60">近五年</button>
+                            <button type="button" data-months="0">全部</button>
+                        </div>
                     </div>
                     <button class="dca-run-btn" id="dcaRunBtn">🚀 刷新测算图表</button>
                 </div>
@@ -13842,8 +13901,94 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
         }};
 
+        // ===== 定投窗口：起始/结束日期（YYYY-MM-DD）工具 =====
+
+        // 本地日期 → YYYY-MM-DD（不能用 toISOString()，那是 UTC，东八区会差一天）
+        function fmtDateInput(d) {{
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return y + '-' + m + '-' + day;
+        }}
+
+        // 解析 YYYY-MM-DD 为本地时区 Date（new Date('2026-01-01') 会按 UTC 解析）
+        function parseDateInput(s) {{
+            const p = String(s || '').split('-');
+            if (p.length !== 3) return null;
+            const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+            return isNaN(d.getTime()) ? null : d;
+        }}
+
+        function shiftDateStr(s, months) {{
+            const d = parseDateInput(s);
+            if (!d) return '';
+            const day = d.getDate();
+            d.setDate(1);
+            d.setMonth(d.getMonth() - months);
+            // 月末溢出保护：3-31 往前一月应是 2-28/29，而不是 3-02
+            const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+            d.setDate(Math.min(day, lastDay));
+            return fmtDateInput(d);
+        }}
+
+        // 全量净值数据的整体日期边界（给 date input 设 min/max 与默认窗口）
+        let navDateBoundsCache = null;
+        function getNavDateBounds() {{
+            if (navDateBoundsCache) return navDateBoundsCache;
+            let lo = '', hi = '';
+            Object.keys(fundNavData).forEach(code => {{
+                const arr = fundNavData[code] && fundNavData[code].dates;
+                if (!arr || !arr.length) return;
+                if (!lo || arr[0] < lo) lo = arr[0];
+                const last = arr[arr.length - 1];
+                if (!hi || last > hi) hi = last;
+            }});
+            // 数据还没加载时不要把空结果缓存住
+            if (!lo || !hi) return {{ min: lo, max: hi }};
+            navDateBoundsCache = {{ min: lo, max: hi }};
+            return navDateBoundsCache;
+        }}
+
+        // 某只基金自己的净值日期边界
+        function getFundDateBounds(code) {{
+            const arr = fundNavData[code] && fundNavData[code].dates;
+            if (!arr || !arr.length) return {{ min: '', max: '' }};
+            return {{ min: arr[0], max: arr[arr.length - 1] }};
+        }}
+
+        // 给一对 date input 设定可选范围 + 默认窗口（默认：结束=最晚，开始=往前 1 年）
+        function setupDateRange(startId, endId, minDate, maxDate, forceDefault) {{
+            const sEl = document.getElementById(startId);
+            const eEl = document.getElementById(endId);
+            if (!sEl || !eEl) return;
+            if (minDate) {{ sEl.min = minDate; eEl.min = minDate; }}
+            if (maxDate) {{ sEl.max = maxDate; eEl.max = maxDate; }}
+            if (forceDefault || !eEl.value) eEl.value = maxDate || eEl.value || '';
+            if (forceDefault || !sEl.value) {{
+                const base = eEl.value || maxDate;
+                sEl.value = base ? (shiftDateStr(base, 12) || minDate || '') : (minDate || '');
+            }}
+            // 夹紧到可选范围内
+            if (minDate && sEl.value && sEl.value < minDate) sEl.value = minDate;
+            if (maxDate && eEl.value && eEl.value > maxDate) eEl.value = maxDate;
+            if (maxDate && sEl.value && sEl.value > maxDate) sEl.value = maxDate;
+            if (minDate && eEl.value && eEl.value < minDate) eEl.value = minDate;
+        }}
+
+        // 读取一对 date input 的值，顺序反了自动交换
+        function readDcaWindow(startId, endId) {{
+            const sEl = document.getElementById(startId);
+            const eEl = document.getElementById(endId);
+            let start = (sEl && sEl.value) || '';
+            let end = (eEl && eEl.value) || '';
+            if (start && end && start > end) {{ const t = start; start = end; end = t; }}
+            return {{ start: start, end: end }};
+        }}
+
         // 定投回测计算核心函数
-        function computeDCA(code, freq, targetDay, perAmount, range) {{
+        // 窗口由「起始日期 / 结束日期」显式给出（空值则取全序列），
+        // 直接按 ISO 字符串比较，避免 Date 解析的时区偏移。
+        function computeDCA(code, freq, targetDay, perAmount, startStr, endStr) {{
             const raw = fundNavData[code];
             if (!raw || !raw.dates || raw.dates.length < 2) return null;
 
@@ -13856,25 +14001,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 fundParsedDates[code] = parsedDates;
             }}
 
-            const latestDate = parsedDates[parsedDates.length - 1];
-            let startDate = new Date(latestDate);
-
-            if (range === 'half') {{
-                startDate.setMonth(latestDate.getMonth() - 6);
-            }} else if (range === 'year') {{
-                startDate.setFullYear(latestDate.getFullYear() - 1);
-            }} else if (range === 'ytd') {{
-                startDate = new Date(latestDate.getFullYear(), 0, 1);
-            }} else {{
-                startDate = parsedDates[0];
-            }}
+            let winStart = startStr || allDates[0];
+            let winEnd = endStr || allDates[allDates.length - 1];
+            if (winStart > winEnd) {{ const t = winStart; winStart = winEnd; winEnd = t; }}
 
             const filtered = [];
             for (let i = 0; i < allDates.length; i++) {{
-                const d = parsedDates[i];
-                if (d >= startDate) {{
-                    filtered.push({{ date: allDates[i], dt: d, nav: allNavs[i] }});
-                }}
+                const ds = allDates[i];
+                if (ds < winStart || ds > winEnd) continue;
+                filtered.push({{ date: ds, dt: parsedDates[i], nav: allNavs[i] }});
             }}
 
             if (filtered.length < 2) return null;
@@ -13987,7 +14122,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         function updateTableDca() {{
             const freq = document.getElementById('gDcaFreq').value;
             const targetDay = parseInt(document.getElementById('gDcaDaySelect').value) || 1;
-            const range = document.getElementById('gDcaRange').value;
+            const win = readDcaWindow('gDcaStart', 'gDcaEnd');
 
             const headerTitle = document.getElementById('dcaHeaderTitle');
             if (headerTitle) {{
@@ -13997,7 +14132,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             document.querySelectorAll('#fundTable tbody tr.fund-row').forEach(row => {{
                 const code = row.getAttribute('data-code');
-                const res = computeDCA(code, freq, targetDay, 1000, range);
+                const res = computeDCA(code, freq, targetDay, 1000, win.start, win.end);
                 const dcaCell = row.querySelector('.dca-col');
 
                 if (dcaCell) {{
@@ -14038,27 +14173,66 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             buildDayOptions('gDcaFreq', 'gDcaDaySelect', null);
             document.getElementById('gDcaFreq').addEventListener('change', () => buildDayOptions('gDcaFreq', 'gDcaDaySelect', null));
             document.getElementById('gDcaApplyBtn').addEventListener('click', updateTableDca);
+            // 改完日期即时重算，不必每次都点按钮
+            ['gDcaStart', 'gDcaEnd'].forEach(id => {{
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', updateTableDca);
+            }});
 
             window.openDcaModal = function(code) {{
                 currentDcaCode = code;
                 const name = fundNames[code] || code;
                 modalTitle.textContent = `📊 定投测算: [${{code}}] ${{name}}`;
+                // 日期可选范围收窄到这只基金自己的净值区间，并重置为近一年
+                const b = getFundDateBounds(code);
+                if (b.max) setupDateRange('dcaStart', 'dcaEnd', b.min, b.max, true);
                 modal.classList.add('show');
                 runBacktestModal();
             }};
 
+            // 快捷窗口：以「结束日期」往前推 N 个月；0 = 全部（用该基金最早净值日）
+            (function initDcaPresets() {{
+                const box = document.getElementById('dcaPresets');
+                if (!box) return;
+                box.addEventListener('click', (e) => {{
+                    const btn = e.target.closest('button[data-months]');
+                    if (!btn) return;
+                    const months = parseInt(btn.getAttribute('data-months'), 10) || 0;
+                    const b = getFundDateBounds(currentDcaCode);
+                    const eEl = document.getElementById('dcaEnd');
+                    const sEl = document.getElementById('dcaStart');
+                    if (!eEl || !sEl) return;
+                    eEl.value = b.max || eEl.value;
+                    sEl.value = months > 0
+                        ? (shiftDateStr(eEl.value, months) || b.min || '')
+                        : (b.min || '');
+                    box.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === btn));
+                    runBacktestModal();
+                }});
+            }})();
+
             closeBtn.addEventListener('click', () => modal.classList.remove('show'));
             modal.addEventListener('click', (e) => {{ if (e.target === modal) modal.classList.remove('show'); }});
             runBtn.addEventListener('click', runBacktestModal);
+
+            // 手改日期后直接回车也重算（同时取消快捷按钮的高亮）
+            ['dcaStart', 'dcaEnd'].forEach(id => {{
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', () => {{
+                    const box = document.getElementById('dcaPresets');
+                    if (box) box.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+                    runBacktestModal();
+                }});
+            }});
 
             function runBacktestModal() {{
                 if (!currentDcaCode) return;
                 const freq = freqSelect.value;
                 const targetDay = parseInt(document.getElementById('dcaDaySelect').value) || 1;
                 const perAmount = parseFloat(document.getElementById('dcaAmount').value) || 1000;
-                const range = document.getElementById('dcaRange').value;
+                const win = readDcaWindow('dcaStart', 'dcaEnd');
 
-                const res = computeDCA(currentDcaCode, freq, targetDay, perAmount, range);
+                const res = computeDCA(currentDcaCode, freq, targetDay, perAmount, win.start, win.end);
                 if (!res) return;
 
                 document.getElementById('resTotalInvest').innerHTML = `${{res.investCount}} 期 / <strong>${{res.totalInvest.toLocaleString()}}</strong> 元`;
@@ -14110,6 +14284,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             let currentBuyStatus = 'all';
             let searchKeyword = '';
 
+            // 全局面板日期范围要等净值数据加载完（fundNavData 在 DOMContentLoaded 后才可靠）
+            const gb = getNavDateBounds();
+            if (gb.max) setupDateRange('gDcaStart', 'gDcaEnd', gb.min, gb.max, true);
             setTimeout(updateTableDca, 100);
 
             function syncFavDisplay() {{
