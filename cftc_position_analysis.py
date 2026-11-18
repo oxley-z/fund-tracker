@@ -85,23 +85,41 @@ DISAGG_CONTRACTS = [
 # ============================================================================
 
 def fetch_cftc(endpoint, start_date, limit=50000):
-    """从CFTC Socrata API获取数据 (含重试)"""
+    """从CFTC Socrata API获取数据 (含重试)
+
+    Socrata 偶发限流/超时，且数据集在官方发布后还可能延迟几小时才更新；
+    这里把超时、5xx、连接错误都纳入重试，避免整条周更流程因为一次抖动就
+    悄悄停在上一期（表现为「官方已发布但我们还显示旧日期」）。
+    """
     params = {
         "$where": f"report_date_as_yyyy_mm_dd >= '{start_date}'",
         "$limit": limit,
         "$order": "report_date_as_yyyy_mm_dd ASC"
     }
-    for attempt in range(3):
+    # 明确给 UA：Socrata 对 python-requests 默认 UA 不算友好，个别出口 IP 会直接 403
+    headers = {"User-Agent": "fund-tracker-cftc/1.0 (+https://github.com/oxley-z/fund-tracker)",
+               "Accept": "application/json"}
+    last_err = None
+    for attempt in range(4):
         try:
-            resp = requests.get(endpoint, params=params, timeout=120)
+            resp = requests.get(endpoint, params=params, headers=headers, timeout=120)
+            if resp.status_code >= 500 or resp.status_code == 429:
+                raise requests.exceptions.ConnectionError(f"HTTP {resp.status_code}")
             resp.raise_for_status()
+            last_err = None
             break
-        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError):
-            if attempt < 2:
-                print(f"    [RETRY {attempt+1}] Connection error, retrying in 3s...")
-                time.sleep(3)
+        except (requests.exceptions.SSLError,
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            last_err = e
+            if attempt < 3:
+                wait = 3 * (attempt + 1)
+                print(f"    [RETRY {attempt+1}] {type(e).__name__}, retrying in {wait}s...")
+                time.sleep(wait)
             else:
                 raise
+    if last_err is not None:
+        raise last_err
 
     df = pd.DataFrame(resp.json())
     if df.empty:

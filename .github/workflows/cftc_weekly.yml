@@ -2,8 +2,12 @@ name: Weekly CFTC Data Update
 
 on:
   schedule:
-    # 每周六北京时间 06:30 执行 (对应 UTC 每周五 22:30)
+    # 第一次：每周六 06:30 北京时间（UTC 周五 22:30）
+    # CFTC 官方节奏是周二持仓、周五 15:30 ET 发布；Socrata 偶尔延迟，故每周跑两次。
     - cron: '30 22 * * 5'
+    # 第二次：每周日 06:00 北京时间（UTC 周六 22:00）—— 兜底补跑
+    # （Socrata 数据集有时要到周六白天才真正可查，只跑一次会整整落下一周）
+    - cron: '0 22 * * 6'
   workflow_dispatch: # 支持手动点击立即执行
 
 permissions:

@@ -224,6 +224,17 @@ US_ETF_LOCAL = set(US_ETF_NAMES.keys())
 # 成立/上市日（例如沪深300 2005-04、科创50 2019-12、恒生科技 2020-07）。
 # 首页指数历年回报、年内最大回撤、宏观历史、基金净值都以它为准。
 HISTORY_START = "2000-01-01"
+HISTORY_START_YEAR = 2000
+
+
+def _year_of(value):
+    """把年份字段（"2008" / 2008 / "2008-12-31"）稳稳解析成 int，脏数据返回 0。"""
+    try:
+        return int(str(value).strip()[:4])
+    except (TypeError, ValueError):
+        return 0
+
+
 # --refresh-history 时置 True：忽略已有快照，重新抓全历史（仅调试/修数据时用）
 REFRESH_HISTORY = False
 
@@ -983,6 +994,10 @@ def fetch_index_annual_data(force=False):
                 ]
             if not yearly_data:
                 return name, None
+            # 统一口径：2000 年起（2000 年前成立的指数裁到 2000，之后成立的自然从成立当年起）
+            yearly_data = [r for r in yearly_data if _year_of(r.get("year")) >= HISTORY_START_YEAR]
+            if not yearly_data:
+                return name, None
             return name, {"ticker": item["ticker"], "data": yearly_data}
         except Exception as e:
             print(f"    ❌ {name} 异常: {e}")
@@ -1659,10 +1674,12 @@ def _write_macro_history_cache(data):
 
 
 def _compact_macro_points(point_map):
+    # 统一口径：早于 HISTORY_START（2000-01-01）的点一律丢弃，
+    # 免得某个数据源回吐 90 年代的历史把首页时间轴拉长。
     return [
         [date_str, round(float(value), 2)]
         for date_str, value in sorted(point_map.items())
-        if date_str and value is not None
+        if date_str and value is not None and str(date_str)[:10] >= HISTORY_START
     ]
 
 
@@ -2406,6 +2423,9 @@ def _annual_mdd_from_points(points):
         try:
             year = int(date_str[:4])
         except ValueError:
+            continue
+        # 与首页「2000 年起」口径一致：早于 2000 年的年份不计入
+        if year < ANNUAL_DD_START_YEAR:
             continue
         by_year.setdefault(year, []).append((date_str, value))
 
@@ -4224,6 +4244,51 @@ def fetch_fund_profile(opener, code):
     return profile
 
 
+def _fetch_scale_from_gmbd(opener, code, headers):
+    """东财 F10「规模变动」表兜底取规模，返回 (亿元, 报告期) 或 (None, None)。
+
+    这是官方 F10 的季报口径表（期末净资产），QDII、次新基金、C 类份额都能查到，
+    比移动端 FundMNBasicInformation 的 ENDNAV 稳（后者在 CI 高并发时偶尔缺字段，
+    表现就是页面上「规模: 未知」）。
+    """
+    url = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=gmbd&mode=0&code={code}"
+    req = urllib.request.Request(
+        url, headers={**headers, "Referer": f"https://fundf10.eastmoney.com/gmbd_{code}.html"}
+    )
+    with opener.open(req, timeout=6) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+    if not html:
+        return None, None
+
+    # 按表头定位「期末净资产」列，避免不同基金表的列数不一致
+    col = 4
+    head = re.search(r"<thead>.*?</thead>", html, re.S)
+    if head:
+        ths = [re.sub(r"<[^>]+>", "", t).strip() for t in re.findall(r"<th[^>]*>(.*?)</th>", head.group(0), re.S)]
+        for i, name in enumerate(ths):
+            if "净资产" in name:
+                col = i
+                break
+    body = re.search(r"<tbody>(.*?)</tbody>", html, re.S)
+    if not body:
+        return None, None
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", body.group(1), re.S):
+        tds = re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)
+        if len(tds) <= col:
+            continue
+        date = re.sub(r"<[^>]+>", "", tds[0]).strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+            continue
+        raw = re.sub(r"<[^>]+>", "", tds[col]).strip().replace(",", "")
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if val > 0:
+            return val, date
+    return None, None
+
+
 def fetch_fund_detail_meta(opener, code):
     cache_file = os.path.join(FEE_CACHE_DIR, f"{code}_meta.json")
     if os.path.exists(cache_file):
@@ -4232,6 +4297,23 @@ def fetch_fund_detail_meta(opener, code):
                 cached = json.load(f)
             # 校验是否具备完整的有效数据
             if cached.get("fee_manage") not in (None, "--") and cached.get("fee_redemption") not in (None, "未知"):
+                # 旧缓存里可能留着「规模: 未知」（历史上移动端接口偶发缺 ENDNAV），
+                # 单独补一次规模，不必为了一个字段重抓整份元数据。
+                if str(cached.get("scale", "")).strip() in ("", "未知", "--", "None"):
+                    try:
+                        _hdr = {"User-Agent": DEFAULT_HEADERS["User-Agent"],
+                                "Referer": f"https://fundf10.eastmoney.com/gmbd_{code}.html"}
+                        _v, _d = _fetch_scale_from_gmbd(opener, code, _hdr)
+                        if _v:
+                            cached["scale_val"] = _v
+                            cached["scale"] = f"{_v:.2f} 亿"
+                            try:
+                                with open(cache_file, 'w', encoding='utf-8') as _f:
+                                    json.dump(cached, _f, ensure_ascii=False, indent=2)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                 # 动态补齐持仓、持有人与国家分布（这些内部有独立缓存）
                 is_qdii_fund = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
                 cached["holdings"] = fetch_holdings(opener, code)
@@ -4385,6 +4467,20 @@ def fetch_fund_detail_meta(opener, code):
                         meta["buy_limit_val"] = num
             except Exception:
                 pass
+
+        # 1.5 F10「规模变动」兜底：移动端接口偶尔不给 ENDNAV（CI 高并发时更容易漏），
+        #     这里直接读官方季报的「期末净资产」，QDII / 次新基金 / C 类份额都能覆盖。
+        if meta["scale"] == "未知":
+            for c_try in codes_to_try:
+                if meta["scale"] != "未知":
+                    break
+                try:
+                    _v, _d = _fetch_scale_from_gmbd(opener, c_try, headers)
+                    if _v:
+                        meta["scale_val"] = _v
+                        meta["scale"] = f"{_v:.2f} 亿"
+                except Exception:
+                    pass
 
         # 2. 尝试从天天基金主页及 JS 变量解析（匹配“基金规模”或新基金的“成立规模/募集规模”）
         if meta["scale"] == "未知":
@@ -5589,7 +5685,7 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         day = min(d.day, monthrange(year, month)[1])
         return d.replace(year=year, month=month, day=day)
 
-    def calc_gain(days=None, months=None, ytd=False):
+    def calc_gain(days=None, months=None, ytd=False, strict=False):
         latest_dt = datetime.strptime(latest_date, '%Y-%m-%d')
         if ytd: target_dt = latest_dt.replace(month=1, day=1)
         elif days: target_dt = latest_dt - timedelta(days=days)
@@ -5597,6 +5693,10 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         else: return None
 
         target_date_str = target_dt.strftime('%Y-%m-%d')
+        # strict：要求净值序列真正覆盖到目标日之前。近三年/近五年这种长区间必须严格，
+        # 否则「成立才两年」的基金会被拿成立首日当基准，把「成立以来」当成三年收益。
+        if strict and data_all[0]['date'] > target_date_str:
+            return None
         base_nav = None
         for item in data_all:
             if item['date'] >= target_date_str:
@@ -5612,6 +5712,7 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         "recovery_rate": recovery_rate, "recovery_days": recovery_days, "rebound_gain": rebound_gain,
         "today_gain": today_gain, "week_gain": calc_gain(days=7), "month_gain": calc_gain(months=1),
         "quarter_gain": calc_gain(months=3), "half_year_gain": calc_gain(months=6), "year_gain": calc_gain(months=12),
+        "three_year_gain": calc_gain(months=36, strict=True), "five_year_gain": calc_gain(months=60, strict=True),
         "ytd_gain": calc_gain(ytd=True)
     }
 
@@ -5781,7 +5882,8 @@ CMP_META_JS = r'''
                 '区间最大回撤': 'min',
                 '区间年化波动': 'min',
                 '近一周': 'max', '近一月': 'max', '近三月': 'max',
-                '近半年': 'max', '近一年': 'max', '今年内': 'max', '今日涨跌': 'max',
+                '近半年': 'max', '近一年': 'max', '近三年': 'max', '近五年': 'max',
+                '今年内': 'max', '今日涨跌': 'max',
                 '最大回撤（当前窗口）': 'min',
                 '自低点反弹': 'max', '修复程度': 'max',
                 // 「修复时间」不标注：没修复的基金后端会给 0 天，直接取最小会误判成最快
@@ -5874,11 +5976,20 @@ ANNUAL_DD_JS = r'''
                     ctx.font = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'top';
+                    // 一年一根柱子，卡片只有半栏宽时单根柱子约 15px，
+                    // 逐年都标数字会糊成一条。这里做两级降噪：
+                    //   1) 柱子窄时只给「回撤较深（≤-12%）」的年份标数字；
+                    //   2) 任何情况下相邻两个标签至少隔 22px，浅的让位给深的。
+                    var lastLabelX = -1e9;
+                    var narrow = false;
+                    if (meta.data.length) narrow = meta.data[0].width < 26;
                     meta.data.forEach(function (bar, i) {
                         var v = values[i];
                         if (!isFinite(v) || v > -1) return;
                         var barH = Math.abs(bar.y - bar.base);
                         if (barH < 14) return;
+                        if (narrow && v > -12) return;
+                        if (Math.abs(bar.x - lastLabelX) < 22) return;
                         var label = v.toFixed(1) + '%';
                         if (bar.width < 26) label = v.toFixed(0) + '%';
                         if (bar.width < 12) return;
@@ -5886,6 +5997,7 @@ ANNUAL_DD_JS = r'''
                         ctx.fillStyle = v <= -20 ? (isDark ? '#ff8a80' : '#b71c1c') : textColor;
                         ctx.font = (v <= -20 ? '700 ' : '600 ') + '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
                         ctx.fillText(label, bar.x, y);
+                        lastLabelX = bar.x;
                     });
                     ctx.restore();
                 }
@@ -5983,7 +6095,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     }
     COMMODITIES_LOCAL = {"XAU", "AUM", "XAG", "BRENT", "CAD"}
     CRYPTO_LOCAL = {"BTC", "ETH", "SOL", "BNB"}
-    col_count = 22
+    col_count = 24
 
     def _te_attr(value):
         """把 tsdata 抓来的字符串指标清洗成纯数字，供 data-* 属性使用。
@@ -7165,6 +7277,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             <td data-val="{r['quarter_gain'] if r['quarter_gain'] is not None else -9999}" class="{gain_class(r['quarter_gain'])}">{format_gain(r['quarter_gain'])}</td>
             <td data-val="{r['half_year_gain'] if r['half_year_gain'] is not None else -9999}" class="{gain_class(r['half_year_gain'])}">{format_gain(r['half_year_gain'])}</td>
             <td data-val="{r['year_gain'] if r['year_gain'] is not None else -9999}" class="{gain_class(r['year_gain'])}">{format_gain(r['year_gain'])}</td>
+            <td data-val="{r['three_year_gain'] if r.get('three_year_gain') is not None else -9999}" class="{gain_class(r.get('three_year_gain'))}">{format_gain(r.get('three_year_gain'))}</td>
+            <td data-val="{r['five_year_gain'] if r.get('five_year_gain') is not None else -9999}" class="{gain_class(r.get('five_year_gain'))}">{format_gain(r.get('five_year_gain'))}</td>
             <td data-val="{r['ytd_gain'] if r['ytd_gain'] is not None else -9999}" class="{gain_class(r['ytd_gain'])}">{format_gain(r['ytd_gain'])}</td>
             <td class="dca-col" data-val="-9999">--</td>
         </tr>
@@ -7553,6 +7667,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <button class="period-btn" data-period="quarter" data-code="{r['code']}">近三月</button>
                     <button class="period-btn" data-period="half" data-code="{r['code']}">近半年</button>
                     <button class="period-btn" data-period="year" data-code="{r['code']}">近一年</button>
+                    <button class="period-btn" data-period="3y" data-code="{r['code']}">近三年</button>
+                    <button class="period-btn" data-period="5y" data-code="{r['code']}">近五年</button>
                     <button class="period-btn" data-period="ytd" data-code="{r['code']}">今年内</button>
                     <button class="period-btn" data-period="all" data-code="{r['code']}">成立以来</button>
                 </div>
@@ -7840,7 +7956,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             if not idx_data or not idx_data.get("data"):
                 continue
             ticker = idx_data.get("ticker", "")
-            yearly_data = idx_data["data"]
+            # 首页统一口径：只展示 2000 年及以后（2000 年前成立的指数从 2000 起算，
+            # 2000 年后才成立的指数自然从成立当年起）。费城半导体原始序列能到 1995，
+            # 这里一并裁掉，避免和其它指数的时间轴口径不一致。
+            yearly_data = [
+                row for row in (idx_data.get("data") or [])
+                if _year_of(row.get("year")) >= HISTORY_START_YEAR
+            ]
             if not yearly_data:
                 continue
 
@@ -9558,10 +9680,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             flex-direction: column;
             gap: 20px;
             /* 原来是 1440px + 左右各 5%：2K/带鱼屏上两侧会空出 400px 以上。
-               现在内容随屏幕走（上限 2160），左右只留 18px 呼吸位。 */
-            max-width: 2160px;
+               现在内容随屏幕走（上限 2000），左右留 32px 呼吸位。 */
+            max-width: 2000px;
             margin: 0 auto;
-            padding: 24px 18px;
+            padding: 24px 32px;
             width: 100%;
             box-sizing: border-box;
         }}
@@ -10214,7 +10336,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             border: 1px solid var(--border);
             margin-bottom: 6px;
         }}
-        #fundTable {{ width: 100%; min-width: 2550px; border-collapse: collapse; font-size: 12px; text-align: right; table-layout: fixed; }}
+        #fundTable {{ width: 100%; min-width: 2820px; border-collapse: collapse; font-size: 12px; text-align: right; table-layout: fixed; }}
         th, td {{ padding: 6px 8px; border-bottom: 1px solid var(--border); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }}
         #fundTable thead th {{ position: sticky; top: 0; z-index: 10; background-color: var(--header-bg); border-bottom: 2px solid var(--border); }}
         th:nth-child(1), td:nth-child(1) {{ width: 45px; text-align: center; white-space: nowrap; }}
@@ -10229,7 +10351,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         th:nth-child(11), td:nth-child(11), th:nth-child(12), td:nth-child(12), th:nth-child(13), td:nth-child(13) {{ width: 300px; white-space: nowrap; }}
         th:nth-child(14), td:nth-child(14) {{ width: 80px; white-space: nowrap; }}
         th:nth-child(15), td:nth-child(15) {{ width: 155px; min-width: 90px; white-space: normal; }}
-        th:nth-child(16), td:nth-child(16), th:nth-child(17), td:nth-child(17), th:nth-child(18), td:nth-child(18), th:nth-child(19), td:nth-child(19), th:nth-child(20), td:nth-child(20), th:nth-child(21), td:nth-child(21), th:nth-child(22), td:nth-child(22) {{ width: 80px; white-space: nowrap; }}
+        th:nth-child(16), td:nth-child(16), th:nth-child(17), td:nth-child(17), th:nth-child(18), td:nth-child(18), th:nth-child(19), td:nth-child(19), th:nth-child(20), td:nth-child(20), th:nth-child(21), td:nth-child(21), th:nth-child(22), td:nth-child(22), th:nth-child(23), td:nth-child(23), th:nth-child(24), td:nth-child(24) {{ width: 80px; white-space: nowrap; }}
         th {{ background-color: var(--header-bg); color: var(--header-text); font-weight: 600; text-align: right; user-select: none; cursor: pointer; white-space: normal; word-break: keep-all; line-height: 1.25; height: 38px; vertical-align: middle; position: relative; }}
         th:hover {{ background-color: #e4e7eb; }}
         [data-theme="dark"] th:hover {{ background-color: #3d3d3d; }}
@@ -12033,7 +12155,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 font-size: 10px !important;
             }}
 
-            /* 6 个数值列 */
+            /* 8 个数值列 */
             #fundView.simple-mode #fundTable th:nth-child(16),
             #fundView.simple-mode #fundTable td:nth-child(16),
             #fundView.simple-mode #fundTable th:nth-child(17),
@@ -12045,7 +12167,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             #fundView.simple-mode #fundTable th:nth-child(20),
             #fundView.simple-mode #fundTable td:nth-child(20),
             #fundView.simple-mode #fundTable th:nth-child(21),
-            #fundView.simple-mode #fundTable td:nth-child(21) {{
+            #fundView.simple-mode #fundTable td:nth-child(21),
+            #fundView.simple-mode #fundTable th:nth-child(22),
+            #fundView.simple-mode #fundTable td:nth-child(22),
+            #fundView.simple-mode #fundTable th:nth-child(23),
+            #fundView.simple-mode #fundTable td:nth-child(23) {{
                 width: 62px !important;
                 min-width: 62px !important;
                 font-size: 10px !important;
@@ -12177,10 +12303,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             padding-top: 4px;
         }}
         /* ===== 指数历年回报 - 年内最大回撤视图 ===== */
-        /* 切到回撤视图时卡片撑满整行：20+ 根柱子在半栏宽度里会挤成一片 */
-        .index-annual-grid > .metric-card.annual-card-wide {{
-            grid-column: 1 / -1;
-        }}
+        /* 回撤视图保持与卡片/热力图/柱状图同宽（不再切视图时撑满整行），
+           其余三个视图切回来时卡片宽度也就不会跳变。 */
         .annual-dd-stats {{
             margin-top: 6px;
         }}
@@ -12248,14 +12372,26 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         #fundView.simple-mode .th-full {{ display: none; }}
         #fundView.simple-mode .th-simple {{ display: inline; }}
 
-        /* 简洁模式：与首页同一套留白规则（左右 18px，上限 2160） */
+        /* 简洁模式：与首页同一套留白规则（左右 32px，上限 2000） */
         #fundView.simple-mode {{
-            padding-left: 18px;
-            padding-right: 18px;
+            padding-left: 32px;
+            padding-right: 32px;
             box-sizing: border-box;
-            max-width: 2160px;
+            max-width: 2000px;
             margin: 0 auto;
             width: 100%;
+        }}
+
+        /* 详细模式也跟首页对齐留白（默认模式由上面的 simple-mode 规则控制） */
+        @media (min-width: 993px) {{
+            #fundView:not(.simple-mode) {{
+                padding-left: 32px;
+                padding-right: 32px;
+                box-sizing: border-box;
+                max-width: 2000px;
+                margin: 0 auto;
+                width: 100%;
+            }}
         }}
 
         /* 简洁模式：搜索栏缩短（仅桌面端，移动端由工具栏自适应） */
@@ -12265,7 +12401,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
         }}
 
-        /* 简洁模式：隐藏不需要的列（保留 1,2,3,4,7,16,17,18,19,20,21） */
+        /* 简洁模式：隐藏不需要的列（保留 1,2,3,4,7,16~23） */
         #fundView.simple-mode #fundTable th:nth-child(5),
         #fundView.simple-mode #fundTable th:nth-child(6),
         #fundView.simple-mode #fundTable th:nth-child(8),
@@ -12276,7 +12412,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         #fundView.simple-mode #fundTable th:nth-child(13),
         #fundView.simple-mode #fundTable th:nth-child(14),
         #fundView.simple-mode #fundTable th:nth-child(15),
-        #fundView.simple-mode #fundTable th:nth-child(22),
+        #fundView.simple-mode #fundTable th:nth-child(24),
         #fundView.simple-mode #fundTable td:nth-child(5),
         #fundView.simple-mode #fundTable td:nth-child(6),
         #fundView.simple-mode #fundTable td:nth-child(8),
@@ -12287,7 +12423,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         #fundView.simple-mode #fundTable td:nth-child(13),
         #fundView.simple-mode #fundTable td:nth-child(14),
         #fundView.simple-mode #fundTable td:nth-child(15),
-        #fundView.simple-mode #fundTable td:nth-child(22) {{
+        #fundView.simple-mode #fundTable td:nth-child(24) {{
             display: none !important;
         }}
 
@@ -12340,7 +12476,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             text-align: left;
         }}
 
-        /* 简洁模式：近一周/近一月/近三月/近半年/近一年/今年内（6 个数值列，统一宽度） */
+        /* 简洁模式：近一周/近一月/近三月/近半年/近一年/近三年/近五年/今年内（8 个数值列，统一宽度） */
         #fundView.simple-mode #fundTable th:nth-child(16),
         #fundView.simple-mode #fundTable td:nth-child(16),
         #fundView.simple-mode #fundTable th:nth-child(17),
@@ -12352,9 +12488,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         #fundView.simple-mode #fundTable th:nth-child(20),
         #fundView.simple-mode #fundTable td:nth-child(20),
         #fundView.simple-mode #fundTable th:nth-child(21),
-        #fundView.simple-mode #fundTable td:nth-child(21) {{
-            width: 8.5%;
-            min-width: 80px;
+        #fundView.simple-mode #fundTable td:nth-child(21),
+        #fundView.simple-mode #fundTable th:nth-child(22),
+        #fundView.simple-mode #fundTable td:nth-child(22),
+        #fundView.simple-mode #fundTable th:nth-child(23),
+        #fundView.simple-mode #fundTable td:nth-child(23) {{
+            width: 6.2%;
+            min-width: 62px;
             text-align: right;
         }}
 
@@ -13130,8 +13270,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             <th data-col="17" onclick="handleHeaderClick(17)"><span class="th-full">近三月</span><span class="th-simple">近三月</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="18" onclick="handleHeaderClick(18)"><span class="th-full">近半年</span><span class="th-simple">近半年</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="19" onclick="handleHeaderClick(19)"><span class="th-full">近一年</span><span class="th-simple">近一年</span> <span class="sort-icon">⇅</span></th>
-                            <th data-col="20" onclick="handleHeaderClick(20)"><span class="th-full">今年内</span><span class="th-simple">今年内</span> <span class="sort-icon">⇅</span></th>
-                            <th data-col="21" onclick="handleHeaderClick(21)"><span class="th-full"><span id="dcaHeaderTitle">月定投</span>收益</span><span class="th-simple">定投</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="20" onclick="handleHeaderClick(20)"><span class="th-full">近三年</span><span class="th-simple">近三年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="21" onclick="handleHeaderClick(21)"><span class="th-full">近五年</span><span class="th-simple">近五年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="22" onclick="handleHeaderClick(22)"><span class="th-full">今年内</span><span class="th-simple">今年内</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="23" onclick="handleHeaderClick(23)"><span class="th-full"><span id="dcaHeaderTitle">月定投</span>收益</span><span class="th-simple">定投</span> <span class="sort-icon">⇅</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -13556,9 +13698,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             if (barView) barView.style.display = (mode === 'bar') ? 'block' : 'none';
             const ddView = document.getElementById('annual-dd-' + idxName);
             if (ddView) ddView.style.display = (mode === 'dd') ? 'block' : 'none';
-            // 年内回撤要跟 20 多根柱子并排看，双列卡片太窄会把年份挤成一团，切到该视图时撑满整行
-            const cardEl = container.closest('.metric-card');
-            if (cardEl) cardEl.classList.toggle('annual-card-wide', mode === 'dd');
+            // 说明：不再给卡片加 annual-card-wide —— 回撤视图与其它三个视图保持同宽，
+            // 切视图时卡片不会突然撑满整行、再缩回去。
 
             if (mode === 'bar') {{
                 setTimeout(() => initAnnualBarChart(idxName), 60);
@@ -13875,9 +14016,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 }}
             }});
 
-            if (currentSortCol === 21) {{
+            if (currentSortCol === 23) {{
                 isAscending = !isAscending;
-                sortTable(21);
+                sortTable(23);
             }}
         }}
 
@@ -14179,6 +14320,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             else if (period === 'quarter') startDate.setMonth(latest.getMonth() - 3);
             else if (period === 'half') startDate.setMonth(latest.getMonth() - 6);
             else if (period === 'year') startDate.setFullYear(latest.getFullYear() - 1);
+            else if (period === '3y') startDate.setFullYear(latest.getFullYear() - 3);
+            else if (period === '5y') startDate.setFullYear(latest.getFullYear() - 5);
             else if (period === 'ytd') {{
                 // ★ 与「年度收益率」热力图口径严格对齐：
                 //   基准取「上一年最后一个交易日」的净值，而不是当年第一个交易日。
@@ -15409,9 +15552,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 const modeBtns = document.querySelectorAll('.view-mode-btn');
                 if (!fundView || !modeBtns.length) return;
 
-                // 展开行的 colspan 随模式动态调整（22 ↔ 8）
+                // 展开行的 colspan 随模式动态调整（24 ↔ 11）
                 function applyColspan(mode) {{
-                    const span = (mode === 'simple') ? '11' : '22';
+                    const span = (mode === 'simple') ? '11' : '24';
                     document.querySelectorAll('#fundTable td[colspan]').forEach(td => {{
                         td.setAttribute('colspan', span);
                     }});
@@ -15751,7 +15894,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             const COL = {{
                 SCALE: 3, FEE: 4, FEE_PUR: 5, MAXDD: 10, REBOUND: 11, RECOVERY: 12,
                 RECOVERY_DAYS: 13, TODAY: 14, WEEK: 15, MONTH: 16, QUARTER: 17,
-                HALF: 18, YEAR: 19, YTD: 20
+                HALF: 18, YEAR: 19, YEAR3: 20, YEAR5: 21, YTD: 22
             }};
             const PERIOD_MONTHS = {{ month: 1, quarter: 3, half: 6, year: 12, all: 0 }};
             const PERIOD_LABEL = {{ month: '近1月', quarter: '近3月', half: '近6月', year: '近1年', all: '全区间' }};
@@ -16121,6 +16264,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     quarter: num(COL.QUARTER),
                     half: num(COL.HALF),
                     year: num(COL.YEAR),
+                    year3: num(COL.YEAR3),
+                    year5: num(COL.YEAR5),
                     ytd: num(COL.YTD),
                     sharp1y: attrNum('data-sharp1y'),
                     sharp3y: attrNum('data-sharp3y'),
@@ -16212,6 +16357,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 html += domRow('近三月', 'quarter', 'pct');
                 html += domRow('近半年', 'half', 'pct');
                 html += domRow('近一年', 'year', 'pct');
+                html += domRow('近三年', 'year3', 'pct');
+                html += domRow('近五年', 'year5', 'pct');
                 html += domRow('今年内', 'ytd', 'pct');
                 html += domRow('今日涨跌', 'today', 'pct');
                 html += rowOf('最大回撤（当前窗口）', function (c) {{
