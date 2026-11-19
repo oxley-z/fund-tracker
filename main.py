@@ -8164,6 +8164,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                                 </span>
                             </div>
                             <div class="macro-history-controls">
+                                <button class="macro-history-range-toggle" data-macro-part="rangeToggle" type="button" title="切换横轴范围" hidden>自 2000 起</button>
                                 <button class="macro-history-reset" data-macro-part="resetZoom" type="button" aria-label="重置缩放" title="重置缩放" hidden>↺</button>
                                 <button class="macro-history-close" data-macro-part="close" type="button" aria-label="收起历史图" title="收起历史图">×</button>
                             </div>
@@ -9096,7 +9097,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         panel: null,
         chart: null,
         waitAttempts: 0,
-        zoomRange: null
+        zoomRange: null,
+        // 估值卡默认只画「有 PE 的区间」（蛋卷 PE 最多 10 年），
+        // 需要看指数 2000 年以来的长周期点位时再手动切到全量横轴。
+        fullRange: false
     };
     const PANEL_IDS = [
         'macroHistoryPanelCore',
@@ -9320,11 +9324,38 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }
     }
 
+    // 估值卡的 PE 起点下标（蛋卷只给近 10 年，点位却能回溯到 2000 年）。
+    // 默认横轴从 PE 起点开始：两条线都能铺满整张图，不会出现「左半张只有点位、
+    // 没有 PE」的残缺画面；用户点「自 2000 起」时才把横轴拉回指数起点。
+    function macroPeStartIndex(series) {
+        if (!series || !series.overlay || !series.overlay.peStart) return 0;
+        const points = series.points || [];
+        const at = points.findIndex(function(point) {
+            return point && point[0] >= series.overlay.peStart;
+        });
+        return at > 0 ? at : 0;
+    }
+
+    function macroBaseStart(series) {
+        if (state.fullRange) return 0;
+        const points = (series && series.points) || [];
+        const values = (series && series.overlay && series.overlay.values) || null;
+        let at = macroPeStartIndex(series);
+        // 科创50/恒生科技这类「PE 早于指数发布日」的标的，PE 起点之前点位是空的，
+        // 起点要同时满足「有 PE」和「有点位」，否则左侧又会出现半张空白。
+        if (values) {
+            while (at < points.length - 1 && (values[at] === null || values[at] === undefined)) {
+                at += 1;
+            }
+        }
+        return at;
+    }
+
     function updateMacroHistoryMeta(key) {
         const series = MACRO_HISTORY[key];
         if (!series || !series.points || !series.points.length) return;
         const total = series.points.length;
-        let start = 0;
+        let start = macroBaseStart(series);
         let end = total - 1;
         if (state.zoomRange) {
             start = Math.max(0, Math.min(state.zoomRange[0], total - 2));
@@ -9332,11 +9363,16 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }
         const count = end - start + 1;
         const meta = panelPart('meta');
-        const pointSource = series.overlay ? ' + ' + series.overlay.source : '';
-        // PE 起点晚于横轴起点时补一句说明，否则读者会以为 PE 缺失是抓取失败
-        const peNote = (series.overlay && series.overlay.peStart
-            && series.points[0][0] < series.overlay.peStart)
-            ? ' · PE 自 ' + series.overlay.peStart + ' 起（数据源最多回溯 10 年）'
+        // 双轴卡的来源分开写清楚：左轴 PE 一条源，右轴点位一条源
+        const sourceText = series.overlay
+            ? 'PE：' + series.source + ' · 点位：' + (series.overlay.source || '指数日线')
+            : series.source;
+        // PE 起点晚于点位起点时，说明缺口是数据源限制而不是抓取失败
+        const peIdx = macroPeStartIndex(series);
+        const peNote = (peIdx > 0 && series.overlay.peStart)
+            ? (start >= peIdx
+                ? ' · PE 与点位均自 ' + series.overlay.peStart + ' 起（PE 源最多回溯 10 年）'
+                : ' · ' + series.overlay.peStart + ' 之前只有点位，无 PE（PE 源最多回溯 10 年）')
             : '';
         // 美股 PE 是 T+1 收盘估值，通常比点位轴晚一个交易日，注明以免误判「没更新」
         const peEndNote = (series.overlay && series.overlay.peEnd
@@ -9346,9 +9382,19 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         if (meta) meta.textContent =
             series.points[start][0] + ' ~ ' + series.points[end][0] +
             ' · ' + count.toLocaleString('zh-CN') + ' 个观测点 · ' +
-            series.source + pointSource + peNote + peEndNote;
+            sourceText + peNote + peEndNote;
         const reset = panelPart('resetZoom');
         if (reset) reset.hidden = !state.zoomRange;
+        const toggle = panelPart('rangeToggle');
+        if (toggle) {
+            toggle.hidden = peIdx <= 0;
+            if (peIdx > 0) {
+                toggle.textContent = state.fullRange ? '只看 PE 区间' : '自 2000 起';
+                toggle.title = state.fullRange
+                    ? '收起到 PE 与点位都有数据的区间'
+                    : '横轴拉回指数起点（2000 年），PE 之前只有点位';
+            }
+        }
     }
 
     function setupMacroSelection(canvas, panel) {
@@ -9393,7 +9439,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
             const ratioA = (Math.min(startX, endX) - area.left) / Math.max(1, area.right - area.left);
             const ratioB = (Math.max(startX, endX) - area.left) / Math.max(1, area.right - area.left);
-            const currentStart = state.zoomRange ? state.zoomRange[0] : 0;
+            const currentStart = state.zoomRange
+                ? state.zoomRange[0]
+                : macroBaseStart(MACRO_HISTORY[state.key]);
             const currentCount = chart.data.labels.length;
             const localStart = Math.round(ratioA * Math.max(0, currentCount - 1));
             const localEnd = Math.round(ratioB * Math.max(0, currentCount - 1));
@@ -9481,7 +9529,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         empty.hidden = true;
 
         const total = points.length;
-        let start = 0;
+        let start = macroBaseStart(series);
         let end = total - 1;
         if (state.zoomRange) {
             start = Math.max(0, Math.min(state.zoomRange[0], total - 2));
@@ -9686,6 +9734,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         state.panel = panel;
         state.waitAttempts = 0;
         state.zoomRange = null;
+        state.fullRange = false;
         panel.hidden = false;
         setOpenCards(key, panelId);
         const title = panel.querySelector('[data-macro-part="title"]');
@@ -9739,6 +9788,14 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             if (close) close.addEventListener('click', closeMacroHistory);
             const reset = panel.querySelector('[data-macro-part="resetZoom"]');
             if (reset) reset.addEventListener('click', resetMacroZoom);
+            const rangeToggle = panel.querySelector('[data-macro-part="rangeToggle"]');
+            if (rangeToggle) rangeToggle.addEventListener('click', function() {
+                if (!state.key) return;
+                state.fullRange = !state.fullRange;
+                state.zoomRange = null;
+                updateMacroHistoryMeta(state.key);
+                renderMacroHistory(state.key);
+            });
         });
 
         document.addEventListener('keydown', function(event) {
@@ -10304,6 +10361,24 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             border-color: var(--link-color);
             color: var(--link-color);
         }}
+        .macro-history-range-toggle {{
+            flex: 0 0 auto;
+            height: 28px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--hover-bg);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 12px;
+            line-height: 1;
+            white-space: nowrap;
+        }}
+        .macro-history-range-toggle:hover {{
+            border-color: var(--link-color);
+            color: var(--link-color);
+        }}
+        .macro-history-range-toggle[hidden] {{ display: none; }}
         .macro-history-reset[hidden] {{ display: none; }}
         .macro-history-chart-wrap {{
             position: relative;
