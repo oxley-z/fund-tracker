@@ -12,6 +12,7 @@ import argparse
 import webbrowser
 import urllib.request
 import urllib.parse
+import urllib.error
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="akshare")
 import akshare as ak
@@ -1091,6 +1092,23 @@ def get_vix(opener) -> tuple[float, str, str]:
     except Exception: pass
     return 0.0, "获取失败", "https://cn.investing.com/indices/volatility-s-p-500"
 
+def _fng_rating_from_score(score):
+    """按卡片上的五档刻度把分数翻成文字评级（与展开图的背景分段一致）。"""
+    try:
+        score = float(score)
+    except (TypeError, ValueError):
+        return "暂无数据"
+    if score <= 25:
+        return "极度恐惧"
+    if score < 45:
+        return "恐惧"
+    if score <= 55:
+        return "中性观望"
+    if score < 75:
+        return "贪婪"
+    return "极度贪婪"
+
+
 def get_cnn_fear_greed(opener) -> tuple[float, str, str, str]:
     """获取 CNN 恐慌贪婪指数：仅从 CNN 官方获取"""
     cnn_page_url = "https://edition.cnn.com/markets/fear-and-greed"
@@ -1594,6 +1612,11 @@ ANNUAL_DD_CACHE = os.path.join("data", "index_annual_drawdown.json")
 ANNUAL_DD_CACHE_VERSION = 1
 ANNUAL_DD_START_YEAR = 2000          # 与「指数历年回报（2000 年至今）」对齐
 ANNUAL_DD_MIN_BARS = 5               # 年内有效交易日少于该值则不参与（新上市/数据残缺）
+# 指数日线的「周采样」快照：年内回撤本来就要拉全量日线，顺手把每周最后一个交易日
+# 存下来，供宽基估值卡把横轴从 PE 起点（蛋卷只给 10 年）一直补到指数起点（2000 年起）。
+# 单独存盘是因为估值图需要的是「2000 年起的点位」，而 index_point_history 只有
+# 与 PE 日期对齐后的 2016 年起片段。
+INDEX_DAILY_WEEKLY_CACHE = os.path.join("data", "index_daily_weekly.json")
 ANNUAL_DD_TARGETS = {
     # 坑：东财 100.NDX 实际返回的是纳斯达克综合指数（2000-03-10 收盘 5048.62，
     # 那是综合指数的历史高点），与卡片上的「纳指100」不同标的，只能走腾讯/新浪的 .NDX
@@ -1749,14 +1772,19 @@ def fetch_cboe_macro_history(symbol, start_date=MACRO_HISTORY_START):
 
 
 def fetch_cnn_macro_history():
-    """读取 CNN 官方恐惧贪婪指数历史序列。
+    """读取 CNN 官方恐惧贪婪指数历史序列（尽量往前取）。
 
-    坑：不带日期的 graphdata 只回吐最近 1 年（约 270 个交易日）。CNN 的接口支持在
-    路径后追加起始日期（/graphdata/2011-01-01），才会返回从该日起的全量序列，
-    因此这里先试「带日期」再退回「不带日期」。指数本身 2011 年才发布，无法更早。
+    坑一：不带日期的 graphdata 只回吐最近 1 年（约 252 个交易日），历史图会有 3/4 空白。
+    坑二：接口虽然支持在路径后追加起始日期（/graphdata/2011-01-01），但服务端对
+          单次返回条数有上限（约 1500 个交易日），起始日过早会直接 500，
+          而不是截断返回。2011 与 2019 起都已被拒，2021 起可以正常返回。
+    因此这里按「由远到近」的年份阶梯逐档试，第一档成功即返回；越晚的档位
+    只是兜底，避免将来上限定死时彻底抓不到。
     """
     base = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
-    candidates = (f"{base}/2011-01-01", base)
+    current_year = now_beijing().year
+    ladder = [year for year in (2011, 2014, 2017, 2019, 2021, 2023, 2025) if year <= current_year]
+    candidates = [f"{base}/{year}-01-01" for year in ladder] + [base]
     headers = {
         **DEFAULT_HEADERS,
         "Referer": "https://edition.cnn.com/markets/fear-and-greed",
@@ -1764,16 +1792,24 @@ def fetch_cnn_macro_history():
         "Accept": "application/json,text/plain,*/*",
     }
     last_error = None
+    network_down = False
     for url in candidates:
-        for attempt in range(2):
+        # 网络层不可达时继续逐档试只会白等超时，直接跳到不带日期的兜底
+        if network_down and url != base:
+            continue
+        for attempt in range(1 if url != base else 2):
             try:
                 req = urllib.request.Request(url, headers=headers)
-                with get_thread_opener().open(req, timeout=12) as resp:
+                with get_thread_opener().open(req, timeout=10) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
-            except Exception as exc:      # 418/502/超时都会出现，退避后重试
+            except urllib.error.HTTPError as exc:
+                # 起始日过早会被服务端直接拒（500），换下一档即可，不必重试
                 last_error = exc
-                time.sleep(1.0 + random.random())
-                continue
+                break
+            except Exception as exc:      # 超时/连不上，换兜底端点，不再逐档重试
+                last_error = exc
+                network_down = True
+                break
 
             rows = (payload.get("fear_and_greed_historical") or {}).get("data") or []
             points = {}
@@ -2592,6 +2628,56 @@ def _write_annual_dd_cache(payload):
         print(f"    ⚠️ 年内回撤缓存写入失败: {e}")
 
 
+def _sample_weekly_points(points):
+    """把日线序列压成「每周最后一个交易日」，[日期, 值] 升序返回。
+
+    26 年日线约 6800 点，直接塞进页面会让估值图多出几百 KB；估值图本身
+    和 PE（蛋卷也是周频）同粒度即可，周采样后约 1350 点，画面上看不出差别。
+    """
+    weekly = {}
+    for row in points or []:
+        try:
+            date_str = str(row[0])[:10]
+            value = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if len(date_str) < 10 or value <= 0:
+            continue
+        try:
+            iso_year, iso_week, _ = datetime.strptime(date_str, "%Y-%m-%d").isocalendar()
+        except ValueError:
+            continue
+        weekly[(iso_year, iso_week)] = (date_str, value)
+    return [[d, v] for _key, (d, v) in sorted(weekly.items())]
+
+
+def _read_index_daily_weekly():
+    try:
+        with open(INDEX_DAILY_WEEKLY_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        items = (data or {}).get("items") or {}
+        return items if isinstance(items, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_index_daily_weekly(items):
+    if not items:
+        return
+    try:
+        os.makedirs(os.path.dirname(INDEX_DAILY_WEEKLY_CACHE) or ".", exist_ok=True)
+        payload = {
+            "generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
+            "items": items,
+        }
+        tmp = INDEX_DAILY_WEEKLY_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, INDEX_DAILY_WEEKLY_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ 指数周线缓存写入失败: {e}")
+
+
 def _fetch_annual_dd_daily(sources):
     """按配置顺序抓指数日线，拿到足够长的序列就返回 (points, 来源)。"""
     beg = f"{ANNUAL_DD_START_YEAR}0101"
@@ -2623,9 +2709,12 @@ def fetch_index_annual_drawdown():
     cached_items = cached.get("items") or {}
     version_ok = cached.get("version") == ANNUAL_DD_CACHE_VERSION
     # 历史年份已定型，只有当年那一列每天在动：同一自然日已算过就不再发请求。
+    # 例外：周线快照缺失时（首次升级/文件被清）必须重跑一轮，否则估值图拿不到
+    # 2000 年起的点位，横轴又会退回 2016 年。
     cached_day = str(cached.get("generated_at") or "")[:10]
     if (not REFRESH_HISTORY and version_ok and cached_items
-            and cached_day == now_beijing().strftime("%Y-%m-%d")):
+            and cached_day == now_beijing().strftime("%Y-%m-%d")
+            and _read_index_daily_weekly()):
         print("📉 年内最大回撤: 命中当日缓存，跳过网络请求")
         return cached
 
@@ -2634,6 +2723,7 @@ def fetch_index_annual_drawdown():
         "version": ANNUAL_DD_CACHE_VERSION,
         "items": {},
     }
+    weekly_items = dict(_read_index_daily_weekly())
     refreshed = 0
     for name, sources in ANNUAL_DD_TARGETS.items():
         old = cached_items.get(name) or {}
@@ -2649,6 +2739,20 @@ def fetch_index_annual_drawdown():
         fresh_years = _annual_mdd_from_points(daily)
         if not fresh_years:
             continue
+        # 历史周线已定型：本次拿到的覆盖到的日期整段替换，取不到的沿用旧快照，
+        # 避免某次降级到新浪（只有 3000 根）时把 2000-2015 的周线抹掉。
+        old_weekly = (weekly_items.get(name) or {}).get("points") or []
+        weekly_points = _sample_weekly_points(daily)
+        if old_weekly and weekly_points:
+            first_new = weekly_points[0][0]
+            merged_weekly = [row for row in old_weekly if str(row[0]) < first_new] + weekly_points
+        else:
+            merged_weekly = weekly_points or old_weekly
+        if merged_weekly:
+            weekly_items[name] = {
+                "source": used_source or (weekly_items.get(name) or {}).get("source") or "",
+                "points": merged_weekly,
+            }
         # 历史年份已定型：本次能算到的年份用新值，算不到的保留旧值
         years = dict(old_years)
         for year, record in fresh_years.items():
@@ -2668,6 +2772,7 @@ def fetch_index_annual_drawdown():
         print(f"📉 年内最大回撤: 更新 {refreshed}/{len(ANNUAL_DD_TARGETS)} 条")
     else:
         print("📉 年内最大回撤: 本轮未取到新数据，使用本地缓存")
+    _write_index_daily_weekly(weekly_items)
     return result
 
 
@@ -8556,31 +8661,78 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
     # ===== 宽基指数估值：给 PE 序列挂载指数点位，供历史图右轴叠加展示 =====
     # 只注入页面，不写回缓存：overlay 是按 PE 日期轴对齐后的派生数组。
+    # ★ PE 只有 10 年（蛋卷 day=all 的硬上限），但指数点位能到 2000 年。
+    #   若只按 PE 日期做横轴，估值图的起点会被 PE 卡在 2016-10，看起来像「数据没取全」。
+    #   因此把横轴改成「PE 日期 ∪ 2000 年起的周采样点位日期」，PE 在自身起点之前留空，
+    #   点位线从指数起点连续画起，两条线共用同一日期轴。
     _macro_history_for_page = {}
     for _key, _item in macro_history.items():
         if _key in INDEX_POINT_TARGETS:
             continue
         _macro_history_for_page[_key] = dict(_item) if isinstance(_item, dict) else _item
 
+    _idx_weekly = _read_index_daily_weekly()
     for _pe_key, (_idx_key, _label) in INDEX_PE_OVERLAY.items():
         _pe_item = _macro_history_for_page.get(_pe_key) or {}
         _idx_item = (index_point_history or {}).get(_idx_key) or {}
         _pe_points = _pe_item.get("points") or []
         _idx_points = _idx_item.get("points") or []
-        if not _pe_points or not _idx_points:
+        if not _pe_points:
             continue
-        _values = _align_points_to_dates(
-            [row[0] for row in _pe_points if row], _idx_points
-        )
-        if not any(value is not None for value in _values):
+        _pe_map = {}
+        for _row in _pe_points:
+            try:
+                _pe_map[str(_row[0])] = float(_row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+        if not _pe_map:
+            continue
+        _idx_map = {}
+        for _row in _idx_points:
+            try:
+                _idx_map[str(_row[0])] = float(_row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+        if not _idx_map:
+            continue
+
+        _pe_start = min(_pe_map)
+        _dd_name = (INDEX_POINT_TARGETS.get(_idx_key) or (None,) * 6)[5]
+        _early = {}
+        for _row in ((_idx_weekly.get(_dd_name) or {}).get("points") or []):
+            try:
+                _d = str(_row[0])
+                _v = float(_row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if _d < _pe_start and _v > 0:
+                _early[_d] = _v
+
+        if _early:
+            _axis = sorted(set(_pe_map) | set(_idx_map) | set(_early))
+            _overlay_values = [
+                _idx_map.get(_d) if _idx_map.get(_d) is not None else _early.get(_d)
+                for _d in _axis
+            ]
+            _pe_item["points"] = [[_d, _pe_map.get(_d)] for _d in _axis]
+            # 历史段（2000 年起）来自周线快照，标注要与实际来源一致
+            _overlay_source = ((_idx_weekly.get(_dd_name) or {}).get("source")
+                               or _idx_item.get("source") or "东方财富指数日线")
+        else:
+            _axis = [row[0] for row in _pe_points if row]
+            _overlay_values = _align_points_to_dates(_axis, _idx_points)
+            _overlay_source = _idx_item.get("source") or "东方财富指数日线"
+        if not any(value is not None for value in _overlay_values):
             continue
         _pe_item["overlay"] = {
             "title": f"{_label}指数点位",
             "unit": "点",
             "axisTitle": "点位(千)",
             "divisor": 1000,
-            "source": _idx_item.get("source") or "东方财富指数日线",
-            "values": _values,
+            "source": _overlay_source,
+            "values": _overlay_values,
+            # 供前端在图注里说明「PE 只有近 10 年、点位从 2000 年起」
+            "peStart": _pe_start if _early else "",
         }
 
     macro_history_json = json.dumps(
@@ -9030,6 +9182,17 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         });
         const overlay = series && series.overlay;
         if (overlay) {
+            // 先标 PE 线（左轴），再标点位线（右轴）：两条线的起点不同，必须让读者分得清
+            const peItem = document.createElement('span');
+            peItem.className = 'macro-history-legend-item';
+            const peSwatch = document.createElement('span');
+            peSwatch.className = 'macro-history-legend-swatch';
+            peSwatch.style.background = (colors && colors.peLine) || '#d93025';
+            const peText = document.createElement('span');
+            peText.textContent = '市盈率 PE（左轴 · 倍）';
+            peItem.append(peSwatch, peText);
+            legend.appendChild(peItem);
+
             const item = document.createElement('span');
             item.className = 'macro-history-legend-item';
             const swatch = document.createElement('span');
@@ -9119,10 +9282,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         const count = end - start + 1;
         const meta = panelPart('meta');
         const pointSource = series.overlay ? ' + ' + series.overlay.source : '';
+        // PE 起点晚于横轴起点时补一句说明，否则读者会以为 PE 缺失是抓取失败
+        const peNote = (series.overlay && series.overlay.peStart
+            && series.points[0][0] < series.overlay.peStart)
+            ? ' · PE 自 ' + series.overlay.peStart + ' 起（数据源最多回溯 10 年）'
+            : '';
         if (meta) meta.textContent =
             series.points[start][0] + ' ~ ' + series.points[end][0] +
             ' · ' + count.toLocaleString('zh-CN') + ' 个观测点 · ' +
-            series.source + pointSource;
+            series.source + pointSource + peNote;
         const reset = panelPart('resetZoom');
         if (reset) reset.hidden = !state.zoomRange;
     }
@@ -9265,7 +9433,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }
         const visiblePoints = points.slice(start, end + 1);
         const labels = visiblePoints.map(function(point) { return point[0]; });
-        const values = visiblePoints.map(function(point) { return Number(point[1]); });
+        // 估值卡的横轴比 PE 更长（点位到 2000 年）：PE 起点之前的值是 null，
+        // 不能走 Number(null)=0，否则会画出一条贴着 0 的假线。
+        const values = visiblePoints.map(function(point) {
+            const raw = point[1];
+            return (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)))
+                ? null : Number(raw);
+        });
         const colors = themeColors();
         const unit = series.unit || '';
         // 宽基指数估值图：PE 走左轴，指数点位走右轴，两条线共用同一日期轴
@@ -9400,6 +9574,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                                         }) + ' ' + (overlay.unit || '点');
                                 }
                                 const value = Number(context.raw);
+                                if (!Number.isFinite(value)) {
+                                    return '市盈率 PE: --';
+                                }
                                 return (overlay ? '市盈率 PE' : series.title) + ': ' +
                                     value.toFixed(2) + unit + ' · ' + classifyValue(cfg, value);
                             }
@@ -18015,6 +18192,58 @@ def main():
         except Exception as e:
             print(f"⚠️ 宏观历史序列抓取失败，本轮沿用本地缓存: {_brief_error(e)}")
             macro_history = _read_macro_history_cache()
+
+    # ★ CNN 实时值单独抓一次（get_cnn_fear_greed），它一旦被限流/断连，卡片就会显示
+    #   「0.0 · 暂无数据 · 获取失败」，而展开图里其实有完整曲线 —— 两者自相矛盾。
+    #   这里用历史序列的最后一个观测点兜底，并标注该点日期。
+    _fng = home_metrics.get('fng') or {}
+    try:
+        _fng_score_now = float(_fng.get('score') or 0)
+    except (TypeError, ValueError):
+        _fng_score_now = 0.0
+    if _fng_score_now <= 0:
+        _cnn_points = (macro_history.get('cnn') or {}).get('points') or []
+        if _cnn_points:
+            try:
+                _last_date = str(_cnn_points[-1][0])
+                _last_score = round(float(_cnn_points[-1][1]), 1)
+            except (IndexError, TypeError, ValueError):
+                _last_date, _last_score = "", None
+            if _last_score is not None and 0 <= _last_score <= 100:
+                home_metrics['fng'] = {
+                    **_fng,
+                    'score': _last_score,
+                    'rating': _fng_rating_from_score(_last_score),
+                    'source': f"CNN 官方（{_last_date} 收盘）",
+                }
+                print(f"    [warn] CNN 实时值获取失败，卡片沿用历史最后一点: {_last_date} {_last_score}")
+
+    # 同一类问题：BTC 实时价（多源并发）全挂时卡片也是「0.0 · 数据暂缺」，
+    # 但宏观历史里明明有 Binance 的日线，同样用最后一点兜底并标日期。
+    _btc_now = home_metrics.get('btc') or {}
+    try:
+        _btc_val_now = float(_btc_now.get('val') or 0)
+    except (TypeError, ValueError):
+        _btc_val_now = 0.0
+    if _btc_val_now <= 0:
+        _btc_points = (macro_history.get('btc') or {}).get('points') or []
+        if _btc_points:
+            try:
+                _btc_date = str(_btc_points[-1][0])
+                _btc_last = round(float(_btc_points[-1][1]), 2)
+            except (IndexError, TypeError, ValueError):
+                _btc_date, _btc_last = "", None
+            if _btc_last and _btc_last > 0:
+                _btc_status = ("极度高企" if _btc_last >= 100000 else
+                               ("高位震荡" if _btc_last >= 70000 else
+                                ("温和中性" if _btc_last >= 40000 else "低位盘整")))
+                home_metrics['btc'] = {
+                    **_btc_now,
+                    'val': _btc_last,
+                    'status': _btc_status,
+                    'source': f"Binance（{_btc_date} 收盘）",
+                }
+                print(f"    [warn] BTC 实时价获取失败，卡片沿用历史最后一点: {_btc_date} {_btc_last}")
     _fng_disp = home_metrics['fng']['score'] if home_metrics['fng']['score'] > 0 else "暂无"
     print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {_fng_disp} | VIX {home_metrics['vix']['val']} | VXSMH {home_metrics.get('vxsmh', {}).get('val', 0.0)} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
     print(f"🛢️ 大宗商品指标获取成功: 布伦特原油 {home_metrics['brent']['val']} | 伦敦金 {home_metrics['gold_london']['val']} | 沪金主连 {home_metrics['gold_shfe']['val']} | 伦敦银 {home_metrics['silver_london']['val']} | COMEX铜 {home_metrics['copper_lme']['val']} | BTC {home_metrics.get('btc', {}).get('val', 0.0)}")
