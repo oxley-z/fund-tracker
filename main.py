@@ -435,6 +435,26 @@ TICKER_MAP = {
     "恒生科技": "HSTECH"
 }
 
+def _resolve_month_day(raw, today=None):
+    """把蛋卷返回的 "11-19" 还原成 "2026-11-19"。
+
+    蛋卷的 date 字段只给月-日，跨年时（1 月初返回 12-31）要回退一年。
+    """
+    match = re.match(r"^(\d{1,2})-(\d{1,2})$", str(raw or "").strip())
+    if not match:
+        return ""
+    today = today or now_beijing().date()
+    month, day = int(match.group(1)), int(match.group(2))
+    for year in (today.year, today.year - 1):
+        try:
+            candidate = datetime(year, month, day).date()
+        except ValueError:
+            return ""
+        if candidate <= today:
+            return candidate.strftime("%Y-%m-%d")
+    return ""
+
+
 def fetch_index_valuations(opener):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -535,11 +555,14 @@ def fetch_index_valuations(opener):
                 else: status, color = "🔴 高估", "#d93025"
 
             results.append({
-                "name": target, "ticker": ticker, "pe": pe_val, "pct": pct_val, "pct_raw": pct_raw, "status": status, "color": color
+                "name": target, "ticker": ticker, "pe": pe_val, "pct": pct_val, "pct_raw": pct_raw,
+                "status": status, "color": color,
+                "date": _resolve_month_day(matched.get("date")),
             })
         else:
             results.append({
-                "name": target, "ticker": ticker, "pe": "--", "pct": "--", "pct_raw": 0, "status": "⚪ 暂无数据", "color": "#70757a"
+                "name": target, "ticker": ticker, "pe": "--", "pct": "--", "pct_raw": 0,
+                "status": "⚪ 暂无数据", "color": "#70757a", "date": "",
             })
 
     return results
@@ -1932,6 +1955,11 @@ _SINA_SOURCE_LABEL = {
 # 只回近期数据时把补好的 2000-2016 段删掉）。
 _HISTORY_EPOCH_RESET = set()
 
+# 日期整体平移过的序列：旧缓存里每个点的日期都不可信（蛋卷 PE 曾按 UTC 解析 ts，
+# 整条序列比真实估值日早一天），截断救不回来，只能整段丢弃后重抓。
+# 之后 PE 一律以远端 10 年窗口为准，不再与旧缓存合并。
+_HISTORY_FULL_RESET = {"pe_ndx", "pe_sp500", "pe_hs300", "pe_kc50", "pe_hstech"}
+
 
 def _fetch_sina_macro_history(kind, symbol, convert_factor=1.0, start_date=MACRO_HISTORY_START):
     """新浪兜底：东财 kline 被服务端掐断时，用新浪外汇/国际期货日线补历史。"""
@@ -2092,7 +2120,10 @@ def _fetch_danjuan_pe_history(code):
             continue
         if pe <= 0:
             continue
-        date_str = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+        # 蛋卷的 ts 标的是「该估值日北京时间 00:00」（如 2026-11-19 的 A 股 PE
+        # 记作 1795017600 = 2026-11-18 16:00 UTC）。按 UTC 解析会让整条序列
+        # 日期早一天，与页面其它序列错位，所以必须用北京时间换算。
+        date_str = datetime.fromtimestamp(ts, BEIJING_TZ).strftime("%Y-%m-%d")
         if date_str >= MACRO_HISTORY_START:
             points[date_str] = pe
     return _compact_macro_points(points)
@@ -2334,6 +2365,10 @@ def fetch_macro_history():
             source = _SINA_SOURCE_LABEL.get(key, source)
         cached_for_key = cached
         remote_points = remote.get(key)
+        if key in _HISTORY_FULL_RESET and remote_points:
+            # 日期口径整体修正过，旧点全部作废，避免新旧点逐日交错成双倍序列。
+            cached_for_key = dict(cached)
+            cached_for_key.pop(key, None)
         if key in _HISTORY_EPOCH_RESET and remote_points:
             # 口径切换：只保留切换后（即新源最早一天起）的旧点，避免两类标的拼接。
             epoch = str(remote_points[0][0])
@@ -8547,7 +8582,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             },
         )
 
-    def _append_current_history_value(key, value, title, unit, source):
+    def _append_current_history_value(key, value, title, unit, source, value_date=""):
         if value is None:
             return
         try:
@@ -8556,10 +8591,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             return
         if numeric <= 0:
             return
+        # 估值类数据的「今天」由数据源决定（美股 PE 天然比 A 股晚一天），
+        # 不能一律写 today_str，否则会把昨天的值复制成今天的点。
+        point_date = str(value_date or today_str)
         append_macro_history_points(
             macro_history,
             key,
-            [[today_str, numeric]],
+            [[point_date, numeric]],
             title,
             unit,
             source,
@@ -8598,6 +8636,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 f"{_item.get('name')}历史 PE",
                 "倍",
                 "蛋卷指数估值",
+                _item.get("date") or "",
             )
 
     def _macro_history_available(key):
@@ -8634,6 +8673,14 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             _macro_history_attrs(history_key, "macroHistoryPanelIndex")
             if history_key else ' class="metric-card"'
         )
+        # 蛋卷的美股 PE 是 T+1 收盘估值（今天只能给到前一个交易日），
+        # 把数据日期标在数字后面，避免与 A 股卡片对比时误以为「没更新」。
+        _pe_asof = str(item.get("date") or "")
+        pe_asof_html = (
+            f'<span style="font-size:11px; font-weight:500; color:var(--footer-text); '
+            f'margin-left:6px;">截至 {_pe_asof[5:]}</span>'
+            if len(_pe_asof) == 10 else ""
+        )
         index_cards_html += f"""
         <div{card_attrs}>
             <div class="metric-header">
@@ -8644,7 +8691,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <span class="metric-tag" style="background:rgba(0,0,0,0.05); color:{item['color']};">{item['status']}</span>
             </div>
             <div class="metric-body" style="margin: 12px 0 6px 0;">
-                <span class="metric-value" style="color:var(--link-color); font-size:22px;">PE: {item['pe']}</span>
+                <span class="metric-value" style="color:var(--link-color); font-size:22px;">PE: {item['pe']}{pe_asof_html}</span>
             </div>
             <div class="metric-desc" style="border-top: none; padding-top: 0;">
                 <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px;">
@@ -8733,6 +8780,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             "values": _overlay_values,
             # 供前端在图注里说明「PE 只有近 10 年、点位从 2000 年起」
             "peStart": _pe_start if _early else "",
+            # PE 的最后一天（美股 T+1 收盘估值，常比点位轴晚一格）
+            "peEnd": max(_pe_map),
         }
 
     macro_history_json = json.dumps(
@@ -9287,10 +9336,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             && series.points[0][0] < series.overlay.peStart)
             ? ' · PE 自 ' + series.overlay.peStart + ' 起（数据源最多回溯 10 年）'
             : '';
+        // 美股 PE 是 T+1 收盘估值，通常比点位轴晚一个交易日，注明以免误判「没更新」
+        const peEndNote = (series.overlay && series.overlay.peEnd
+            && series.points[end][0] > series.overlay.peEnd)
+            ? ' · PE 截至 ' + series.overlay.peEnd
+            : '';
         if (meta) meta.textContent =
             series.points[start][0] + ' ~ ' + series.points[end][0] +
             ' · ' + count.toLocaleString('zh-CN') + ' 个观测点 · ' +
-            series.source + pointSource + peNote;
+            series.source + pointSource + peNote + peEndNote;
         const reset = panelPart('resetZoom');
         if (reset) reset.hidden = !state.zoomRange;
     }
