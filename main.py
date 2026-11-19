@@ -9714,24 +9714,77 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             start = Math.max(0, Math.min(state.zoomRange[0], total - 2));
             end = Math.max(start + 1, Math.min(state.zoomRange[1], total - 1));
         }
-        const visiblePoints = points.slice(start, end + 1);
-        const labels = visiblePoints.map(function(point) { return point[0]; });
+        // 相邻两个真实观测点之间按日期线性插值补齐缺口。
+        // PE 源是周频（蛋卷 515 点铺满 10 年）、标普500 长历史段是月频，
+        // 而横轴细到 2~4 天，中间原本大量是 null：折线靠 spanGaps 看着连着，
+        // 但鼠标移到这些日期，Chart.js 会把 null 的序列整条过滤掉，
+        // tooltip 只剩点位一行 —— 就是「有时不能同时显示 PE 和点位」。
+        // 两点之间本来就是用直线连接的，插值不改变曲线形状，只让每个横轴位置都有值。
+        // maxGapDays 之外（如「自 2000 起」里 PE 起点前那段）保持 null，不伪造数据。
+        function interpolateGaps(raw, axisLabels, maxGapDays) {
+            const out = raw.slice();
+            let prev = -1;
+            for (let i = 0; i < raw.length; i += 1) {
+                if (raw[i] === null) continue;
+                if (prev >= 0 && i - prev > 1) {
+                    const t0 = Date.parse(axisLabels[prev]);
+                    const t1 = Date.parse(axisLabels[i]);
+                    const spanDays = (t1 - t0) / 86400000;
+                    if (spanDays > 0 && spanDays <= maxGapDays) {
+                        const v0 = raw[prev];
+                        const v1 = raw[i];
+                        for (let j = prev + 1; j < i; j += 1) {
+                            const tj = Date.parse(axisLabels[j]);
+                            const ratio = Math.max(0, Math.min(1, (tj - t0) / (t1 - t0)));
+                            out[j] = Math.round((v0 + (v1 - v0) * ratio) * 100) / 100;
+                        }
+                    }
+                }
+                prev = i;
+            }
+            // 开头的少量缺口（某条序列比另一条晚一两天起步）用第一个真实值回填，
+            // 只回填 7 天内、且不超过 3 个点，否则保持 null。
+            const first = out.findIndex(function(value) { return value !== null; });
+            if (first > 0 && first <= 3) {
+                const t1 = Date.parse(axisLabels[first]);
+                for (let j = 0; j < first; j += 1) {
+                    const span = (t1 - Date.parse(axisLabels[j])) / 86400000;
+                    if (span >= 0 && span <= 7) out[j] = out[first];
+                }
+            }
+            return out;
+        }
+
+        // 必须在「整条序列」上插值再切片：默认视图从 PE 起点开始，
+        // 若先 slice 再插值，起点左侧的参照点被切掉，开头的缺口就补不上了。
+        const allLabels = points.map(function(point) { return point[0]; });
         // 估值卡的横轴比 PE 更长（点位到 2000 年）：PE 起点之前的值是 null，
         // 不能走 Number(null)=0，否则会画出一条贴着 0 的假线。
-        const values = visiblePoints.map(function(point) {
+        const peFull = interpolateGaps(points.map(function(point) {
             const raw = point[1];
             return (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)))
                 ? null : Number(raw);
-        });
+        }), allLabels, 75);
+        const values = peFull.slice(start, end + 1);
+        const labels = allLabels.slice(start, end + 1);
         const colors = themeColors();
         const unit = series.unit || '';
         // 宽基指数估值图：PE 走左轴，指数点位走右轴，两条线共用同一日期轴
         const overlay = series.overlay || null;
-        const overlayValues = overlay
-            ? (overlay.values || []).slice(start, end + 1).map(function(value) {
-                return (value === null || value === undefined) ? null : Number(value);
-            })
-            : null;
+        // overlay.values 是建页时按 points 同一份日期轴生成的；若历史增量合并后
+        // 两者长度不一致，直接 slice 会让右轴线的尾部整段缺失（蓝线「断头」）。
+        // 先按 points 长度铺满（缺的补 null），再在整条序列上做短缺口插值。
+        let overlayValues = null;
+        if (overlay) {
+            const overlayFull = new Array(points.length).fill(null);
+            (overlay.values || []).forEach(function(value, index) {
+                if (index < overlayFull.length && value !== null && value !== undefined
+                    && Number.isFinite(Number(value))) {
+                    overlayFull[index] = Number(value);
+                }
+            });
+            overlayValues = interpolateGaps(overlayFull, allLabels, 75).slice(start, end + 1);
+        }
         // 双轴图右侧要同时容纳点位坐标轴与分位标签；其它卡片沿用原有留白
         const rightGutter = overlay
             ? (window.innerWidth <= 640 ? 62 : 68)
@@ -9849,10 +9902,14 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         callbacks: {
                             title: function(items) { return items.length ? items[0].label : ''; },
                             label: function(context) {
+                                // 注意不能直接 Number(context.raw)：null 会被转成 0，
+                                // 于是「当日无 PE」被画成「0.00 倍 · 极度低估」这种假读数。
+                                const raw = context.raw;
+                                const missing = (raw === null || raw === undefined || raw === '');
                                 if (overlay && context.dataset.yAxisID === 'y1') {
-                                    const pointValue = Number(context.raw);
+                                    const pointValue = missing ? NaN : Number(raw);
                                     if (!Number.isFinite(pointValue)) {
-                                        return overlay.title + ': --';
+                                        return overlay.title + ': -- （当日无点位）';
                                     }
                                     return overlay.title + ': ' +
                                         pointValue.toLocaleString('zh-CN', {
@@ -9860,9 +9917,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                                             maximumFractionDigits: 2
                                         }) + ' ' + (overlay.unit || '点');
                                 }
-                                const value = Number(context.raw);
+                                const value = missing ? NaN : Number(raw);
                                 if (!Number.isFinite(value)) {
-                                    return '市盈率 PE: --';
+                                    return '市盈率 PE: -- （当日无估值）';
                                 }
                                 return (overlay ? '市盈率 PE' : series.title) + ': ' +
                                     value.toFixed(2) + unit + ' · ' + classifyValue(cfg, value);
