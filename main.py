@@ -2129,6 +2129,160 @@ def _fetch_danjuan_pe_history(code):
     return _compact_macro_points(points)
 
 
+# ===== PE 长历史补丁 =====
+# 蛋卷 pe_history 只回吐近 10 年（实测 515 个交易日），2016 年之前的 PE 段是空的。
+# 标普500 用 Multpl 的月度滚动 PE（1871 年起，与蛋卷 TTM 口径的中位数比值 1.002），
+# 沪深300 用中证指数官网的滚动 PE（2011-06 起，比值 0.96）。
+# 两段都按重叠期比值中位数缩放后再拼到蛋卷序列之前，接缝不跳台阶。
+PE_LONG_HISTORY_CACHE = os.path.join("data", "pe_long_history.json")
+PE_LONG_HISTORY_REFRESH_DAYS = 7
+
+
+def _fetch_multpl_sp500_pe():
+    """Multpl 标普500 滚动市盈率，月度（每月 1 日的读数），1871 年起。"""
+    url = "https://www.multpl.com/s-p-500-pe-ratio/table/by-month"
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Accept": "text/html,application/xhtml+xml",
+        "Referer": "https://www.multpl.com/",
+    })
+    with get_thread_opener().open(req, timeout=30) as resp:
+        raw = resp.read().decode("utf-8", "ignore")
+    # 表格单元里混着 &#x2002; 这类实体和 <abbr>Estimate</abbr> 标记，
+    # 必须先剥标签、反转义再取数字，否则会把 &#x2002; 里的 "2002" 当成 PE。
+    rows = re.findall(
+        r"<tr[^>]*>\s*<td>([A-Z][a-z]{2} \d{1,2}, \d{4})</td>\s*<td>(.*?)</td>",
+        raw, re.S,
+    )
+    points = {}
+    for date_raw, cell in rows:
+        text = html.unescape(re.sub(r"<[^>]+>", " ", cell))
+        match = re.search(r"\d+\.\d+", text)
+        if not match:
+            continue
+        try:
+            date_str = datetime.strptime(date_raw, "%b %d, %Y").strftime("%Y-%m-%d")
+            pe = float(match.group(0))
+        except ValueError:
+            continue
+        if pe > 0 and date_str >= MACRO_HISTORY_START:
+            points[date_str] = pe
+    return points
+
+
+def _fetch_csindex_pe(index_code="000300"):
+    """中证指数官网的滚动市盈率，日频；返回字段名是 peg，实际是滚动 PE（TTM）。"""
+    params = urllib.parse.urlencode({
+        "indexCode": index_code,
+        "startDate": "20100101",
+        "endDate": now_beijing().strftime("%Y%m%d"),
+    })
+    req = urllib.request.Request(
+        "https://www.csindex.com.cn/csindex-home/perf/index-perf?" + params,
+        headers={
+            **DEFAULT_HEADERS,
+            "Accept": "application/json",
+            "Referer": "https://www.csindex.com.cn/",
+        },
+    )
+    with get_thread_opener().open(req, timeout=60) as resp:
+        payload = json.loads(resp.read().decode("utf-8", "ignore"))
+    points = {}
+    for row in payload.get("data") or []:
+        raw_date = str(row.get("tradeDate") or "")
+        try:
+            pe = float(row.get("peg"))
+        except (TypeError, ValueError):
+            continue
+        if len(raw_date) == 8 and pe > 0:
+            points[f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"] = pe
+    return points
+
+
+def _extend_pe_with_long_source(points, long_points):
+    """把长历史 PE 拼到蛋卷序列之前，接缝按重叠期比值中位数缩放。"""
+    base = {}
+    for row in points or []:
+        try:
+            base[str(row[0])] = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+    if not base or not long_points:
+        return points
+    start = min(base)
+    ratios = sorted(
+        base[date_str] / long_points[date_str]
+        for date_str in base
+        if date_str in long_points and long_points[date_str] > 0
+    )
+    ratio = ratios[len(ratios) // 2] if len(ratios) >= 12 else 1.0
+    merged = {
+        date_str: value * ratio
+        for date_str, value in long_points.items()
+        if date_str < start
+    }
+    if not merged:
+        return points
+    merged.update(base)
+    return _compact_macro_points(merged)
+
+
+def _read_pe_long_cache():
+    try:
+        with open(PE_LONG_HISTORY_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_pe_long_cache(data):
+    try:
+        os.makedirs(os.path.dirname(PE_LONG_HISTORY_CACHE), exist_ok=True)
+        tmp = PE_LONG_HISTORY_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, PE_LONG_HISTORY_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ PE 长历史缓存写入失败: {e}")
+
+
+def fetch_pe_long_history():
+    """抓取并缓存「蛋卷之外的」长历史 PE；7 天内复用，避免每天重下 1.6MB。"""
+    cached = _read_pe_long_cache()
+    fetched = str(cached.get("fetched") or "")[:10]
+    if fetched and cached.get("items"):
+        try:
+            age = (now_beijing().date()
+                   - datetime.strptime(fetched, "%Y-%m-%d").date()).days
+        except ValueError:
+            age = PE_LONG_HISTORY_REFRESH_DAYS
+        if 0 <= age < PE_LONG_HISTORY_REFRESH_DAYS:
+            return cached
+
+    jobs = {
+        "pe_sp500": ("Multpl 标普500 月度 PE", _fetch_multpl_sp500_pe),
+        "pe_hs300": ("中证指数 沪深300 滚动 PE", lambda: _fetch_csindex_pe("000300")),
+    }
+    items = dict(cached.get("items") or {})
+    for key, (label, fetcher) in jobs.items():
+        try:
+            points = fetcher()
+        except Exception as e:
+            print(f"    [warn] {key} 长历史 PE 抓取失败: {_brief_error(e)}")
+            continue
+        if points:
+            items[key] = {
+                "label": label,
+                "points": [[d, round(v, 2)] for d, v in sorted(points.items())],
+            }
+            print(f"    ✓ PE 长历史 {key}: {len(points)} 点（{min(points)} 起）")
+    data = {"fetched": now_beijing().strftime("%Y-%m-%d"), "items": items}
+    if items:
+        _write_pe_long_cache(data)
+    return data
+
+
 def _fetch_binance_macro_history(symbol="BTCUSDT"):
     """分页读取 Binance 日线，供 BTC 卡片展开使用。"""
     endpoint = "https://data-api.binance.vision/api/v3/klines"
@@ -2207,6 +2361,11 @@ def _fetch_akshare_hist(symbol, symbol_type="foreign", start_date=MACRO_HISTORY_
 def _merge_macro_series(cached, remote, key, title, unit, source):
     """合并远端与本地缓存；远端失败时保留完整本地历史。"""
     old_points = (cached.get(key) or {}).get("points") or []
+    # 拼接类序列（"蛋卷 + Multpl 月度"、"新浪 + EIA"）的 source 文案比单源更具体，
+    # 增量补点时不能退回单源文案，否则图注会把多源拼接说成单一数据源。
+    old_source = (cached.get(key) or {}).get("source") or ""
+    if source and old_source.startswith(source) and len(old_source) > len(source):
+        source = old_source
     merged = {}
     for row in old_points:
         try:
@@ -2381,6 +2540,25 @@ def fetch_macro_history():
         merged = _merge_macro_series(cached_for_key, remote_points, key, title, unit, source)
         if merged:
             result[key] = merged
+
+    # ===== PE 长历史补丁：蛋卷只给近 10 年，标普500/沪深300 用公开长历史源补前面 =====
+    if result.get("pe_sp500") or result.get("pe_hs300"):
+        pe_long = fetch_pe_long_history()
+        for key, patch in (pe_long.get("items") or {}).items():
+            item = result.get(key)
+            if not isinstance(item, dict) or not item.get("points"):
+                continue
+            long_points = {}
+            for row in patch.get("points") or []:
+                try:
+                    long_points[str(row[0])] = float(row[1])
+                except (IndexError, TypeError, ValueError):
+                    continue
+            extended = _extend_pe_with_long_source(item["points"], long_points)
+            if len(extended) > len(item["points"]):
+                item["points"] = extended
+                label = patch.get("label") or "公开长历史源"
+                item["source"] = f"蛋卷指数估值 + {label}"
 
     if any(key in result for key in sources):
         _write_macro_history_cache(result)
@@ -8746,29 +8924,28 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
         _pe_start = min(_pe_map)
         _dd_name = (INDEX_POINT_TARGETS.get(_idx_key) or (None,) * 6)[5]
-        _early = {}
+        # 点位两个来源：周采样快照（2000 年起，每周一个收盘）+ 指数日线（近 10 年，日频）。
+        # 日线写在后面，同一天覆盖周采样，保证 2016 年以后是真实日频。
+        _point_map = {}
         for _row in ((_idx_weekly.get(_dd_name) or {}).get("points") or []):
             try:
                 _d = str(_row[0])
                 _v = float(_row[1])
             except (IndexError, TypeError, ValueError):
                 continue
-            if _d < _pe_start and _v > 0:
-                _early[_d] = _v
+            if _v > 0:
+                _point_map[_d] = _v
+        for _d, _v in _idx_map.items():
+            _point_map[_d] = _v
 
-        # 横轴 = PE 日期 ∪ PE 起点之前的周采样日期。
-        # ★ 不能把点位日线的日期也并进来：美股 PE 标的是北京时间（≈ 美东交易日 +1），
-        #   与点位日线（美东日期）几乎不重合，并集会让两套序列各有一半日期是 null，
-        #   Chart.js 断线后 PE 被切成一堆 1px 小段，看起来就像「没画出线」。
-        #   点位改用前向填充对齐到 PE 日期（_align_points_to_dates），线才连续。
-        _axis = sorted(set(_pe_map) | set(_early))
-        # 点位：PE 起点之前用周采样快照（点位日线缓存只有近 10 年，给不出 2000 年起），
-        # 之后用日线前向填充，保证整条轴都有值、线不断。
-        _aligned_points = _align_points_to_dates(_axis, _idx_points)
-        _overlay_values = [
-            (_early.get(_d) if _early.get(_d) is not None else _aligned_points[_i])
-            for _i, _d in enumerate(_axis)
-        ]
+        # 横轴 = PE 日期 ∪ 点位日期（含 2000 年起的周采样）。
+        # ★ 不能只取 PE 日期：长历史 PE 是月频（每年 12 个点），只按它建轴会让
+        #   2000-2016 的点位一年只剩 12 个采样点，点位折线变得又钝又假；
+        #   而美股 PE 日期（北京时间）与点位日线（美东日期）几乎不重合，
+        #   全量并集又会把两套序列切碎。所以并入"周采样"这一层，粒度可控。
+        #   PE 在周采样日期上是 null，前端 spanGaps 直连月度点，不影响连续。
+        _axis = sorted(set(_pe_map) | set(_point_map))
+        _overlay_values = _align_points_to_dates(_axis, sorted(_point_map.items()))
         _pe_item["points"] = [[_d, _pe_map.get(_d)] for _d in _axis]
         _overlay_source = ((_idx_weekly.get(_dd_name) or {}).get("source")
                            or _idx_item.get("source") or "东方财富指数日线")
@@ -8781,8 +8958,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             "divisor": 1000,
             "source": _overlay_source,
             "values": _overlay_values,
-            # 供前端在图注里说明「PE 只有近 10 年、点位从 2000 年起」
-            "peStart": _pe_start if _early else "",
+            # 供前端在图注里说明「PE 起点晚于横轴起点」；PE 与点位同起点时置空
+            "peStart": _pe_start if _axis and _axis[0] < _pe_start else "",
             # PE 的最后一天（美股 T+1 收盘估值，常比点位轴晚一格）
             "peEnd": max(_pe_map),
         }
@@ -9371,8 +9548,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         const peIdx = macroPeStartIndex(series);
         const peNote = (peIdx > 0 && series.overlay.peStart)
             ? (start >= peIdx
-                ? ' · PE 与点位均自 ' + series.overlay.peStart + ' 起（PE 源最多回溯 10 年）'
-                : ' · ' + series.overlay.peStart + ' 之前只有点位，无 PE（PE 源最多回溯 10 年）')
+                ? ' · PE 与点位均自 ' + series.overlay.peStart + ' 起'
+                : ' · ' + series.overlay.peStart + ' 之前只有点位，无 PE')
             : '';
         // 美股 PE 是 T+1 收盘估值，通常比点位轴晚一个交易日，注明以免误判「没更新」
         const peEndNote = (series.overlay && series.overlay.peEnd
@@ -9389,10 +9566,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         if (toggle) {
             toggle.hidden = peIdx <= 0;
             if (peIdx > 0) {
-                toggle.textContent = state.fullRange ? '只看 PE 区间' : '自 2000 起';
+                toggle.textContent = state.fullRange
+                    ? '只看 PE 区间'
+                    : '自 ' + String(series.points[0][0]).slice(0, 4) + ' 起';
                 toggle.title = state.fullRange
                     ? '收起到 PE 与点位都有数据的区间'
-                    : '横轴拉回指数起点（2000 年），PE 之前只有点位';
+                    : '横轴拉回指数起点，PE 之前只有点位';
             }
         }
     }
