@@ -8755,20 +8755,22 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             if _d < _pe_start and _v > 0:
                 _early[_d] = _v
 
-        if _early:
-            _axis = sorted(set(_pe_map) | set(_idx_map) | set(_early))
-            _overlay_values = [
-                _idx_map.get(_d) if _idx_map.get(_d) is not None else _early.get(_d)
-                for _d in _axis
-            ]
-            _pe_item["points"] = [[_d, _pe_map.get(_d)] for _d in _axis]
-            # 历史段（2000 年起）来自周线快照，标注要与实际来源一致
-            _overlay_source = ((_idx_weekly.get(_dd_name) or {}).get("source")
-                               or _idx_item.get("source") or "东方财富指数日线")
-        else:
-            _axis = [row[0] for row in _pe_points if row]
-            _overlay_values = _align_points_to_dates(_axis, _idx_points)
-            _overlay_source = _idx_item.get("source") or "东方财富指数日线"
+        # 横轴 = PE 日期 ∪ PE 起点之前的周采样日期。
+        # ★ 不能把点位日线的日期也并进来：美股 PE 标的是北京时间（≈ 美东交易日 +1），
+        #   与点位日线（美东日期）几乎不重合，并集会让两套序列各有一半日期是 null，
+        #   Chart.js 断线后 PE 被切成一堆 1px 小段，看起来就像「没画出线」。
+        #   点位改用前向填充对齐到 PE 日期（_align_points_to_dates），线才连续。
+        _axis = sorted(set(_pe_map) | set(_early))
+        # 点位：PE 起点之前用周采样快照（点位日线缓存只有近 10 年，给不出 2000 年起），
+        # 之后用日线前向填充，保证整条轴都有值、线不断。
+        _aligned_points = _align_points_to_dates(_axis, _idx_points)
+        _overlay_values = [
+            (_early.get(_d) if _early.get(_d) is not None else _aligned_points[_i])
+            for _i, _d in enumerate(_axis)
+        ]
+        _pe_item["points"] = [[_d, _pe_map.get(_d)] for _d in _axis]
+        _overlay_source = ((_idx_weekly.get(_dd_name) or {}).get("source")
+                           or _idx_item.get("source") or "东方财富指数日线")
         if not any(value is not None for value in _overlay_values):
             continue
         _pe_item["overlay"] = {
@@ -9515,10 +9517,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             data: values,
             borderColor: overlay ? colors.peLine : cfg.lineColor,
             backgroundColor: 'transparent',
-            borderWidth: overlay ? 1.9 : 1.6,
+            borderWidth: overlay ? 2.2 : 1.6,
             pointRadius: 0,
             pointHitRadius: 7,
             tension: 0.08,
+            // 估值卡的 PE 从 2016 年才开始，之前整段是 null；双轴图里个别交易
+            // 日历不对齐也会留空。跨过空值直接连线，避免被切成碎的短线。
+            spanGaps: true,
             fill: false
         }];
         if (overlay) {
@@ -9532,6 +9537,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 pointRadius: 0,
                 pointHitRadius: 7,
                 tension: 0.12,
+                spanGaps: true,
                 fill: false
             });
         }
