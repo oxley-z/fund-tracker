@@ -7706,10 +7706,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             <td data-val="{r['month_gain'] if r['month_gain'] is not None else -9999}" class="{gain_class(r['month_gain'])}">{format_gain(r['month_gain'])}</td>
             <td data-val="{r['quarter_gain'] if r['quarter_gain'] is not None else -9999}" class="{gain_class(r['quarter_gain'])}">{format_gain(r['quarter_gain'])}</td>
             <td data-val="{r['half_year_gain'] if r['half_year_gain'] is not None else -9999}" class="{gain_class(r['half_year_gain'])}">{format_gain(r['half_year_gain'])}</td>
+            <td data-val="{r['ytd_gain'] if r['ytd_gain'] is not None else -9999}" class="{gain_class(r['ytd_gain'])}">{format_gain(r['ytd_gain'])}</td>
             <td data-val="{r['year_gain'] if r['year_gain'] is not None else -9999}" class="{gain_class(r['year_gain'])}">{format_gain(r['year_gain'])}</td>
             <td data-val="{r['three_year_gain'] if r.get('three_year_gain') is not None else -9999}" class="{gain_class(r.get('three_year_gain'))}">{format_gain(r.get('three_year_gain'))}</td>
             <td data-val="{r['five_year_gain'] if r.get('five_year_gain') is not None else -9999}" class="{gain_class(r.get('five_year_gain'))}">{format_gain(r.get('five_year_gain'))}</td>
-            <td data-val="{r['ytd_gain'] if r['ytd_gain'] is not None else -9999}" class="{gain_class(r['ytd_gain'])}">{format_gain(r['ytd_gain'])}</td>
             <td class="dca-col" data-val="-9999">--</td>
         </tr>
         """
@@ -8096,10 +8096,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <button class="period-btn" data-period="month" data-code="{r['code']}">近一月</button>
                     <button class="period-btn" data-period="quarter" data-code="{r['code']}">近三月</button>
                     <button class="period-btn" data-period="half" data-code="{r['code']}">近半年</button>
+                    <button class="period-btn" data-period="ytd" data-code="{r['code']}">今年内</button>
                     <button class="period-btn" data-period="year" data-code="{r['code']}">近一年</button>
                     <button class="period-btn" data-period="3y" data-code="{r['code']}">近三年</button>
                     <button class="period-btn" data-period="5y" data-code="{r['code']}">近五年</button>
-                    <button class="period-btn" data-period="ytd" data-code="{r['code']}">今年内</button>
                     <button class="period-btn" data-period="all" data-code="{r['code']}">成立以来</button>
                 </div>
                 <canvas id="chart-{r['code']}" width="400" height="200"></canvas>
@@ -13187,7 +13187,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             text-align: left;
         }}
 
-        /* 简洁模式：近一周/近一月/近三月/近半年/近一年/近三年/近五年/今年内（8 个数值列，统一宽度） */
+        /* 简洁模式：近一周/近一月/近三月/近半年/今年内/近一年/近三年/近五年（8 个数值列，统一宽度） */
         #fundView.simple-mode #fundTable th:nth-child(16),
         #fundView.simple-mode #fundTable td:nth-child(16),
         #fundView.simple-mode #fundTable th:nth-child(17),
@@ -13979,10 +13979,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             <th data-col="16" onclick="handleHeaderClick(16)"><span class="th-full">近一月</span><span class="th-simple">近一月</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="17" onclick="handleHeaderClick(17)"><span class="th-full">近三月</span><span class="th-simple">近三月</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="18" onclick="handleHeaderClick(18)"><span class="th-full">近半年</span><span class="th-simple">近半年</span> <span class="sort-icon">⇅</span></th>
-                            <th data-col="19" onclick="handleHeaderClick(19)"><span class="th-full">近一年</span><span class="th-simple">近一年</span> <span class="sort-icon">⇅</span></th>
-                            <th data-col="20" onclick="handleHeaderClick(20)"><span class="th-full">近三年</span><span class="th-simple">近三年</span> <span class="sort-icon">⇅</span></th>
-                            <th data-col="21" onclick="handleHeaderClick(21)"><span class="th-full">近五年</span><span class="th-simple">近五年</span> <span class="sort-icon">⇅</span></th>
-                            <th data-col="22" onclick="handleHeaderClick(22)"><span class="th-full">今年内</span><span class="th-simple">今年内</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="19" onclick="handleHeaderClick(19)"><span class="th-full">今年内</span><span class="th-simple">今年内</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="20" onclick="handleHeaderClick(20)"><span class="th-full">近一年</span><span class="th-simple">近一年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="21" onclick="handleHeaderClick(21)"><span class="th-full">近三年</span><span class="th-simple">近三年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="22" onclick="handleHeaderClick(22)"><span class="th-full">近五年</span><span class="th-simple">近五年</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="23" onclick="handleHeaderClick(23)"><span class="th-full"><span id="dcaHeaderTitle">月定投</span>收益</span><span class="th-simple">定投</span> <span class="sort-icon">⇅</span></th>
                         </tr>
                     </thead>
@@ -16731,7 +16731,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             const COL = {{
                 SCALE: 3, FEE: 4, FEE_PUR: 5, MAXDD: 10, REBOUND: 11, RECOVERY: 12,
                 RECOVERY_DAYS: 13, TODAY: 14, WEEK: 15, MONTH: 16, QUARTER: 17,
-                HALF: 18, YEAR: 19, YEAR3: 20, YEAR5: 21, YTD: 22
+                HALF: 18, YTD: 19, YEAR: 20, YEAR3: 21, YEAR5: 22
             }};
             const PERIOD_MONTHS = {{ month: 1, quarter: 3, half: 6, year: 12, all: 0 }};
             const PERIOD_LABEL = {{ month: '近1月', quarter: '近3月', half: '近6月', year: '近1年', all: '全区间' }};
@@ -17193,10 +17193,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 html += domRow('近一月', 'month', 'pct');
                 html += domRow('近三月', 'quarter', 'pct');
                 html += domRow('近半年', 'half', 'pct');
+                html += domRow('今年内', 'ytd', 'pct');
                 html += domRow('近一年', 'year', 'pct');
                 html += domRow('近三年', 'year3', 'pct');
                 html += domRow('近五年', 'year5', 'pct');
-                html += domRow('今年内', 'ytd', 'pct');
                 html += domRow('今日涨跌', 'today', 'pct');
                 html += rowOf('最大回撤（当前窗口）', function (c) {{
                     if (!c.dom || c.dom.maxdd == null) return plainCell('--');
