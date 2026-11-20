@@ -125,6 +125,9 @@ jobs:
           #   而这里正是要把这些构建产物发布出去，留着会让 git add -A 静默跳过它们，
           #   推上去的站点就是没有主页的空壳。
           rm -f "$SITE/.gitignore"
+          # ★ 关掉 Jekyll：分支部署默认会跑 Jekyll 构建，纯静态产物没必要。
+          #   留着的话每次部署多几十秒，且 `_` 开头的文件会被静默丢弃。
+          touch "$SITE/.nojekyll"
           cd "$SITE"
           git init -q
           git config user.name "github-actions[bot]"
