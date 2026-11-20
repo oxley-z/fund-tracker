@@ -5,7 +5,7 @@
 与 main.py 的分工：
   * main.py（每晚 22:30）负责全量：150+ 只基金净值、ETF 份额资金流、CFTC、
     季报持仓、指数 PE —— 这些一天只有一次，不能 15 分钟刷一遍。
-  * 本脚本（交易时段每 15 分钟）只取宏观 12 项 + 20 只场内宽基的现价/涨跌幅。
+  * 本脚本（交易时段每 15 分钟）只取宏观 12 项 + 20 只场内宽基的现价/涨跌幅/溢价。
 
 设计约束：
   1. 只依赖 requests，不 import main.py，不碰 pandas / akshare ——
@@ -54,6 +54,7 @@ HEADERS = {
 }
 SINA_HEADERS = {**HEADERS, "Referer": "https://finance.sina.com.cn/"}
 EM_HEADERS = {**HEADERS, "Referer": "https://quote.eastmoney.com/"}
+GT_HEADERS = {**HEADERS, "Referer": "https://gu.qq.com/"}
 
 # ── 场内宽基 ETF：dual_etf_dashboard.py 里的 19 只 + 501225（国泰中证有色） ──
 ETF_CODES = [
@@ -381,8 +382,68 @@ def _secid(code: str) -> str:
     return ("1." if code[:1] in ("5", "6", "9") else "0.") + code
 
 
-def fetch_etf_quotes(session: requests.Session) -> tuple[list[dict], str]:
-    """返回 (ETF 行列表, 数据日期)。批量失败时返回空列表。"""
+def _gt_code(code: str) -> str:
+    """腾讯行情代码：sh/sz 前缀。5/6/9 开头在沪市。"""
+    return ("sh" if code[:1] in ("5", "6", "9") else "sz") + code
+
+
+def fetch_etf_iopv(session: requests.Session) -> dict[str, dict]:
+    """腾讯行情：一次批量取 20 只的 IOPV 与溢价率。
+
+    交易所 IOPV 的免费口子只剩这一个（都实测过）：
+      * 东财 push2 —— 没有任何 IOPV 字段，`f71` 是均价
+        （成交额 18,175,530,912 ÷ 45,417,170 手 ×100 = 4.0021 = f71，股票也能算出同样的值）
+      * 新浪 hq.sinajs.cn —— 字段里去没有 IOPV
+      * 上交所云行情 yunhq.sse.com.cn:32041 —— `total:0 / list:[]`，不对外开放
+      * 集思录 etf_list —— 不带 cookie 时 iopv 全为 "-"
+
+    qt.gtimg.cn 的 `~` 分隔字段（实测 510300 / 159915 逐只核对）：
+        [3] 现价    [32] 涨跌幅%    [77] 溢价率%（正=溢价）    [78] IOPV
+    510300：4.018 / -1.03 / -0.31 / 4.0305，
+    (4.018-4.0305)/4.0305 = -0.310%，与 [77] 完全吻合；159915 的 +0.16% 同样对得上。
+
+    LOF（501225）交易所不发布 IOPV，[78] 为空 —— 该只不带溢价，不拿别的数顶替。
+    返回 {代码: {name, price, change_pct, iopv, premium_pct}}。
+    """
+    query = ",".join(_gt_code(c) for c in ETF_CODES)
+    text = _text(session, f"https://qt.gtimg.cn/q={query}",
+                 encoding="gbk", headers=GT_HEADERS, timeout=6)
+    wanted = set(ETF_CODES)
+    out: dict[str, dict] = {}
+    for line in text.split(";"):
+        if "=" not in line:
+            continue
+        body = line.split("=", 1)[1].strip().strip('"')
+        fields = body.split("~")
+        if len(fields) < 79:
+            continue
+        code = fields[2].strip()
+        if code not in wanted:
+            continue
+        price = _to_float(fields[3])
+        iopv = _to_float(fields[78])
+        reported = _to_float(fields[77])
+        premium: Optional[float] = None
+        if price is not None and iopv:
+            calc = (price - iopv) / iopv * 100
+            # 官方口径与自己算的差超过 0.1 个点，说明这条 IOPV 是脏的，
+            # 宁可留空也不往页面上写个错的溢价
+            if reported is None or abs(calc - reported) <= 0.1:
+                premium = round(calc, 3)
+            else:
+                iopv = None
+        out[code] = {
+            "name": fields[1].strip(),
+            "price": price,
+            "change_pct": _to_float(fields[32]),
+            "iopv": round(iopv, 4) if iopv else None,
+            "premium_pct": premium,
+        }
+    return out
+
+
+def _em_etf_rows(session: requests.Session) -> tuple[list[dict], str]:
+    """东财 push2 一次批量拿 20 只的现价/涨跌幅/昨收。失败时抛异常。"""
     fields = "f2,f3,f4,f12,f13,f14,f18,f124"
     data = _json(
         session,
@@ -404,24 +465,84 @@ def fetch_etf_quotes(session: requests.Session) -> tuple[list[dict], str]:
         ts = row.get("f124") or 0
         if isinstance(ts, (int, float)) and ts > latest_ts:
             latest_ts = int(ts)
-        price = _to_float(row.get("f2"))
         out.append({
             "code": code,
             "name": str(row.get("f14") or "").strip(),
-            "price": price,
+            "price": _to_float(row.get("f2")),
             "change_pct": _to_float(row.get("f3")),
             "prev_close": _to_float(row.get("f18")),
-            # 盘子里的 IOPV 交易所不对外公开实时值，第一期留空，
-            # 页面见到 null 就不渲染溢价列，避免用 T-1 净值算假溢价。
             "iopv": None,
             "premium_pct": None,
         })
-    order = {c: i for i, c in enumerate(ETF_CODES)}
-    out.sort(key=lambda r: order.get(r["code"], 999))
     trade_date = ""
     if latest_ts:
         trade_date = datetime.fromtimestamp(latest_ts, BEIJING_TZ).strftime("%Y-%m-%d")
     return out, trade_date
+
+
+def fetch_etf_quotes(session: requests.Session,
+                     quiet: bool = False) -> tuple[list[dict], str, list[str]]:
+    """ETF 行情 = 东财现价 + 腾讯 IOPV。两源互为兜底。
+
+    东财整块失败（历史上被 IP 级限流过）时用腾讯的现价顶上，不至于整块空；
+    腾讯挂了只是少掉溢价那一列，价格照常。返回 (行列表, 数据日期, 失败源名)。
+    """
+    failed: list[str] = []
+    em_rows: list[dict] = []
+    trade_date = ""
+
+    try:
+        em_rows, trade_date = _em_etf_rows(session)
+    except Exception as e:  # noqa: BLE001
+        failed.append("etf_eastmoney")
+        log(f"  [warn] ETF 东财行情失败: {type(e).__name__}: {e}", quiet)
+
+    gt_map: dict[str, dict] = {}
+    try:
+        gt_map = fetch_etf_iopv(session)
+        if not gt_map:
+            failed.append("etf_iopv")
+    except Exception as e:  # noqa: BLE001
+        failed.append("etf_iopv")
+        log(f"  [warn] ETF IOPV 失败: {type(e).__name__}: {e}", quiet)
+
+    by_code = {r["code"]: r for r in em_rows}
+    for code, gt in gt_map.items():
+        row = by_code.get(code)
+        if row is None:
+            # 东财没返回这只（整块失败或个别漏掉）→ 用腾讯的现价建行
+            row = {
+                "code": code,
+                "name": gt.get("name") or "",
+                "price": gt.get("price"),
+                "change_pct": gt.get("change_pct"),
+                "prev_close": None,
+                "iopv": None,
+                "premium_pct": None,
+            }
+            by_code[code] = row
+            em_rows.append(row)
+        if row.get("price") is None:
+            row["price"] = gt.get("price")
+        if row.get("change_pct") is None:
+            row["change_pct"] = gt.get("change_pct")
+        row["iopv"] = gt.get("iopv")
+        # 溢价率按「页面最终展示的那个价格」重算，否则两个源的现价有分毫差异时，
+        # 页面上的涨价和溢价会对不上。重算不出数（LOF 无 IOPV）才退回腾讯口径。
+        iopv = row.get("iopv")
+        price = row.get("price")
+        if iopv and price is not None:
+            row["premium_pct"] = round((price - iopv) / iopv * 100, 3)
+        else:
+            row["premium_pct"] = gt.get("premium_pct")
+
+    for row in em_rows:
+        row.setdefault("iopv", None)
+        row.setdefault("premium_pct", None)
+
+    order = {c: i for i, c in enumerate(ETF_CODES)}
+    em_rows.sort(key=lambda r: order.get(r["code"], 999))
+    return em_rows, trade_date, failed
 
 
 # ==============================================================================
@@ -458,12 +579,14 @@ def fetch_all(quiet: bool = False) -> tuple[dict, dict, list[str], str]:
             quotes[key] = val
 
     try:
-        etf_rows, trade_date = fetch_etf_quotes(session)
+        etf_rows, trade_date, etf_failed = fetch_etf_quotes(session, quiet=quiet)
     except Exception as e:  # noqa: BLE001
         log(f"  [warn] ETF 批量行情失败: {type(e).__name__}: {e}", quiet)
-        etf_rows, trade_date = [], ""
+        etf_rows, trade_date, etf_failed = [], "", ["etf"]
     if not etf_rows:
         failed.append("etf")
+    else:
+        failed.extend(etf_failed)
 
     # 保持 MACRO_KEYS 的固定顺序，方便人眼 diff
     quotes = {k: quotes.get(k) for k in MACRO_KEYS}
@@ -532,9 +655,10 @@ def main() -> int:
 
     elapsed = time.time() - started
     usable_macro = sum(1 for k in MACRO_KEYS if quotes.get(k) is not None)
+    premium_n = sum(1 for r in etf_rows if r.get("premium_pct") is not None)
     log(
         f"✅ 宏观 {fresh_macro}/{len(MACRO_KEYS)} 项新数据（可用 {usable_macro}）"
-        f" · ETF {len(etf_rows)}/{len(ETF_CODES)} 只"
+        f" · ETF {len(etf_rows)}/{len(ETF_CODES)} 只（含溢价 {premium_n}）"
         f" · 失败 {('、'.join(failed) or '无')} · 耗时 {elapsed:.1f}s"
         f" → {args.out}",
         args.quiet,

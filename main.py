@@ -1667,6 +1667,11 @@ def _build_etf_secids():
 
 
 ETF_SECIDS = _build_etf_secids()
+# 腾讯行情代码（sh510300 / sz159915），前端直连取 IOPV 用。
+# qt.gtimg.cn 返回 Access-Control-Allow-Origin: *，比东财的「回显 Origin」更宽松。
+ETF_GT_CODES = [
+    ("sh" if s.startswith("1.") else "sz") + s.split(".", 1)[1] for s in ETF_SECIDS
+]
 
 # 前端脚本用普通字符串写（不是 f-string），注入时只替换占位符，
 # 免去在模板里对每个 JS 花括号都写两遍的麻烦。
@@ -1679,11 +1684,17 @@ _LIVE_JS_SRC = r"""
     var DIRECT_MS = 30000;       // ETF 现价直连东财，30 秒一次
     var DIRECT_TIMEOUT = 5000;   // 直连超时 5 秒，超了就退回快照
 
-    // ETF 直连：东财 push2 会按请求头 Origin 原样回显 CORS 头，浏览器可直接 fetch。
+    // ETF 直连的两条腿：
+    //   1) 腾讯 qt.gtimg.cn —— 主源。返回 Access-Control-Allow-Origin: *，
+    //      一次就能拿到现价 + 涨跌幅 + IOPV + 溢价率，溢价率能做到 30 秒级。
+    //      编码是 GBK，必须用 TextDecoder('gbk') 解，否则中文名乱码（数字不受影响）。
+    //   2) 东财 push2 —— 兜底。它按请求头 Origin 原样回显 CORS 头，也能跨域，
+    //      但**没有任何 IOPV 字段**（f71 是均价，别当 IOPV 用：成交额/成交量 正好等于它），
+    //      所以走这条时溢价率只能用快照里的 IOPV 顶着。
     // 新浪 hq.sinajs.cn 没有跨域头，只能服务端用，前端不要碰。
-    // 注意：这里只有现价(f2)/涨跌幅(f3)/昨收(f18)，**没有 IOPV**，
-    // 所以溢价率算不出来（f71 是均价，别当 IOPV 用：成交额/成交量 正好等于它）。
     var DIRECT_SECIDS = __ETF_SECIDS__;
+    var GT_CODES = __ETF_GT_CODES__;
+    var GT_URL = 'https://qt.gtimg.cn/q=' + GT_CODES.join(',');   // 只含字母数字，不必编码
     var DIRECT_URL = 'https://push2.eastmoney.com/api/qt/ulist.np/get'
         + '?fltt=2&invt=2&fields=f2,f3,f12,f14,f18'
         + '&ut=fa5fd1943c7b386f172d6893dbfba10b'
@@ -1842,15 +1853,81 @@ _LIVE_JS_SRC = r"""
             if (!r || !r.code) return;
             var old = prev[r.code];
             etfOrder.push(r.code);
+            var snapPrice = (r.price === undefined) ? null : r.price;
+            var snapIopv = (r.iopv === undefined || r.iopv === null) ? null : r.iopv;
+            var oldIopv = (old && old.iopv) ? old.iopv : null;
+            var price = (keepLive && old) ? old.price : snapPrice;
+            // IOPV 优先用时新的：刚直连拿到的 > 快照里的
+            var iopv = (keepLive && oldIopv) ? oldIopv : (snapIopv || oldIopv);
             etfByCode[r.code] = {
                 code: r.code,
                 name: r.name || r.code,
-                price: (keepLive && old) ? old.price : r.price,
+                price: price,
                 change_pct: (keepLive && old) ? old.change_pct : r.change_pct,
-                premium_pct: (r.premium_pct === undefined ? null : r.premium_pct),
+                iopv: iopv,
+                // 溢价一律用「最终展示的价格 ÷ 手上的 IOPV」重算，保证页面自洽；
+                // 没有 IOPV（LOF）就退回快照给的值，通常也是 null
+                premium_pct: (iopv && price !== null && price !== undefined)
+                    ? (price - iopv) / iopv * 100
+                    : ((r.premium_pct === undefined) ? null : r.premium_pct),
             };
         });
         renderEtf();
+    }
+
+    // 腾讯行情是 GBK，直接用 resp.text() 得到的是乱码（数字不受影响，但名称会烂）
+    function decodeGBK(buf) {
+        try {
+            return new TextDecoder('gbk').decode(buf);
+        } catch (e) {
+            return new TextDecoder('utf-8').decode(buf);
+        }
+    }
+
+    function toNum(v) {
+        if (v === null || v === undefined || v === '' || v === '-') return null;
+        var n = Number(v);
+        return isNaN(n) ? null : n;
+    }
+
+    // 腾讯格式（`~` 分隔，实测 510300 / 159915 逐只核对过）：
+    //   v_sh510300="1~名称~510300~现价[3]~昨收[4]~今开[5]~...~涨跌幅[32]~...~溢价率[77]~IOPV[78]~..."
+    // 510300: 4.018 / -1.03 / -0.31 / 4.0305，(4.018-4.0305)/4.0305 = -0.310%，与 [77] 吻合。
+    function applyLiveEtfGT(text) {
+        var n = 0;
+        var chunks = String(text || '').split(';');
+        for (var i = 0; i < chunks.length; i++) {
+            var eq = chunks[i].indexOf('=');
+            if (eq < 0) continue;
+            var body = chunks[i].slice(eq + 1).trim().replace(/^"/, '').replace(/"$/, '');
+            var f = body.split('~');
+            if (f.length < 79) continue;          // 字段不够说明这只没行情（停牌/退市）
+            var code = (f[2] || '').trim();
+            if (!code) continue;
+            var price = toNum(f[3]);
+            var iopv = toNum(f[78]);
+            if (!etfByCode[code]) {
+                etfOrder.push(code);
+                etfByCode[code] = {
+                    code: code, name: (f[1] || code).trim(),
+                    price: null, change_pct: null, iopv: null, premium_pct: null,
+                };
+            }
+            var row = etfByCode[code];
+            if (price !== null) row.price = price;
+            var chg = toNum(f[32]);
+            if (chg !== null) row.change_pct = chg;
+            // LOF（501225）交易所不发 IOPV，[78] 为空 → 保留快照里的 IOPV，
+            // 真没有就整行不渲染溢价，绝不拿别的数顶替
+            var eff = (iopv !== null) ? iopv : row.iopv;
+            row.iopv = eff;
+            row.premium_pct = (eff && row.price !== null)
+                ? (row.price - eff) / eff * 100
+                : null;
+            n++;
+        }
+        if (n) renderEtf();
+        return n;
     }
 
     function applyLiveEtf(diff) {
@@ -1867,7 +1944,12 @@ _LIVE_JS_SRC = r"""
                 };
             }
             var row = etfByCode[code];
-            if (it.f2 !== null && it.f2 !== undefined && it.f2 !== '-') row.price = Number(it.f2);
+            if (it.f2 !== null && it.f2 !== undefined && it.f2 !== '-') {
+                row.price = Number(it.f2);
+                // 东财没有 IOPV，只能拿快照里的顶着重算。
+                // 这样至少页面上的价格和溢价是自洽的（IOPV 是 15 分钟前的值）。
+                if (row.iopv) row.premium_pct = (row.price - row.iopv) / row.iopv * 100;
+            }
             if (it.f3 !== null && it.f3 !== undefined && it.f3 !== '-') row.change_pct = Number(it.f3);
             n++;
         });
@@ -1919,33 +2001,62 @@ _LIVE_JS_SRC = r"""
         if (directTimer) { clearInterval(directTimer); directTimer = null; }
     }
 
-    function pullDirect() {
-        if (!isTradingTime()) return;
-        if (Date.now() < cooldownUntil) return;   // 退避窗口内不请求
+    // 单次带超时的 fetch：超时立刻 abort，避免请求堆积
+    function timedFetch(url, parse) {
         var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
         var kill = setTimeout(function () { if (ctrl) ctrl.abort(); }, DIRECT_TIMEOUT);
         var opts = ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' };
-        fetch(DIRECT_URL, opts)
-            .then(function (resp) {
-                if (!resp.ok) throw new Error('HTTP ' + resp.status);
-                return resp.json();
-            })
-            .then(function (payload) {
-                clearTimeout(kill);
+        return fetch(url, opts).then(function (resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return parse(resp);
+        }).then(function (v) {
+            clearTimeout(kill);
+            return v;
+        }, function (e) {
+            clearTimeout(kill);
+            throw e;
+        });
+    }
+
+    // 主源：腾讯，一次拿现价 + 涨跌幅 + IOPV + 溢价
+    function pullDirectGT() {
+        return timedFetch(GT_URL, function (resp) {
+            return resp.arrayBuffer().then(function (buf) {
+                if (!applyLiveEtfGT(decodeGBK(buf))) throw new Error('gt no match');
+                return 'tencent';
+            });
+        });
+    }
+
+    // 备源：东财，只有价格，溢价用快照 IOPV 顶着
+    function pullDirectEM() {
+        return timedFetch(DIRECT_URL, function (resp) {
+            return resp.json().then(function (payload) {
                 var diff = (payload && payload.data && payload.data.diff) || [];
-                if (!diff.length) throw new Error('empty diff');
-                if (!applyLiveEtf(diff)) throw new Error('no match');
+                if (!diff.length) throw new Error('em empty diff');
+                if (!applyLiveEtf(diff)) throw new Error('em no match');
+                return 'eastmoney';
+            });
+        });
+    }
+
+    function pullDirect() {
+        if (!isTradingTime()) return;
+        if (Date.now() < cooldownUntil) return;   // 退避窗口内不请求
+        pullDirectGT()
+            .catch(function () { return pullDirectEM(); })   // 腾讯挂了换东财
+            .then(function (src) {
                 lastDirectMs = Date.now();
                 lastDirectFailMs = 0;
                 failStreak = 0;
                 cooldownUntil = 0;
-                setEtfBadge('直连东财 · 30 秒 · ' + beijingHHMM(), false);
+                setEtfBadge((src === 'tencent' ? '直连腾讯 · 30 秒 · ' : '直连东财 · 30 秒 · ')
+                    + beijingHHMM(), false);
             })
             .catch(function () {
-                clearTimeout(kill);
                 lastDirectFailMs = Date.now();
                 // 指数退避：30s → 60s → 120s → 240s，封顶 5 分钟。
-                // 东财 push2 是按 IP 限流的，被限后继续 30 秒一次只会延长封禁。
+                // 两个源都是按 IP 限流的，被限后继续 30 秒一次只会延长封禁。
                 failStreak = Math.min(failStreak + 1, 4);
                 cooldownUntil = Date.now() + Math.min(DIRECT_MS * Math.pow(2, failStreak - 1), 300000);
                 // 直连失败不清页面：保留上一轮价格，角标退回快照
@@ -9130,6 +9241,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             "__ETF_SECIDS__",
             json.dumps(ETF_SECIDS, separators=(",", ":")),
         )
+        .replace(
+            "__ETF_GT_CODES__",
+            json.dumps(ETF_GT_CODES, separators=(",", ":")),
+        )
         + "</script>"
     )
 
@@ -10902,6 +11017,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             .live-etf-price {{ font-size: 16px; }}
             .live-meta {{ flex-wrap: wrap; justify-content: flex-end; gap: 4px; }}
             .live-meta > span:first-child {{ font-size: 10px; }}
+            /* 角标是 nowrap 的 flex item，窄屏下会把整行撑破、右侧被裁，
+               直接让标题和角标上下排 */
+            .live-etf-head {{ flex-direction: column; align-items: flex-start; gap: 2px; }}
         }}
 
         .metric-card {{
@@ -14221,7 +14339,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         <span class="live-badge" data-etf-badge hidden></span>
                     </div>
                     <div class="live-etf-grid" id="liveEtfGrid"></div>
-                    <div class="live-etf-note">交易时段每 30 秒直连东方财富刷新现价与涨跌幅，收盘/后台自动暂停；涨红跌绿。溢价率需交易所 IOPV，东财公开字段不提供，暂不显示。</div>
+                    <div class="live-etf-note">交易时段每 30 秒直连腾讯刷新现价、涨跌幅与溢价率（IOPV 取交易所公布值），收盘或切后台自动暂停；涨红跌绿。LOF（501225）交易所不发 IOPV，不显示溢价。</div>
                 </div>
 
                 <!-- ===== 大宗商品风向标 ===== -->
