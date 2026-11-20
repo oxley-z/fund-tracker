@@ -1586,6 +1586,207 @@ def fetch_home_market_metrics(opener):
 
 
 # ==============================================================================
+# 盘中轻量刷新：live_quotes.py → data/live_quotes.json → 前端覆盖
+# ==============================================================================
+# 每晚全量生成的页面里，卡片数字是 22:30 那一刻的快照。
+# 盘中由 live_quotes.py 每 15 分钟写一份 JSON，前端拿到后按同一套阈值重算状态标签，
+# 否则会出现「VIX 已经冲到 30，标签还写着平稳低波」这种自相矛盾。
+# buckets 用「下界」语义：value >= min 即命中，从上往下取第一个。
+LIVE_MACRO_RULES = {
+    # fng 分数越高越贪婪，边界取 xx.01 以贴合 main.py 里 <=25 / <45 的分档口径
+    "fng": {"digits": 1, "buckets": [
+        (75.01, "极度贪婪", "#0b8043"), (55.01, "贪婪", "#188038"),
+        (45.01, "中性观望", "#5f6368"), (25.01, "恐惧", "#e8710a"),
+        (-1, "极度恐惧", "#d93025"),
+    ]},
+    "vix": {"digits": 2, "buckets": [
+        (30, "极度恐慌", "#d93025"), (20, "警惕波动", "#e67e22"),
+        (15, "正常震荡", "#188038"), (0, "平稳低波", "#1a73e8"),
+    ]},
+    "vxn": {"digits": 2, "buckets": [
+        (30, "科技股极恐", "#d93025"), (22, "杀估值抛压", "#e67e22"),
+        (0, "波动平缓", "#188038"),
+    ]},
+    "vxsmh": {"digits": 2, "buckets": [
+        (55, "半导体极恐", "#d93025"), (45, "警惕波动", "#e67e22"),
+        (38, "正常震荡", "#188038"), (0, "平稳低波", "#1a73e8"),
+    ]},
+    "skew": {"digits": 2, "buckets": [
+        (140, "尾部黑天鹅预警", "#d93025"), (132, "风险积聚", "#e67e22"),
+        (0, "常态平稳", "#188038"),
+    ]},
+    "usdcny": {"digits": 4, "buckets": [
+        (7.30, "美元走强", "#d93025"), (7.15, "区间震荡", "#e67e22"),
+        (0, "人民币升值", "#188038"),
+    ]},
+    "gold_london": {"digits": 2, "buckets": [
+        (2500, "极度高企", "#d93025"), (2000, "高位震荡", "#e67e22"),
+        (1500, "温和中性", "#188038"), (0, "低位盘整", "#1a73e8"),
+    ]},
+    "gold_shfe": {"digits": 2, "buckets": [
+        (700, "极度高企", "#d93025"), (600, "高位震荡", "#e67e22"),
+        (500, "温和中性", "#188038"), (0, "低位盘整", "#1a73e8"),
+    ]},
+    "silver_london": {"digits": 3, "buckets": [
+        (35, "极度高企", "#d93025"), (28, "高位震荡", "#e67e22"),
+        (20, "温和中性", "#188038"), (0, "低位盘整", "#1a73e8"),
+    ]},
+    "copper_lme": {"digits": 2, "buckets": [
+        (5.5, "极度高企", "#d93025"), (4.5, "高位震荡", "#e67e22"),
+        (3.5, "温和中性", "#188038"), (0, "需求疲软", "#1a73e8"),
+    ]},
+    "brent": {"digits": 2, "buckets": [
+        (95, "极度高企", "#d93025"), (80, "通胀溢价", "#e67e22"),
+        (65, "温和中性", "#188038"), (0, "需求疲软", "#1a73e8"),
+    ]},
+    "btc": {"digits": 2, "buckets": [
+        (100000, "极度高企", "#d93025"), (70000, "高位震荡", "#e67e22"),
+        (40000, "温和中性", "#188038"), (0, "低位盘整", "#1a73e8"),
+    ]},
+}
+
+# 前端脚本用普通字符串写（不是 f-string），注入时只替换 __LIVE_RULES__ 占位，
+# 免去在模板里对每个 JS 花括号都写两遍的麻烦。
+_LIVE_JS_SRC = r"""
+(function () {
+    'use strict';
+    var RULES = __LIVE_RULES__;
+    var REFRESH_MS = 60000;      // 60 秒轮询一次
+    var FRESH_MINUTES = 20;      // 超过 20 分钟没更新就不再说「实时」
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function hexToRgba(hex, alpha) {
+        var m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+        if (!m) return 'rgba(128,128,128,' + alpha + ')';
+        var n = parseInt(m[1], 16);
+        return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
+    }
+
+    function bucketOf(key, v) {
+        var rule = RULES[key];
+        if (!rule) return null;
+        for (var i = 0; i < rule.buckets.length; i++) {
+            if (v >= rule.buckets[i][0]) return rule.buckets[i];
+        }
+        return null;
+    }
+
+    function fmtNum(v, digits) {
+        if (v === null || v === undefined || v === '' || isNaN(v)) return '--';
+        return Number(v).toFixed(digits);
+    }
+
+    // 北京时间字符串 -> 毫秒时间戳（浏览器本地时区不可靠，必须手工按 UTC+8 解析）
+    function parseBeijing(s) {
+        var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s || '');
+        if (!m) return null;
+        return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 8, +m[5], +(m[6] || 0));
+    }
+
+    function setBadges(text, stale) {
+        var nodes = document.querySelectorAll('[data-live-badge]');
+        for (var i = 0; i < nodes.length; i++) {
+            nodes[i].textContent = text;
+            nodes[i].hidden = false;
+            nodes[i].className = 'live-badge' + (stale ? ' is-stale' : '');
+        }
+    }
+
+    function applyMacro(quotes, staleKeys) {
+        var staleMap = {};
+        (staleKeys || []).forEach(function (k) { staleMap[k] = true; });
+        Object.keys(quotes).forEach(function (key) {
+            var rule = RULES[key];
+            var valEl = document.querySelector('[data-live-key="' + key + '"]');
+            if (!rule || !valEl) return;
+            var v = quotes[key];
+            if (v === null || v === undefined || v === '' || isNaN(v)) {
+                // 取不到就保持页面原值，不要写成 0/-- 把每晚的数据也弄没了
+                return;
+            }
+            v = Number(v);
+            valEl.textContent = fmtNum(v, rule.digits);
+            valEl.classList.toggle('is-live-stale', !!staleMap[key]);
+
+            var tag = document.querySelector('[data-live-tag="' + key + '"]');
+            var bucket = bucketOf(key, v);
+            if (tag && bucket) {
+                tag.textContent = bucket[1];
+                tag.style.color = bucket[2];
+                tag.style.background = hexToRgba(bucket[2], 0.12);
+            }
+            if (key === 'fng') {
+                var ptr = document.querySelector('.fng-bar-pointer');
+                if (ptr) ptr.style.left = Math.max(0, Math.min(100, v)) + '%';
+            }
+        });
+    }
+
+    function renderEtf(rows) {
+        var block = document.getElementById('liveEtfBlock');
+        var grid = document.getElementById('liveEtfGrid');
+        if (!block || !grid) return;
+        if (!rows || !rows.length) { block.hidden = true; return; }
+        grid.innerHTML = rows.map(function (r) {
+            var chg = (r.change_pct === null || r.change_pct === undefined) ? null : Number(r.change_pct);
+            var cls = chg === null ? 'flat' : (chg >= 0 ? 'up' : 'down');
+            var chgTxt = chg === null ? '--' : (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+            var price = (r.price === null || r.price === undefined) ? '--' : Number(r.price).toFixed(3);
+            return '<div class="live-etf-item">' +
+                '<div class="live-etf-code">' + esc(r.code) + '</div>' +
+                '<div class="live-etf-name" title="' + esc(r.name) + '">' + esc(r.name) + '</div>' +
+                '<div class="live-etf-price ' + cls + '">' + price + '</div>' +
+                '<div class="live-etf-chg ' + cls + '">' + chgTxt + '</div>' +
+                '</div>';
+        }).join('');
+        block.hidden = false;
+    }
+
+    function pull() {
+        fetch('data/live_quotes.json?v=' + Date.now(), { cache: 'no-store' })
+            .then(function (resp) {
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return resp.json();
+            })
+            .then(function (data) {
+                window.__LIVE_QUOTES__ = data;
+                applyMacro(data.quotes || {}, data.stale_keys || []);
+                renderEtf(data.etf || []);
+
+                var stamp = parseBeijing(data.updated_at_beijing);
+                var hhmm = (data.updated_at_beijing || '').slice(11, 16) || '--:--';
+                var ageMin = stamp ? (Date.now() - stamp) / 60000 : Infinity;
+                var isStale = !!data.stale || ageMin > FRESH_MINUTES;
+                if (isStale) {
+                    setBadges('最后更新 ' + hhmm + (ageMin > FRESH_MINUTES ? '（非交易时段）' : '（部分源滞后）'), true);
+                } else {
+                    setBadges('实时 · 更新于 ' + hhmm, false);
+                }
+            })
+            .catch(function () {
+                // 拿不到就当没有：保留每晚生成的数据，不弹错、不把数字清空
+                if (!window.__LIVE_QUOTES__) {
+                    setBadges('暂无盘中数据 · 沿用每晚快照', true);
+                }
+            });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', pull);
+    } else {
+        pull();
+    }
+    setInterval(pull, REFRESH_MS);
+})();
+"""
+
+
+# ==============================================================================
 # 核心宏观指标历史序列（卡片展开图）
 # ==============================================================================
 MACRO_HISTORY_CACHE = os.path.join("data", "macro_history.json")
@@ -8706,6 +8907,17 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     now_dt = now_beijing()
     update_time_str = now_dt.strftime("%Y-%m-%d %H:%M") + " (北京时间)"
 
+    # 盘中刷新的前端脚本：阈值表直接从 Python 常量序列化过去，
+    # 免得 JS 里再手写一套档位，两边迟早对不上。
+    live_quotes_script = (
+        "<script>"
+        + _LIVE_JS_SRC.replace(
+            "__LIVE_RULES__",
+            json.dumps(LIVE_MACRO_RULES, ensure_ascii=False, separators=(",", ":")),
+        )
+        + "</script>"
+    )
+
     if now_dt.weekday() == 5:
         fri_dt = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
         col_today_title = f"今日涨幅 (基准周五: {fri_dt})"
@@ -10426,6 +10638,54 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             color: var(--link-color);
             flex-shrink: 0;
         }}
+        /* ===== 盘中实时数据（data/live_quotes.json） ===== */
+        .live-meta {{ display: inline-flex; align-items: center; gap: 8px; }}
+        .live-badge {{
+            font-size: 11px; line-height: 1.6; padding: 1px 8px; border-radius: 9px;
+            color: #188038; background: rgba(24, 128, 56, 0.12); white-space: nowrap;
+        }}
+        .live-badge.is-stale {{ color: #b06000; background: rgba(176, 96, 0, 0.12); }}
+        [data-theme="dark"] .live-badge {{ color: #6fcf97; background: rgba(111, 207, 151, 0.16); }}
+        [data-theme="dark"] .live-badge.is-stale {{ color: #f6ae2d; background: rgba(246, 174, 45, 0.16); }}
+        .metric-value.is-live-stale {{ opacity: 0.55; }}
+
+        .live-etf-block {{ margin: 18px 0 4px 0; }}
+        .live-etf-head {{
+            display: flex; justify-content: space-between; align-items: center;
+            gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+        }}
+        .live-etf-head > h3 {{ flex: 1 1 auto; min-width: 0; }}
+        .live-etf-grid {{
+            display: grid; gap: 8px;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        }}
+        .live-etf-item {{
+            border: 1px solid var(--border); border-radius: 8px;
+            background: var(--table-bg); padding: 8px 10px;
+            display: flex; flex-direction: column; gap: 2px; min-width: 0;
+        }}
+        .live-etf-code {{ font-size: 10px; color: var(--footer-text); letter-spacing: 0.3px; }}
+        .live-etf-name {{
+            font-size: 12px; color: var(--text); font-weight: 600;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }}
+        .live-etf-price {{ font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }}
+        .live-etf-chg {{ font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }}
+        /* A 股习惯：涨红跌绿 */
+        .live-etf-price.up, .live-etf-chg.up {{ color: #d93025; }}
+        .live-etf-price.down, .live-etf-chg.down {{ color: #188038; }}
+        .live-etf-price.flat, .live-etf-chg.flat {{ color: var(--footer-text); }}
+        [data-theme="dark"] .live-etf-price.up, [data-theme="dark"] .live-etf-chg.up {{ color: #f28b82; }}
+        [data-theme="dark"] .live-etf-price.down, [data-theme="dark"] .live-etf-chg.down {{ color: #6fcf97; }}
+        .live-etf-note {{ margin-top: 8px; font-size: 11px; color: var(--footer-text); }}
+        @media (max-width: 640px) {{
+            /* 400px 宽时 auto-fill 会算出 4 列，每列窄到把名称截成 4 个字，固定 2 列更好读 */
+            .live-etf-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }}
+            .live-etf-price {{ font-size: 16px; }}
+            .live-meta {{ flex-wrap: wrap; justify-content: flex-end; gap: 4px; }}
+            .live-meta > span:first-child {{ font-size: 10px; }}
+        }}
+
         .metric-card {{
             background: var(--table-bg);
             border: 1px solid var(--border);
@@ -13617,9 +13877,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         <section id="homeView" class="view-pane active">
             <div class="home-container">
 
-                <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 12px; flex-wrap: wrap; gap: 6px;">
                     <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🌐 核心宏观风向标</h3>
-                    <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                    <span class="live-meta">
+                        <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                        <span class="live-badge" data-live-badge hidden></span>
+                    </span>
                 </div>
                 <div class="macro-metrics-grid">
                     <div{_macro_history_attrs('cnn', 'macroHistoryPanelCore')}>
@@ -13628,8 +13891,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('cnn')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#1a73e8;">{fng['score']}</span>
-                            <span class="metric-tag" style="background:rgba(26,115,232,0.12); color:#1a73e8;">{fng['rating']}</span>
+                            <span class="metric-value" style="color:#1a73e8;" data-live-key="fng">{fng['score']}</span>
+                            <span class="metric-tag" style="background:rgba(26,115,232,0.12); color:#1a73e8;" data-live-tag="fng">{fng['rating']}</span>
                         </div>
                         <div class="fng-bar-track">
                             <div class="fng-bar-pointer" style="left: {fng['score']}%;"></div>
@@ -13648,8 +13911,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('vix')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#d93025;">{vix['val']}</span>
-                            <span class="metric-tag" style="background:rgba(217,48,37,0.12); color:#d93025;">{vix['status']}</span>
+                            <span class="metric-value" style="color:#d93025;" data-live-key="vix">{vix['val']}</span>
+                            <span class="metric-tag" style="background:rgba(217,48,37,0.12); color:#d93025;" data-live-tag="vix">{vix['status']}</span>
                         </div>
                         <div class="metric-desc">
                             &lt;15 平稳低波 | 15~20 正常震荡 | 20~30 警惕波动 | &gt;30 极度恐慌
@@ -13665,8 +13928,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('vxsmh')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#9334e6;">{vxsmh['val']}</span>
-                            <span class="metric-tag" style="background:rgba(147,52,230,0.12); color:#9334e6;">{vxsmh['status']}</span>
+                            <span class="metric-value" style="color:#9334e6;" data-live-key="vxsmh">{vxsmh['val']}</span>
+                            <span class="metric-tag" style="background:rgba(147,52,230,0.12); color:#9334e6;" data-live-tag="vxsmh">{vxsmh['status']}</span>
                         </div>
                         <div class="metric-desc">
                             &lt;38 平稳低波 | 38~45 正常震荡 | 45~55 警惕波动 | &gt;55 半导体极恐
@@ -13682,8 +13945,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('vxn')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#34a853;">{vxn['val']}</span>
-                            <span class="metric-tag" style="background:rgba(52,168,83,0.12); color:#34a853;">波动平缓</span>
+                            <span class="metric-value" style="color:#34a853;" data-live-key="vxn">{vxn['val']}</span>
+                            <span class="metric-tag" style="background:rgba(52,168,83,0.12); color:#34a853;" data-live-tag="vxn">波动平缓</span>
                         </div>
                         <div class="metric-desc">
                             纳斯达克100期权隐波，监测科技成长股杀估值抛压
@@ -13699,8 +13962,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('usdcny')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#188038;">{usdcny['val']}</span>
-                            <span class="metric-tag" style="background:rgba(24,128,56,0.12); color:#188038;">{usdcny['status']}</span>
+                            <span class="metric-value" style="color:#188038;" data-live-key="usdcny">{usdcny['val']}</span>
+                            <span class="metric-tag" style="background:rgba(24,128,56,0.12); color:#188038;" data-live-tag="usdcny">{usdcny['status']}</span>
                         </div>
                         <div class="metric-desc">
                             美元兑人民币汇率，QDII换汇成本及折溢价关键锚
@@ -13716,8 +13979,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('skew')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#e67e22;">{skew['val']}</span>
-                            <span class="metric-tag" style="background:rgba(230,126,34,0.12); color:#e67e22;">尾部黑天鹅预警</span>
+                            <span class="metric-value" style="color:#e67e22;" data-live-key="skew">{skew['val']}</span>
+                            <span class="metric-tag" style="background:rgba(230,126,34,0.12); color:#e67e22;" data-live-tag="skew">尾部黑天鹅预警</span>
                         </div>
                         <div class="metric-desc">
                             基准100。&gt;135提示期权市场尾部极度对冲成本升高
@@ -13733,10 +13996,23 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     {core_history_panel_html}
                 </div>
 
+                <!-- ===== 场内宽基 ETF 盘中价（数据来自 data/live_quotes.json，无文件时整块隐藏） ===== -->
+                <div class="live-etf-block" id="liveEtfBlock" hidden>
+                    <div class="live-etf-head">
+                        <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">📈 场内宽基 ETF 盘中价</h3>
+                        <span class="live-badge" data-live-badge hidden></span>
+                    </div>
+                    <div class="live-etf-grid" id="liveEtfGrid"></div>
+                    <div class="live-etf-note">现价为东方财富延时行情，涨红跌绿；溢价率需要交易所 IOPV，本期未引入。</div>
+                </div>
+
                 <!-- ===== 大宗商品风向标 ===== -->
-                <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 6px;">
                     <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🛢️ 大宗商品风向标</h3>
-                    <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                    <span class="live-meta">
+                        <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                        <span class="live-badge" data-live-badge hidden></span>
+                    </span>
                 </div>
                 <div class="macro-metrics-grid">
                     <div{_macro_history_attrs('gold_london', 'macroHistoryPanelCommodity')}>
@@ -13745,8 +14021,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('gold_london')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#f39c12;">{gold_london['val']}</span>
-                            <span class="metric-tag" style="background:rgba(243,156,18,0.12); color:{gold_tag_color};">{gold_london['status']}</span>
+                            <span class="metric-value" style="color:#f39c12;" data-live-key="gold_london">{gold_london['val']}</span>
+                            <span class="metric-tag" style="background:rgba(243,156,18,0.12); color:{gold_tag_color};" data-live-tag="gold_london">{gold_london['status']}</span>
                         </div>
                         <div class="metric-desc">
                             {gold_london['desc']}
@@ -13762,8 +14038,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('gold_shfe')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#e67e22;">{gold_shfe['val']}</span>
-                            <span class="metric-tag" style="background:rgba(230,126,34,0.12); color:{gold_shfe_tag_color};">{gold_shfe['status']}</span>
+                            <span class="metric-value" style="color:#e67e22;" data-live-key="gold_shfe">{gold_shfe['val']}</span>
+                            <span class="metric-tag" style="background:rgba(230,126,34,0.12); color:{gold_shfe_tag_color};" data-live-tag="gold_shfe">{gold_shfe['status']}</span>
                         </div>
                         <div class="metric-desc">
                             {gold_shfe['desc']}
@@ -13779,8 +14055,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('silver_london')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#95a5a6;">{silver_london['val']}</span>
-                            <span class="metric-tag" style="background:rgba(149,165,166,0.12); color:{silver_tag_color};">{silver_london['status']}</span>
+                            <span class="metric-value" style="color:#95a5a6;" data-live-key="silver_london">{silver_london['val']}</span>
+                            <span class="metric-tag" style="background:rgba(149,165,166,0.12); color:{silver_tag_color};" data-live-tag="silver_london">{silver_london['status']}</span>
                         </div>
                         <div class="metric-desc">
                             {silver_london['desc']}
@@ -13796,8 +14072,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('copper_lme')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#b87333;">{copper_lme['val']}</span>
-                            <span class="metric-tag" style="background:rgba(184,115,51,0.12); color:{copper_tag_color};">{copper_lme['status']}</span>
+                            <span class="metric-value" style="color:#b87333;" data-live-key="copper_lme">{copper_lme['val']}</span>
+                            <span class="metric-tag" style="background:rgba(184,115,51,0.12); color:{copper_tag_color};" data-live-tag="copper_lme">{copper_lme['status']}</span>
                         </div>
                         <div class="metric-desc">
                             {copper_lme['desc']}
@@ -13813,8 +14089,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('brent')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#2c3e50;">{brent['val']}</span>
-                            <span class="metric-tag" style="background:rgba(44,62,80,0.12); color:{brent_tag_color};">{brent['status']}</span>
+                            <span class="metric-value" style="color:#2c3e50;" data-live-key="brent">{brent['val']}</span>
+                            <span class="metric-tag" style="background:rgba(44,62,80,0.12); color:{brent_tag_color};" data-live-tag="brent">{brent['status']}</span>
                         </div>
                         <div class="metric-desc">
                             {brent['desc']}
@@ -13830,8 +14106,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             {_macro_history_hint('btc')}
                         </div>
                         <div class="metric-body">
-                            <span class="metric-value" style="color:#f7931a;">{btc['val']}</span>
-                            <span class="metric-tag" style="background:rgba(247,147,26,0.12); color:{btc_tag_color};">{btc['status']}</span>
+                            <span class="metric-value" style="color:#f7931a;" data-live-key="btc">{btc['val']}</span>
+                            <span class="metric-tag" style="background:rgba(247,147,26,0.12); color:{btc_tag_color};" data-live-tag="btc">{btc['status']}</span>
                         </div>
                         <div class="metric-desc">
                             {btc['desc']}
@@ -17506,6 +17782,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
     </script>
     {macro_history_script}
+    {live_quotes_script}
 </body>
 </html>
 """

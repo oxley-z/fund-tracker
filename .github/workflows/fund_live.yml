@@ -1,0 +1,87 @@
+name: Intraday Live Quotes
+
+# 盘中轻量刷新：只抓「几分钟就能变」的那部分数据（宏观 12 项 + 20 只场内宽基现价），
+# 写进 gh-pages 快照里的 data/live_quotes.json。
+#
+# 为什么不复用 fund_daily.yml：
+#   全量一轮约 11 分钟，还要抓 150+ 只基金净值，15 分钟一次必然重叠 + 被限流。
+#   这里只发 1 次批量行情 + 十几个单点请求，全程 30 秒内。
+#
+# 前置条件：仓库 Settings → Pages → Source 必须选「Deploy from a branch / gh-pages」，
+#           且 fund_daily.yml 至少成功跑过一次（否则 gh-pages 分支还不存在，本流程会跳过）。
+
+on:
+  schedule:
+    # GitHub 的 cron 只认 UTC。北京时间 = UTC+8。
+    # 上午 09:07-11:52（UTC 01:07-03:52），下午 13:07-14:52（UTC 05:07-06:52）
+    - cron: '7,22,37,52 1,2,3 * * 1-5'
+    - cron: '7,22,37,52 5,6 * * 1-5'
+  workflow_dispatch:   # 支持手动点一次验证
+
+permissions:
+  contents: write      # 需要往 gh-pages 分支提交 JSON
+
+# 和每晚全量共用同一把锁，避免两边同时改 gh-pages 撞车
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  live-quotes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout source (for live_quotes.py)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install requests
+        run: python -m pip install --quiet --upgrade pip requests
+
+      # 站点快照单独 clone 出来：不改工作区的源码目录，也不碰 main 分支
+      - name: Clone current site from gh-pages
+        id: site
+        run: |
+          if git clone --depth=1 --branch gh-pages \
+               "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" site 2>/dev/null; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::gh-pages 分支不存在，跳过本轮（请先手动跑一次 fund_daily.yml 建分支）"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refresh live quotes
+        if: steps.site.outputs.ok == 'true'
+        run: python live_quotes.py --no-proxy --out site/data/live_quotes.json
+
+      - name: Commit & push to gh-pages
+        if: steps.site.outputs.ok == 'true'
+        run: |
+          set -e
+          cd site
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/live_quotes.json
+          if git diff --cached --quiet; then
+            echo "本轮数据与上次完全一致，跳过提交"
+            exit 0
+          fi
+          git commit -q -m "chore(live): 盘中行情 $(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M')"
+          # 极端情况下（上一轮 push 刚落地）会 non-fast-forward，重试两次即可
+          for i in 1 2 3; do
+            if git push -q origin gh-pages; then
+              echo "✅ 已更新 gh-pages/data/live_quotes.json"
+              exit 0
+            fi
+            echo "push 失败，第 $i 次重试…"
+            # clone 是 --depth=1 的，个别情况下 shallow 仓库会被拒，先补全历史再试
+            git fetch -q --unshallow origin 2>/dev/null || true
+            git pull -q --rebase origin gh-pages || true
+            sleep 3
+          done
+          echo "::error::连续 3 次 push 失败"
+          exit 1

@@ -91,15 +91,46 @@ jobs:
             "chore(data): update macro history & holdings cache" \
             data/
 
-      # 部署至 GitHub Pages
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      # ★ 盘中行情快照：gh-pages 是「全量覆盖」的站点快照，
+      #   如果工作区里没有 live_quotes.json，下面的 --delete 同步会把它一起删掉，
+      #   白天前端就再也读不到盘中数据了。这里先产一份兜底（失败不影响部署）。
+      - name: Snapshot Live Quotes
+        continue-on-error: true
+        run: python live_quotes.py --no-proxy
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: '.'
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      # 部署至 GitHub Pages：改成推 gh-pages 分支，而不是上传 artifact。
+      # 原因：盘中工作流每 15 分钟要把新的 live_quotes.json 送到线上，
+      # 而 artifact 部署是「整站原子替换」，不可能每 15 分钟重建整站；
+      # 推分支则可以让盘中任务只 checkout 快照、改一个 JSON、再 push。
+      # 每次 force push 只保留最新一次提交，避免分支体积每天膨胀 ~20 MB。
+      - name: Publish to gh-pages
+        run: |
+          set -e
+          SITE=/tmp/site
+          rm -rf "$SITE" && mkdir -p "$SITE"
+          # data/ 只带 live_quotes.json：其余是抓取缓存，页面用不到，
+          # 全带上会让每晚 push 从 ~21 MB 涨到 ~130 MB。
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='cache' \
+            --exclude='__pycache__' \
+            --exclude='*.tmp' \
+            --exclude='_cmp_build' \
+            --exclude='patches' \
+            --include='data/' \
+            --include='data/live_quotes.json' \
+            --exclude='data/**' \
+            ./ "$SITE/"
+          # ★ 必须删掉 .gitignore：它忽略了 index.html 和 4 个 fund_dashboard_*.js，
+          #   而这里正是要把这些构建产物发布出去，留着会让 git add -A 静默跳过它们，
+          #   推上去的站点就是没有主页的空壳。
+          rm -f "$SITE/.gitignore"
+          cd "$SITE"
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b gh-pages
+          git add -A
+          git commit -q -m "deploy: nightly snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
+          echo "✅ 已发布到 gh-pages（$(du -sh "$SITE" | cut -f1)）"
