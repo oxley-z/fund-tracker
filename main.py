@@ -10741,6 +10741,26 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             cursor: pointer;
         }}
 
+        /* 独立的盘中实时页入口（live.html）：静态页，不进每晚重建 */
+        .nav-live-link {{
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(217, 48, 37, 0.10);
+            color: #d93025;
+            border: 1px solid rgba(217, 48, 37, 0.35);
+            border-radius: 16px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            text-decoration: none;
+            white-space: nowrap;
+        }}
+        .nav-live-link:hover {{
+            background: rgba(217, 48, 37, 0.18);
+            text-decoration: none;
+        }}
+
         .views-container {{
             flex: 1;
             min-height: 0;
@@ -14204,6 +14224,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             <button class="nav-tab-btn" data-view="dualView"><span class="tab-ico">📈</span>ETF份额看板</button>
         </div>
         <div class="nav-right-tools">
+            <a class="nav-live-link" href="live.html" target="_blank" rel="noopener"
+               title="A股宽基 ETF 与美股主动 QDII 的盘中实时页（交易时段 30 秒刷新）">⚡ 实时</a>
             <button class="theme-toggle" id="themeToggle">🌓 切换主题</button>
         </div>
     </header>
