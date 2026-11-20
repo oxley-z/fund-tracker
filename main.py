@@ -1645,14 +1645,49 @@ LIVE_MACRO_RULES = {
     ]},
 }
 
-# 前端脚本用普通字符串写（不是 f-string），注入时只替换 __LIVE_RULES__ 占位，
+def _build_etf_secids():
+    """把 live_quotes.ETF_CODES 转成东财 secid（1.=沪 0.=深）。
+
+    直接从 live_quotes 取清单，避免 main.py 里再抄一份、两边慢慢对不上；
+    取不到时退回内联副本（只影响直连刷新，快照渲染不受牵连）。
+    """
+    try:
+        import live_quotes as _lq
+
+        codes = list(_lq.ETF_CODES)
+    except Exception:
+        codes = [
+            "510300", "510310", "510330", "510050", "510500",
+            "512100", "510180", "560010", "588080",
+            "159919", "159915", "159949", "159901", "159922",
+            "159903", "159907", "159906", "159908", "159912",
+            "501225",
+        ]
+    return ["1." + c if c[0] in "56" else "0." + c for c in codes]
+
+
+ETF_SECIDS = _build_etf_secids()
+
+# 前端脚本用普通字符串写（不是 f-string），注入时只替换占位符，
 # 免去在模板里对每个 JS 花括号都写两遍的麻烦。
 _LIVE_JS_SRC = r"""
 (function () {
     'use strict';
     var RULES = __LIVE_RULES__;
-    var REFRESH_MS = 60000;      // 60 秒轮询一次
+    var REFRESH_MS = 60000;      // 快照（data/live_quotes.json）60 秒拉一次
     var FRESH_MINUTES = 20;      // 超过 20 分钟没更新就不再说「实时」
+    var DIRECT_MS = 30000;       // ETF 现价直连东财，30 秒一次
+    var DIRECT_TIMEOUT = 5000;   // 直连超时 5 秒，超了就退回快照
+
+    // ETF 直连：东财 push2 会按请求头 Origin 原样回显 CORS 头，浏览器可直接 fetch。
+    // 新浪 hq.sinajs.cn 没有跨域头，只能服务端用，前端不要碰。
+    // 注意：这里只有现价(f2)/涨跌幅(f3)/昨收(f18)，**没有 IOPV**，
+    // 所以溢价率算不出来（f71 是均价，别当 IOPV 用：成交额/成交量 正好等于它）。
+    var DIRECT_SECIDS = __ETF_SECIDS__;
+    var DIRECT_URL = 'https://push2.eastmoney.com/api/qt/ulist.np/get'
+        + '?fltt=2&invt=2&fields=f2,f3,f12,f14,f18'
+        + '&ut=fa5fd1943c7b386f172d6893dbfba10b'
+        + '&secids=' + DIRECT_SECIDS.join(',');   // 只含数字/点/逗号，不必编码
 
     function esc(s) {
         return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -1697,6 +1732,37 @@ _LIVE_JS_SRC = r"""
         }
     }
 
+    // ETF 区块的角标单独一套：它跟着 30 秒直连走，和宏观（15 分钟快照）不同步。
+    function setEtfBadge(text, stale) {
+        var nodes = document.querySelectorAll('[data-etf-badge]');
+        for (var i = 0; i < nodes.length; i++) {
+            nodes[i].textContent = text;
+            nodes[i].hidden = false;
+            nodes[i].className = 'live-badge' + (stale ? ' is-stale' : '');
+        }
+    }
+
+    // 浏览器本地时区不可靠，统一换算成北京时间再判断开收盘。
+    function beijingNow() {
+        return new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000);
+    }
+
+    function beijingHHMM() {
+        var d = beijingNow();
+        function p(n) { return (n < 10 ? '0' : '') + n; }
+        return p(d.getHours()) + ':' + p(d.getMinutes());
+    }
+
+    // A 股连续竞价：工作日 09:30-11:30、13:00-15:00。
+    // 法定节假日识别不了，但那时东财返回的就是收盘价，多刷几次没有副作用。
+    function isTradingTime() {
+        var d = beijingNow();
+        var day = d.getDay();
+        if (day === 0 || day === 6) return false;
+        var m = d.getHours() * 60 + d.getMinutes();
+        return (m >= 570 && m <= 690) || (m >= 780 && m <= 900);
+    }
+
     function applyMacro(quotes, staleKeys) {
         var staleMap = {};
         (staleKeys || []).forEach(function (k) { staleMap[k] = true; });
@@ -1727,24 +1793,86 @@ _LIVE_JS_SRC = r"""
         });
     }
 
-    function renderEtf(rows) {
+    // ETF 行以代码为键：快照打底，30 秒直连覆盖价格，两者互不覆盖对方已有的东西。
+    var etfOrder = [];
+    var etfByCode = {};
+    var snapshotHhmm = '';
+    var lastDirectMs = 0;        // 上次直连成功的时间戳，用来避免被快照降级
+    var lastDirectFailMs = 0;    // 上次直连失败的时间戳，用来把「已退回」提示留住
+    var failStreak = 0;          // 连续失败次数，用于指数退避
+    var cooldownUntil = 0;       // 退避截止时间：限流期间不要再打
+
+    function renderEtf() {
         var block = document.getElementById('liveEtfBlock');
         var grid = document.getElementById('liveEtfGrid');
         if (!block || !grid) return;
-        if (!rows || !rows.length) { block.hidden = true; return; }
-        grid.innerHTML = rows.map(function (r) {
-            var chg = (r.change_pct === null || r.change_pct === undefined) ? null : Number(r.change_pct);
+        if (!etfOrder.length) { block.hidden = true; return; }
+        grid.innerHTML = etfOrder.map(function (code) {
+            var r = etfByCode[code] || {};
+            var chg = (r.change_pct === null || r.change_pct === undefined || isNaN(r.change_pct))
+                ? null : Number(r.change_pct);
             var cls = chg === null ? 'flat' : (chg >= 0 ? 'up' : 'down');
             var chgTxt = chg === null ? '--' : (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
-            var price = (r.price === null || r.price === undefined) ? '--' : Number(r.price).toFixed(3);
+            var price = (r.price === null || r.price === undefined || isNaN(r.price))
+                ? '--' : Number(r.price).toFixed(3);
+            // 溢价率要有 IOPV 才算得出来，快照没给就不显示这一行，不拿均价冒充
+            var prem = (r.premium_pct === null || r.premium_pct === undefined || isNaN(r.premium_pct))
+                ? null : Number(r.premium_pct);
+            var premHtml = prem === null ? '' :
+                '<div class="live-etf-prem ' + (prem >= 0 ? 'up' : 'down') + '">溢价 '
+                + (prem >= 0 ? '+' : '') + prem.toFixed(2) + '%</div>';
             return '<div class="live-etf-item">' +
-                '<div class="live-etf-code">' + esc(r.code) + '</div>' +
-                '<div class="live-etf-name" title="' + esc(r.name) + '">' + esc(r.name) + '</div>' +
+                '<div class="live-etf-code">' + esc(r.code || code) + '</div>' +
+                '<div class="live-etf-name" title="' + esc(r.name || code) + '">' + esc(r.name || code) + '</div>' +
                 '<div class="live-etf-price ' + cls + '">' + price + '</div>' +
                 '<div class="live-etf-chg ' + cls + '">' + chgTxt + '</div>' +
+                premHtml +
                 '</div>';
         }).join('');
         block.hidden = false;
+    }
+
+    function setEtfBase(rows) {
+        // 90 秒内刚直连成功过：价格沿用直连的，别让 15 分钟前的快照把它打回去
+        var keepLive = lastDirectMs && (Date.now() - lastDirectMs < 90000);
+        var prev = etfByCode;
+        etfOrder = [];
+        etfByCode = {};
+        (rows || []).forEach(function (r) {
+            if (!r || !r.code) return;
+            var old = prev[r.code];
+            etfOrder.push(r.code);
+            etfByCode[r.code] = {
+                code: r.code,
+                name: r.name || r.code,
+                price: (keepLive && old) ? old.price : r.price,
+                change_pct: (keepLive && old) ? old.change_pct : r.change_pct,
+                premium_pct: (r.premium_pct === undefined ? null : r.premium_pct),
+            };
+        });
+        renderEtf();
+    }
+
+    function applyLiveEtf(diff) {
+        var n = 0;
+        (diff || []).forEach(function (it) {
+            var code = it && it.f12 ? String(it.f12) : '';
+            if (!code) return;
+            if (!etfByCode[code]) {
+                // 快照里没有这只（比如 JSON 拉不到），直连也能自己长出卡片
+                etfOrder.push(code);
+                etfByCode[code] = {
+                    code: code, name: it.f14 || code,
+                    price: null, change_pct: null, premium_pct: null,
+                };
+            }
+            var row = etfByCode[code];
+            if (it.f2 !== null && it.f2 !== undefined && it.f2 !== '-') row.price = Number(it.f2);
+            if (it.f3 !== null && it.f3 !== undefined && it.f3 !== '-') row.change_pct = Number(it.f3);
+            n++;
+        });
+        if (n) renderEtf();
+        return n;
     }
 
     function pull() {
@@ -1756,16 +1884,25 @@ _LIVE_JS_SRC = r"""
             .then(function (data) {
                 window.__LIVE_QUOTES__ = data;
                 applyMacro(data.quotes || {}, data.stale_keys || []);
-                renderEtf(data.etf || []);
+                setEtfBase(data.etf || []);
 
                 var stamp = parseBeijing(data.updated_at_beijing);
                 var hhmm = (data.updated_at_beijing || '').slice(11, 16) || '--:--';
+                snapshotHhmm = hhmm;
                 var ageMin = stamp ? (Date.now() - stamp) / 60000 : Infinity;
                 var isStale = !!data.stale || ageMin > FRESH_MINUTES;
                 if (isStale) {
                     setBadges('最后更新 ' + hhmm + (ageMin > FRESH_MINUTES ? '（非交易时段）' : '（部分源滞后）'), true);
                 } else {
                     setBadges('实时 · 更新于 ' + hhmm, false);
+                }
+                // 刚直连成功过就别把 ETF 角标降级回快照；刚失败过则保留「已退回」提示
+                if (etfOrder.length) {
+                    if (lastDirectFailMs && Date.now() - lastDirectFailMs < 90000) {
+                        setEtfBadge('快照 · ' + hhmm + '（直连失败，已退回）', true);
+                    } else if (!lastDirectMs || Date.now() - lastDirectMs > 90000) {
+                        setEtfBadge((isTradingTime() ? '快照 · 更新于 ' : '收盘价 · 快照 ') + hhmm, isStale);
+                    }
                 }
             })
             .catch(function () {
@@ -1776,10 +1913,85 @@ _LIVE_JS_SRC = r"""
             });
     }
 
+    var directTimer = null;
+
+    function stopDirect() {
+        if (directTimer) { clearInterval(directTimer); directTimer = null; }
+    }
+
+    function pullDirect() {
+        if (!isTradingTime()) return;
+        if (Date.now() < cooldownUntil) return;   // 退避窗口内不请求
+        var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        var kill = setTimeout(function () { if (ctrl) ctrl.abort(); }, DIRECT_TIMEOUT);
+        var opts = ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' };
+        fetch(DIRECT_URL, opts)
+            .then(function (resp) {
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return resp.json();
+            })
+            .then(function (payload) {
+                clearTimeout(kill);
+                var diff = (payload && payload.data && payload.data.diff) || [];
+                if (!diff.length) throw new Error('empty diff');
+                if (!applyLiveEtf(diff)) throw new Error('no match');
+                lastDirectMs = Date.now();
+                lastDirectFailMs = 0;
+                failStreak = 0;
+                cooldownUntil = 0;
+                setEtfBadge('直连东财 · 30 秒 · ' + beijingHHMM(), false);
+            })
+            .catch(function () {
+                clearTimeout(kill);
+                lastDirectFailMs = Date.now();
+                // 指数退避：30s → 60s → 120s → 240s，封顶 5 分钟。
+                // 东财 push2 是按 IP 限流的，被限后继续 30 秒一次只会延长封禁。
+                failStreak = Math.min(failStreak + 1, 4);
+                cooldownUntil = Date.now() + Math.min(DIRECT_MS * Math.pow(2, failStreak - 1), 300000);
+                // 直连失败不清页面：保留上一轮价格，角标退回快照
+                if (etfOrder.length) {
+                    setEtfBadge('快照 · ' + (snapshotHhmm || '--:--') + '（直连失败，已退回）', true);
+                }
+            });
+    }
+
+    function syncTimers() {
+        if (isTradingTime()) {
+            if (!directTimer) {
+                directTimer = setInterval(function () {
+                    if (document.hidden) return;              // 切后台不请求
+                    if (!isTradingTime()) {
+                        stopDirect();
+                        if (etfOrder.length) setEtfBadge('已收盘 ' + beijingHHMM() + ' · 显示收盘价', true);
+                        return;
+                    }
+                    pullDirect();
+                }, DIRECT_MS);
+            }
+            if (!document.hidden) pullDirect();
+        } else {
+            stopDirect();
+            if (etfOrder.length) {
+                setEtfBadge(lastDirectMs ? '已收盘 ' + beijingHHMM() + ' · 显示收盘价'
+                                         : '收盘价 · 快照 ' + (snapshotHhmm || '--:--'), true);
+            }
+        }
+    }
+
+    function boot() {
+        pull();            // 先拿 15 分钟快照打底
+        syncTimers();      // 交易时段立刻再补一次直连
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) return;   // 后台不管，回到前台再同步
+            pull();
+            syncTimers();
+        });
+    }
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', pull);
+        document.addEventListener('DOMContentLoaded', boot);
     } else {
-        pull();
+        boot();
     }
     setInterval(pull, REFRESH_MS);
 })();
@@ -8914,6 +9126,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         + _LIVE_JS_SRC.replace(
             "__LIVE_RULES__",
             json.dumps(LIVE_MACRO_RULES, ensure_ascii=False, separators=(",", ":")),
+        ).replace(
+            "__ETF_SECIDS__",
+            json.dumps(ETF_SECIDS, separators=(",", ":")),
         )
         + "</script>"
     )
@@ -10671,10 +10886,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
         .live-etf-price {{ font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }}
         .live-etf-chg {{ font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }}
+        .live-etf-prem {{ font-size: 11px; font-variant-numeric: tabular-nums; }}
         /* A 股习惯：涨红跌绿 */
         .live-etf-price.up, .live-etf-chg.up {{ color: #d93025; }}
         .live-etf-price.down, .live-etf-chg.down {{ color: #188038; }}
         .live-etf-price.flat, .live-etf-chg.flat {{ color: var(--footer-text); }}
+        .live-etf-prem.up {{ color: #d93025; }}
+        .live-etf-prem.down {{ color: #188038; }}
         [data-theme="dark"] .live-etf-price.up, [data-theme="dark"] .live-etf-chg.up {{ color: #f28b82; }}
         [data-theme="dark"] .live-etf-price.down, [data-theme="dark"] .live-etf-chg.down {{ color: #6fcf97; }}
         .live-etf-note {{ margin-top: 8px; font-size: 11px; color: var(--footer-text); }}
@@ -13996,14 +14214,14 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     {core_history_panel_html}
                 </div>
 
-                <!-- ===== 场内宽基 ETF 盘中价（数据来自 data/live_quotes.json，无文件时整块隐藏） ===== -->
+                <!-- ===== 场内宽基 ETF 盘中价（快照打底 + 交易时段 30 秒直连东财） ===== -->
                 <div class="live-etf-block" id="liveEtfBlock" hidden>
                     <div class="live-etf-head">
                         <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">📈 场内宽基 ETF 盘中价</h3>
-                        <span class="live-badge" data-live-badge hidden></span>
+                        <span class="live-badge" data-etf-badge hidden></span>
                     </div>
                     <div class="live-etf-grid" id="liveEtfGrid"></div>
-                    <div class="live-etf-note">现价为东方财富延时行情，涨红跌绿；溢价率需要交易所 IOPV，本期未引入。</div>
+                    <div class="live-etf-note">交易时段每 30 秒直连东方财富刷新现价与涨跌幅，收盘/后台自动暂停；涨红跌绿。溢价率需交易所 IOPV，东财公开字段不提供，暂不显示。</div>
                 </div>
 
                 <!-- ===== 大宗商品风向标 ===== -->
