@@ -45,6 +45,13 @@ TIMEOUT = 5           # 单源超时（秒）
 RETRIES = 2           # 失败重试次数（合计最多 3 次尝试）
 MIN_INTERVAL = 0.2    # 两次请求之间的最小间隔，避免瞬时打爆上游
 
+# QDII 官方净值一天只结算一次（美股收盘后几小时才出），而盘中工作流每 15 分钟跑一轮。
+# 每轮都去拉 51 只就是 102 个请求，纯浪费还容易招限流，所以给净值单独设一个 TTL：
+# 上一份快照里的净值如果还在有效期内，直接沿用，只刷新基准指数。
+# 缓存载体就是 live_quotes.json 自己（盘中工作流会把它 clone 下来再写回去），
+# 不需要额外文件，CI 上也能跨轮次生效。0 表示关闭缓存、每轮都真拉。
+NAV_TTL_SECONDS = 3600
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -735,9 +742,47 @@ def fetch_us_fund_nav(session: requests.Session, code: str) -> Optional[dict]:
     return {"nav": nav, "nav_date": nav_date, "day_pct": day_pct, "prev_nav": prev_nav}
 
 
+def _cached_nav_rows(prev_us: dict, ttl: int) -> tuple[list[dict], int]:
+    """看上一份快照里的净值还能不能直接用。返回 (行列表, 已缓存秒数)；不可用时给 ([], 0)。
+
+    必须整表命中才算可用：只要缺一只就走真拉，避免拿残缺缓存糊弄页面。
+    名称和基准分组以本地常量为准覆盖回去，改了清单也不会沿用旧映射。
+    """
+    if ttl <= 0 or not isinstance(prev_us, dict):
+        return [], 0
+    rows = prev_us.get("funds") or []
+    ts = prev_us.get("nav_checked_ts")
+    if not rows or not isinstance(ts, (int, float)) or isinstance(ts, bool):
+        return [], 0
+    age = time.time() - float(ts)
+    if age < 0 or age >= ttl:
+        return [], 0
+    by_code = {r.get("code"): r for r in rows if isinstance(r, dict)}
+    if not all(code in by_code for code, _, _ in US_ACTIVE_FUNDS):
+        return [], 0
+    # 上一份本身全是空值（整块抓失败过），缓存它没有意义
+    if not any(by_code[code].get("nav_date") for code, _, _ in US_ACTIVE_FUNDS):
+        return [], 0
+    out: list[dict] = []
+    for code, name, bkey in US_ACTIVE_FUNDS:
+        row = dict(by_code[code])
+        row["code"] = code
+        row["name"] = name
+        row["bench"] = bkey
+        out.append(row)
+    return out, int(age)
+
+
 def fetch_us_active(session: requests.Session,
-                    quiet: bool = False) -> tuple[dict, list[dict], list[str]]:
-    """51 只美股主动：官方净值 + 基准指数实时涨幅。返回 (基准字典, 基金行, 失败项)。"""
+                    quiet: bool = False,
+                    prev_us: Optional[dict] = None,
+                    ttl: int = NAV_TTL_SECONDS) -> tuple[dict, list[dict], list[str], dict]:
+    """51 只美股主动：官方净值 + 基准指数实时涨幅。
+
+    返回 (基准字典, 基金行, 失败项, 元信息)。元信息里 cached=True 表示净值走了 TTL 缓存，
+    调用方据此决定要不要沿用旧的 nav_checked_ts——缓存如果写成「现在」，这个 TTL 就永远
+    不会过期了。
+    """
     failed: list[str] = []
 
     bench: dict[str, dict] = {}
@@ -747,6 +792,13 @@ def fetch_us_active(session: requests.Session,
         log(f"  [warn] 美股基准失败: {type(e).__name__}: {e}", quiet)
     if not bench:
         failed.append("us_bench")
+
+    # 净值走缓存：基准是盘中实时值，不在缓存范围内
+    cached, age = _cached_nav_rows(prev_us or {}, ttl)
+    if cached:
+        log(f"  · 美股主动净值沿用 {age // 60} 分钟前的缓存"
+            f"（TTL {ttl // 60} 分钟，跳过 {len(cached)} 次请求）", quiet)
+        return bench, cached, failed, {"cached": True, "age": age}
 
     def _one(item: tuple[str, str, Optional[str]]):
         code, name, bkey = item
@@ -775,7 +827,7 @@ def fetch_us_active(session: requests.Session,
         failed.append("us_nav")
     elif got < len(funds):
         failed.append("us_nav_partial")
-    return bench, funds, failed
+    return bench, funds, failed, {"cached": False, "age": 0}
 
 
 # ==============================================================================
@@ -790,7 +842,9 @@ def load_previous(path: str) -> dict:
         return {}
 
 
-def fetch_all(quiet: bool = False) -> tuple[dict, dict, list[str], str]:
+def fetch_all(quiet: bool = False,
+              prev_us: Optional[dict] = None,
+              nav_ttl: int = NAV_TTL_SECONDS) -> tuple[dict, dict, list[str], str]:
     """返回 (quotes, etf 元信息, 失败键列表, ETF 数据日期)。"""
     session = requests.Session()
     quotes: dict[str, Optional[float]] = {}
@@ -822,15 +876,18 @@ def fetch_all(quiet: bool = False) -> tuple[dict, dict, list[str], str]:
         failed.extend(etf_failed)
 
     try:
-        us_bench, us_funds, us_failed = fetch_us_active(session, quiet=quiet)
+        us_bench, us_funds, us_failed, us_meta = fetch_us_active(
+            session, quiet=quiet, prev_us=prev_us, ttl=nav_ttl)
     except Exception as e:  # noqa: BLE001
         log(f"  [warn] 美股主动失败: {type(e).__name__}: {e}", quiet)
-        us_bench, us_funds, us_failed = {}, [], ["us"]
+        us_bench, us_funds, us_failed, us_meta = {}, [], ["us"], {"cached": False, "age": 0}
     failed.extend(us_failed)
 
     # 保持 MACRO_KEYS 的固定顺序，方便人眼 diff
     quotes = {k: quotes.get(k) for k in MACRO_KEYS}
-    return quotes, {"rows": etf_rows, "us": {"bench": us_bench, "funds": us_funds}}, failed, trade_date
+    return quotes, {"rows": etf_rows,
+                    "us": {"bench": us_bench, "funds": us_funds},
+                    "us_meta": us_meta}, failed, trade_date
 
 
 def main() -> int:
@@ -839,6 +896,9 @@ def main() -> int:
     parser.add_argument("--no-proxy", action="store_true",
                         help="忽略系统代理环境变量（CI 默认行为）")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--nav-ttl", type=int, default=NAV_TTL_SECONDS,
+                        help=f"QDII 净值的缓存有效期（秒，默认 {NAV_TTL_SECONDS}；"
+                             f"0 = 每轮都真拉）")
     args = parser.parse_args()
 
     if args.no_proxy:
@@ -852,14 +912,18 @@ def main() -> int:
     prev_etf = {r.get("code"): r for r in (previous.get("etf") or []) if isinstance(r, dict)}
     prev_us = previous.get("us_active") or {}
 
-    quotes, etf_meta, failed, trade_date = fetch_all(quiet=args.quiet)
+    quotes, etf_meta, failed, trade_date = fetch_all(
+        quiet=args.quiet, prev_us=prev_us, nav_ttl=args.nav_ttl)
 
     # 本轮「真正抓到」的数量要在继承旧值之前记下来，
     # 否则继承了上一轮的 ETF 之后，「颗粒无收」就永远判不出来了。
     fresh_macro = sum(1 for k in MACRO_KEYS if quotes.get(k) is not None)
     fresh_etf = bool(etf_meta["rows"])
     us = etf_meta.get("us") or {"bench": {}, "funds": []}
-    fresh_us = any(r.get("nav_date") for r in us["funds"])
+    us_meta = etf_meta.get("us_meta") or {}
+    # 走缓存的净值不算「本轮真的打通了上游」，否则整轮颗粒无收的判定会被缓存骗过去
+    fresh_us = any(r.get("nav_date") for r in us["funds"]) and not us_meta.get("cached")
+    nav_source = "cache" if us_meta.get("cached") else ("fresh" if fresh_us else "none")
 
     # 单项失败 → 用上一轮的值补齐，并在 stale_keys 里留痕
     stale_keys: list[str] = []
@@ -877,7 +941,7 @@ def main() -> int:
         if etf_rows:
             stale_keys.append("etf")
 
-    if not fresh_us and prev_us.get("funds"):
+    if nav_source == "none" and prev_us.get("funds"):
         # 净值整块失败：沿用上一份。QDII 净值一天只动一次，
         # 沿用旧值比留一表空白安全得多。
         us = {
@@ -885,6 +949,7 @@ def main() -> int:
             "funds": prev_us["funds"],
         }
         stale_keys.append("us_active")
+        nav_source = "prev"
     elif not us.get("bench") and prev_us.get("bench"):
         us["bench"] = prev_us["bench"]
 
@@ -897,6 +962,17 @@ def main() -> int:
         _write(args.out, previous)
         return 0
 
+    # 净值的时间戳只有「真拉到了」才写成现在；缓存/沿用一律保留原始时间，
+    # 否则每轮都刷新一次，TTL 永远不会到期，净值就再也不会更新了。
+    if nav_source == "fresh":
+        nav_ts: Optional[int] = int(time.time())
+        nav_at: Optional[str] = now_beijing().strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        old_ts = prev_us.get("nav_checked_ts")
+        nav_ts = int(old_ts) if isinstance(old_ts, (int, float)) and not isinstance(old_ts, bool) else None
+        old_at = prev_us.get("nav_checked_at")
+        nav_at = old_at if isinstance(old_at, str) and old_at else None
+
     payload = {
         "updated_at_beijing": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
         "trade_date": trade_date,
@@ -907,7 +983,9 @@ def main() -> int:
         "us_active": {
             "bench": us.get("bench") or {},
             "funds": us.get("funds") or [],
-            "nav_checked_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
+            "nav_checked_at": nav_at,
+            "nav_checked_ts": nav_ts,
+            "nav_source": nav_source,
         },
     }
     _write(args.out, payload)
@@ -916,10 +994,12 @@ def main() -> int:
     usable_macro = sum(1 for k in MACRO_KEYS if quotes.get(k) is not None)
     premium_n = sum(1 for r in etf_rows if r.get("premium_pct") is not None)
     us_n = sum(1 for r in (us.get("funds") or []) if r.get("nav_date"))
+    nav_tag = {"cache": f"缓存{us_meta.get('age', 0) // 60}分",
+               "prev": "沿用旧值", "fresh": "新拉"}.get(nav_source, "—")
     log(
         f"✅ 宏观 {fresh_macro}/{len(MACRO_KEYS)} 项新数据（可用 {usable_macro}）"
         f" · ETF {len(etf_rows)}/{len(ETF_CODES)} 只（含溢价 {premium_n}）"
-        f" · 美股主动净值 {us_n}/{len(US_ACTIVE_FUNDS)} 只"
+        f" · 美股主动净值 {us_n}/{len(US_ACTIVE_FUNDS)} 只（{nav_tag}）"
         f" · 失败 {('、'.join(failed) or '无')} · 耗时 {elapsed:.1f}s"
         f" → {args.out}",
         args.quiet,
