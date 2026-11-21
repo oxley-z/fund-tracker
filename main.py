@@ -11184,6 +11184,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
         .cat-btn:hover {{ background: var(--btn-active-bg); color: var(--btn-active-text); }}
         .cat-btn.active {{ background: var(--btn-active-bg); color: var(--btn-active-text); border-color: var(--btn-active-bg); }}
+        /* 当前筛选下该类数量为 0：按钮保留（方便切回），但视觉淡出 */
+        .cat-btn.zero-count {{ opacity: .45; }}
         .cat-btn.fav-filter {{
             background: rgba(230,126,34,0.15);
             color: #e67e22;
@@ -13392,6 +13394,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         #fundView.simple-mode .th-full {{ display: none; }}
         #fundView.simple-mode .th-simple {{ display: inline; }}
 
+        /* 简洁模式：隐藏「动态定投参数配置」卡片，只在详细视图出现 */
+        #fundView.simple-mode #gDcaCard {{ display: none !important; }}
+        /* 简洁模式下移动端「📊 定投」开关一并隐藏，避免点开一个不存在的面板 */
+        #fundView.simple-mode .mobile-panel-switches .dca-toggle-btn {{ display: none !important; }}
+
         /* 简洁模式：与首页同一套留白规则（左右 32px，上限 2000） */
         #fundView.simple-mode {{
             padding-left: 32px;
@@ -15300,6 +15307,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
             syncFavDisplay();
 
+            // 首屏跑一次：把份额按钮上的数字刷成当前筛选口径下的数量
+            applyFilters();
+
             document.getElementById('fundTable').addEventListener('click', function(e) {{
                 const starBtn = e.target.closest('.star-btn');
                 if (starBtn) {{
@@ -15313,8 +15323,22 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 }}
             }});
 
+            // 份额按钮上的数字 = 当前筛选（市场大类 / 申购状态 / 搜索）下的数量，
+            // 不是全站总数；切大类时数字会跟着变，避免拿全局数去猜当前分类。
+            function refreshShareCounts(baseCount, counts) {{
+                shareBtns.forEach(btn => {{
+                    const key = btn.dataset.share;
+                    const n = (key === 'all') ? baseCount : (counts[key] || 0);
+                    const label = (key === 'all') ? '全部' : (key === 'none' ? '无份额' : key + '类');
+                    btn.textContent = label + ' ' + n;
+                    if (key !== 'all') btn.classList.toggle('zero-count', n === 0);
+                }});
+            }}
+
             function applyFilters() {{
                 let hasVisible = false;
+                let baseCount = 0;
+                const shareCounts = {{}};
                 const keyword = searchKeyword.trim().toLowerCase();
                 const favList = FavManager.getFavs();
 
@@ -15356,7 +15380,14 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         matchShare = (row.getAttribute('data-share') || '') === currentShare;
                     }}
 
-                    const visible = matchCategory && matchSearch && matchBuy && matchShare;
+                    const baseMatch = matchCategory && matchSearch && matchBuy;
+                    if (baseMatch) {{
+                        baseCount++;
+                        const sc = row.getAttribute('data-share') || '';
+                        if (sc) shareCounts[sc] = (shareCounts[sc] || 0) + 1;
+                    }}
+
+                    const visible = baseMatch && matchShare;
 
                     if (visible) {{
                         row.style.display = '';
@@ -15365,6 +15396,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         row.style.display = 'none';
                     }}
                 }});
+
+                refreshShareCounts(baseCount, shareCounts);
 
                 if (emptyRow) {{
                     emptyRow.style.display = hasVisible ? 'none' : '';
