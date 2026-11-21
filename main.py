@@ -254,6 +254,17 @@ HOLDER_CACHE_DIR = os.path.join(CACHE_DIR, "holder")
 COUNTRY_CACHE_DIR = os.path.join(CACHE_DIR, "country")
 FEE_CACHE_DIR = os.path.join(CACHE_DIR, "fees")
 
+# 费率 / 申购状态缓存的有效期（小时，可用环境变量覆盖）。
+# 费率、规模这类字段几个月才变一次，但「申购状态 + 单日限额」是按天甚至按小时变的：
+# 缓存如果没有时效，某只基金把限额从 10 元下调到 5 元后，页面上会一直显示旧值
+# （万家纳斯达克 019441 就是这么错了整整一个月）。过期后只补抓申购状态/限额，
+# 不重抓费率、持仓这些耗时又稳定的内容。
+META_CACHE_TTL_SECONDS = 12 * 3600
+try:
+    META_CACHE_TTL_SECONDS = max(0, int(float(os.environ.get("FUND_META_TTL_HOURS", "12")) * 3600))
+except Exception:
+    pass
+
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(HOLDINGS_CACHE_DIR, exist_ok=True)
 os.makedirs(FUND_NAV_FULL_DIR, exist_ok=True)
@@ -4903,6 +4914,51 @@ def _fetch_scale_from_gmbd(opener, code, headers):
     return None, None
 
 
+def _refresh_trade_status(opener, code, cached):
+    """只刷新「申购状态 + 单日累计限额」，1 次移动端接口请求。
+
+    缓存里的费率/规模几个月都不变，但申赎状态和限额随时会调（QDII 尤其频繁），
+    所以过期后不必重抓整份元数据，单独补这两项即可。
+    返回 True 表示刷新成功。
+    """
+    q = MAIN_CODE_MAP.get(code, code)
+    for c in ([code] if q == code else [code, q]):
+        try:
+            url = (
+                "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation"
+                f"?FCODE={c}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
+            )
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"
+            })
+            with opener.open(req, timeout=6) as resp:
+                data = (json.loads(resp.read().decode('utf-8')) or {}).get("Datas") or {}
+        except Exception:
+            continue
+
+        sgzt = str(data.get("SGZT") or "").strip()
+        # 接口偶发返回字符串 "None" / "null"，直接丢掉，保留旧值
+        if not sgzt or sgzt.lower() in ("none", "null", "nan", "nil", "-"):
+            return False
+        cached["buy_status"] = sgzt
+
+        mark = str(data.get("SGZTMARK") or "")
+        m = re.search(r'单日累计购买上限([\d.]+)(万?)元', mark)
+        if m:
+            limit_val = float(m.group(1)) * (10000 if m.group(2) == "万" else 1)
+            cached["buy_limit"] = f"{m.group(1)}{m.group(2)}元"
+            cached["buy_limit_val"] = limit_val
+        elif "暂停" in sgzt:
+            # 暂停申购：限额无意义，保留原值即可，表格里显示的是 "--"
+            pass
+        elif "限" not in sgzt:
+            # 已恢复开放申购（不再限大额）→ 把旧的限额清掉，否则会一直显示 5 元
+            cached["buy_limit"] = "无限额"
+            cached["buy_limit_val"] = -1
+        return True
+    return False
+
+
 def fetch_fund_detail_meta(opener, code):
     cache_file = os.path.join(FEE_CACHE_DIR, f"{code}_meta.json")
     if os.path.exists(cache_file):
@@ -4928,6 +4984,23 @@ def fetch_fund_detail_meta(opener, code):
                                 pass
                     except Exception:
                         pass
+                # 申购状态 / 限额会随行情调整，缓存过期后单独补抓这两项。
+                # 老缓存没有 fetched_at 字段，一律视为过期（一次性刷新，之后按 TTL 走）。
+                _ts = cached.get("fetched_at")
+                _age = None
+                if _ts:
+                    try:
+                        _age = time.time() - time.mktime(time.strptime(str(_ts), "%Y-%m-%d %H:%M:%S"))
+                    except Exception:
+                        _age = None
+                if _age is None or _age > META_CACHE_TTL_SECONDS:
+                    if _refresh_trade_status(opener, code, cached):
+                        cached["fetched_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                        try:
+                            with open(cache_file, 'w', encoding='utf-8') as _f:
+                                json.dump(cached, _f, ensure_ascii=False, indent=2)
+                        except Exception:
+                            pass
                 # 动态补齐持仓、持有人与国家分布（这些内部有独立缓存）
                 is_qdii_fund = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
                 cached["holdings"] = fetch_holdings(opener, code)
@@ -5345,6 +5418,7 @@ def fetch_fund_detail_meta(opener, code):
 
     if meta.get("fee_manage") not in (None, "--") and meta.get("fee_redemption") not in (None, "未知"):
         try:
+            meta["fetched_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             save_meta = {k: v for k, v in meta.items() if k not in ("holdings", "holder_struct", "asset_alloc", "countries_info", "profile")}
             with open(cache_file, "w", encoding="utf-8") as f:
                 json.dump(save_meta, f, ensure_ascii=False, indent=2)
@@ -12500,25 +12574,26 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         .cmp-bar i {{ display: block; height: 100%; }}
         .cmp-bar i + i {{ box-shadow: inset 1px 0 0 rgba(255,255,255,.55); }}
 
-        /* ★ 滚动容器必须铺满整个视图宽度。
-           以前这里同时写了 max-width:1440px + margin:0 auto，宽屏下滚动条就停在
+        /* ★ 滚动容器铺满整个视图宽度。
+           注意：容器曾经写过 max-width:1440px + margin:0 auto，宽屏下滚动条就停在
            1440px 处，两侧留出大片空白；鼠标移到空白区滚轮不生效，必须先把指针
-           挪进容器内才能滚动。现在改为「容器全宽负责滚动，内容限宽负责排版」。 */
+           挪进容器内才能滚动。所以限宽交给子元素去做，容器本身始终整宽负责滚动。 */
         .qdii-container {{
             flex: 1;
             overflow-y: auto;
             width: 100%;
-            padding: 16px 1.5%;
+            /* 与基金量化页 (#fundView) 完全同一套留白：桌面左右各 32px */
+            padding: 0 32px;
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
             gap: 12px;
             scrollbar-gutter: stable;
         }}
-        /* 内容仍限宽 1440 并居中，保持宽屏下的阅读宽度 */
+        /* 内容限宽 = #fundView 的 2000px 上限减掉左右留白，超宽屏下两页右边界仍然对齐 */
         .qdii-container > * {{
             width: 100%;
-            max-width: 1440px;
+            max-width: 1936px;
             margin-left: auto;
             margin-right: auto;
             box-sizing: border-box;
@@ -12915,11 +12990,12 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             .macro-metrics-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
             .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
 
-            .qdii-container {{ padding: 12px 4%; gap: 16px; }}
+            /* 移动端留白沿用桌面端 32px（与 #fundView 一致，那边窄屏也是 32px） */
+            .qdii-container {{ gap: 16px; }}
             .qdii-cards-grid {{ grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }}
             .qdii-nav {{ font-size: 18px; }}
 
-            .qdii-container {{ padding: 12px 3%; gap: 10px; }}
+            .qdii-container {{ gap: 10px; }}
             .qdii-filter-bar {{ padding: 8px 10px; gap: 8px; }}
             .qdii-search-wrap {{ margin-left: 0; width: 100%; }}
             .qdii-search-wrap input {{ width: 100%; }}
