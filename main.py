@@ -6872,19 +6872,19 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     <div class="qdii-filter-bar">
         <div class="qdii-filter-group">
             <span class="qdii-filter-label">跟踪标的</span>
-            <button class="qdii-chip active" data-filter="track" data-value="all">全部 {len(qdii_funds)}</button>
-            <button class="qdii-chip" data-filter="track" data-value="ndx_passive">纳斯达克100 {qdii_group_counts["ndx_passive"]}</button>
-            <button class="qdii-chip" data-filter="track" data-value="spx_passive">标普500 {qdii_group_counts["spx_passive"]}</button>
-            <button class="qdii-chip" data-filter="track" data-value="us_active">美股主动 {qdii_group_counts["us_active"]}</button>
-            <button class="qdii-chip" data-filter="track" data-value="emerging">新兴市场 {qdii_group_counts["emerging"]}</button>
-            <button class="qdii-chip" data-filter="track" data-value="other">其他 {qdii_group_counts["other"]}</button>
+            <button class="qdii-chip active" data-filter="track" data-value="all" data-label="全部">全部 {len(qdii_funds)}</button>
+            <button class="qdii-chip" data-filter="track" data-value="ndx_passive" data-label="纳斯达克100">纳斯达克100 {qdii_group_counts["ndx_passive"]}</button>
+            <button class="qdii-chip" data-filter="track" data-value="spx_passive" data-label="标普500">标普500 {qdii_group_counts["spx_passive"]}</button>
+            <button class="qdii-chip" data-filter="track" data-value="us_active" data-label="美股主动">美股主动 {qdii_group_counts["us_active"]}</button>
+            <button class="qdii-chip" data-filter="track" data-value="emerging" data-label="新兴市场">新兴市场 {qdii_group_counts["emerging"]}</button>
+            <button class="qdii-chip" data-filter="track" data-value="other" data-label="其他">其他 {qdii_group_counts["other"]}</button>
         </div>
         <div class="qdii-filter-group">
             <span class="qdii-filter-label">状态</span>
-            <button class="qdii-chip active" data-filter="buy" data-value="all">全部 {len(qdii_funds)}</button>
-            <button class="qdii-chip" data-filter="buy" data-value="open">开放申购 {buy_status_counts["open"]}</button>
-            <button class="qdii-chip" data-filter="buy" data-value="limited">限大额申购 {buy_status_counts["limited"]}</button>
-            <button class="qdii-chip" data-filter="buy" data-value="paused">暂停申购 {buy_status_counts["paused"]}</button>
+            <button class="qdii-chip active" data-filter="buy" data-value="all" data-label="全部">全部 {len(qdii_funds)}</button>
+            <button class="qdii-chip" data-filter="buy" data-value="open" data-label="开放申购">开放申购 {buy_status_counts["open"]}</button>
+            <button class="qdii-chip" data-filter="buy" data-value="limited" data-label="限大额申购">限大额申购 {buy_status_counts["limited"]}</button>
+            <button class="qdii-chip" data-filter="buy" data-value="paused" data-label="暂停申购">暂停申购 {buy_status_counts["paused"]}</button>
         </div>
         <div class="qdii-search-wrap">
             <input type="text" id="qdiiSearchInput" placeholder="搜索代码 / 名称...">
@@ -6972,6 +6972,30 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         yg = r.get('year_gain')
         year_sort = yg if yg is not None else -9999
 
+        # 今年内 / 近三年 / 近五年 / 近十年（与主看板同源，落在 analyze_fund_metrics 里）
+        _ytd = r.get('ytd_gain')
+        _y3 = r.get('three_year_gain')
+        _y5 = r.get('five_year_gain')
+        _y10 = r.get('ten_year_gain')
+        ytd_sort = _ytd if _ytd is not None else -9999
+        y3_sort = _y3 if _y3 is not None else -9999
+        y5_sort = _y5 if _y5 is not None else -9999
+        y10_sort = _y10 if _y10 is not None else -9999
+
+        # 运作费：管理费 + 托管费 + 销售服务费（合计值直接取 fee_total）
+        _fee_m = _clean_none_str(r.get('fee_manage')) or '--'
+        _fee_c = _clean_none_str(r.get('fee_custody')) or '--'
+        _fee_s = _clean_none_str(r.get('fee_sales')) or '--'
+        _fee_total = _clean_none_str(r.get('fee_total')) or '--'
+        op_sort = r.get('fee_val', -1)
+        op_display = (
+            f'<div class="qdii-opfee">'
+            f'<span class="qdii-opfee-total">{_fee_total}</span>'
+            f'<span class="qdii-opfee-sub" title="管理费 {_fee_m} · 托管费 {_fee_c} · 销售服务费 {_fee_s}">'
+            f'管{_fee_m.rstrip("%")} 托{_fee_c.rstrip("%")} 销{_fee_s.rstrip("%")}</span>'
+            f'</div>'
+        )
+
         # 年化跟踪误差（来自 tsdata 抓取）
         te_str = item.get('te_str', '')
         peer_str = item.get('peer_str', '')
@@ -7022,10 +7046,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             <td data-val="{item['group_label']}"><span class="qdii-track-tag" data-g="{item['group']}">{item['group_label']}</span></td>
             <td data-val="{item['buy_cat']}">{_status_badge(r)}</td>
             <td class="qdii-limit-cell" data-val="{limit_sort}">{limit_display}</td>
+            <td class="qdii-pct-cell" data-val="{ytd_sort}">{_fmt_pct(_ytd)}</td>
             <td class="qdii-pct-cell" data-val="{year_sort}">{_fmt_pct(yg)}</td>
+            <td class="qdii-pct-cell" data-val="{y3_sort}">{_fmt_pct(_y3)}</td>
+            <td class="qdii-pct-cell" data-val="{y5_sort}">{_fmt_pct(_y5)}</td>
+            <td class="qdii-pct-cell" data-val="{y10_sort}">{_fmt_pct(_y10)}</td>
             <td class="qdii-te-cell" data-val="{te_sort}">{te_display}</td>
             <td class="qdii-sharp-cell" data-val="{sharp_sort}">{sharp_display}</td>
             <td class="qdii-peer-cell" data-val="{peer_sort}">{peer_display}</td>
+            <td class="qdii-opfee-cell" data-val="{op_sort}">{op_display}</td>
             <td class="qdii-fee-cell" data-val="{fee_sort}">{fee_display}</td>
             <td class="qdii-scale-cell" data-val="{scale_sort}">{scale_str}</td>
         </tr>
@@ -7287,6 +7316,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             "name": r.get("name", ""),
             "group": item["group"],
             "group_label": item["group_label"],
+            "share": _share_class(r.get("name", "")),
             "inception": (profile.get('inception_date') or '').strip(),
             "annual": annual,
             "scale": r.get("scale") or "--",
@@ -7306,6 +7336,23 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <button type="button" class="qdii-chip" data-arange="10">近 10 年</button>
                 <button type="button" class="qdii-chip" data-arange="5">近 5 年</button>
                 <button type="button" class="qdii-chip" data-arange="3">近 3 年</button>
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">类型</span>
+                <button type="button" class="qdii-chip active" data-atype="all" data-label="全部">全部</button>
+                <button type="button" class="qdii-chip" data-atype="ndx_passive" data-label="纳指100">纳指100</button>
+                <button type="button" class="qdii-chip" data-atype="spx_passive" data-label="标普500">标普500</button>
+                <button type="button" class="qdii-chip" data-atype="us_active" data-label="美股主动">美股主动</button>
+                <button type="button" class="qdii-chip" data-atype="emerging" data-label="新兴市场">新兴市场</button>
+                <button type="button" class="qdii-chip" data-atype="other" data-label="其他">其他</button>
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">份额</span>
+                <button type="button" class="qdii-chip active" data-ashare="all" data-label="全部">全部</button>
+                <button type="button" class="qdii-chip" data-ashare="A" data-label="A类">A类</button>
+                <button type="button" class="qdii-chip" data-ashare="C" data-label="C类">C类</button>
+                <button type="button" class="qdii-chip" data-ashare="E" data-label="E类">E类</button>
+                <button type="button" class="qdii-chip" data-ashare="none" data-label="无份额">无份额</button>
             </div>
             <div class="qdii-filter-group">
                 <span class="qdii-filter-label">自定义区间</span>
@@ -7382,6 +7429,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 var mode = 'inception';   // inception | 10 | 5 | 3 | custom
                 var beatOnly = false;
                 var sortKey = 'ann', sortDir = 'desc';
+                // 类型 / 份额：初始沿用监控页或对比页选中的类，避免切页后还要再点一次
+                var typeFilter = window.QDII_TRACK || 'all';
+                var shareFilter = 'all';
 
                 // 区间年化：区间内各年收益累乘，再按「实际有数据的年数」开方
                 function annualize(map, from, to) {
@@ -7426,6 +7476,30 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     return v >= 0 ? 'metric-red' : 'metric-green';
                 };
 
+                // 类型 / 份额两组标签的数量，随另一维度的选择实时变化
+                function refreshAnnualChips(rows) {
+                    var typeCounts = {}, shareCounts = {}, typeTotal = 0, shareTotal = 0;
+                    rows.forEach(function(r) {
+                        var s = r.share || 'none';
+                        if (shareFilter === 'all' || s === shareFilter) {
+                            typeTotal++;
+                            typeCounts[r.group] = (typeCounts[r.group] || 0) + 1;
+                        }
+                        if (typeFilter === 'all' || r.group === typeFilter) {
+                            shareTotal++;
+                            shareCounts[s] = (shareCounts[s] || 0) + 1;
+                        }
+                    });
+                    document.querySelectorAll('[data-atype]').forEach(function(b) {
+                        var v = b.dataset.atype;
+                        b.textContent = (b.dataset.label || '') + ' ' + (v === 'all' ? typeTotal : (typeCounts[v] || 0));
+                    });
+                    document.querySelectorAll('[data-ashare]').forEach(function(b) {
+                        var v = b.dataset.ashare;
+                        b.textContent = (b.dataset.label || '') + ' ' + (v === 'all' ? shareTotal : (shareCounts[v] || 0));
+                    });
+                }
+
                 function render() {
                     var rows = [];
                     funds.forEach(function(f) {
@@ -7439,6 +7513,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             name: f.name,
                             group: f.group,
                             group_label: f.group_label,
+                            share: f.share || 'none',
                             inception: f.inception || '--',
                             ann: mine.ann,
                             total: mine.total,
@@ -7452,7 +7527,13 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         });
                     });
 
-                    var list = rows.slice();
+                    refreshAnnualChips(rows);
+
+                    var list = rows.filter(function(r) {
+                        if (typeFilter !== 'all' && r.group !== typeFilter) return false;
+                        if (shareFilter !== 'all' && (r.share || 'none') !== shareFilter) return false;
+                        return true;
+                    });
                     if (beatOnly) {
                         list = list.filter(function(r) {
                             return r.group === 'us_active' && r.excess !== null && r.excess > 0;
@@ -7533,6 +7614,30 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     });
                 }
 
+                // 类型标签（纳指 / 标普 / 主动…）：与「现有监控」「基金对比」共享同一个选择
+                function setTypeFilter(v) {
+                    typeFilter = v || 'all';
+                    document.querySelectorAll('[data-atype]').forEach(function(b) {
+                        b.classList.toggle('active', b.dataset.atype === typeFilter);
+                    });
+                    render();
+                }
+                window.qdiiAnnualSetType = setTypeFilter;
+                document.querySelectorAll('[data-atype]').forEach(function(b) {
+                    b.addEventListener('click', function() { setTypeFilter(b.dataset.atype); });
+                });
+
+                // 份额标签（A / C / E / 无份额）
+                document.querySelectorAll('[data-ashare]').forEach(function(b) {
+                    b.addEventListener('click', function() {
+                        shareFilter = b.dataset.ashare;
+                        document.querySelectorAll('[data-ashare]').forEach(function(x) {
+                            x.classList.toggle('active', x === b);
+                        });
+                        render();
+                    });
+                });
+
                 document.querySelectorAll('#qdiiAnnualTable th.qdii-th-sort').forEach(function(th) {
                     th.addEventListener('click', function() {
                         var key = th.dataset.akey;
@@ -7542,7 +7647,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     });
                 });
 
-                render();
+                // 初始渲染：顺手把类型标签的 active 状态对齐（可能已从别的子页带过来）
+                setTypeFilter(typeFilter);
             }
 
             if (document.readyState === 'loading') {
@@ -7567,23 +7673,28 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 <table id="qdiiTable">
                     <thead>
                         <tr>
-                            <th style="width:68px;"  data-sort="text" data-col="0">代码 <span class="sort-icon">⇅</span></th>
-                            <th style="width:22%;"   data-sort="text" data-col="1">基金简称 <span class="sort-icon">⇅</span></th>
-                            <th style="width:9%;"    data-sort="text" data-col="2">跟踪标的 <span class="sort-icon">⇅</span></th>
-                            <th style="width:10%;"   data-sort="text" data-col="3">申购状态 <span class="sort-icon">⇅</span></th>
-                            <th style="width:11%;"   data-sort="num"  data-col="4">日累计限额 <span class="sort-icon">⇅</span></th>
-                            <th style="width:7%;"    data-sort="num"  data-col="5">近一年 <span class="sort-icon">⇅</span></th>
-                            <th style="width:9%;"    data-sort="num"  data-col="6">年化跟踪误差 <span class="sort-icon">⇅</span></th>
-                            <th style="width:11%;"   data-sort="num"  data-col="7">夏普比率 <span class="sort-icon">⇅</span></th>
-                            <th style="width:8%;"    data-sort="num"  data-col="8">同类平均 <span class="sort-icon">⇅</span></th>
-                            <th style="width:6.5%;"  data-sort="num"  data-col="9">手续费 <span class="sort-icon">⇅</span></th>
-                            <th style="width:7.5%;"  data-sort="num"  data-col="10">最新规模 <span class="sort-icon">⇅</span></th>
+                            <th style="width:52px;"  data-sort="text" data-col="0">代码 <span class="sort-icon">⇅</span></th>
+                            <th style="width:160px;" data-sort="text" data-col="1">基金简称 <span class="sort-icon">⇅</span></th>
+                            <th style="width:76px;"  data-sort="text" data-col="2">跟踪标的 <span class="sort-icon">⇅</span></th>
+                            <th style="width:80px;"  data-sort="text" data-col="3">申购状态 <span class="sort-icon">⇅</span></th>
+                            <th style="width:84px;"  data-sort="num"  data-col="4">日累计限额 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="5">今年内 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="6">近一年 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="7">近三年 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="8">近五年 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="9">近十年 <span class="sort-icon">⇅</span></th>
+                            <th style="width:82px;"  data-sort="num"  data-col="10">年化跟踪误差 <span class="sort-icon">⇅</span></th>
+                            <th style="width:90px;"  data-sort="num"  data-col="11">夏普比率 <span class="sort-icon">⇅</span></th>
+                            <th style="width:70px;"  data-sort="num"  data-col="12">同类平均 <span class="sort-icon">⇅</span></th>
+                            <th style="width:134px;" data-sort="num"  data-col="13" title="运作费 = 管理费 + 托管费 + 销售服务费">运作费 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="14">手续费 <span class="sort-icon">⇅</span></th>
+                            <th style="width:74px;"  data-sort="num"  data-col="15">最新规模 <span class="sort-icon">⇅</span></th>
                         </tr>
                     </thead>
                     <tbody>
                         {qdii_rows_html}
                         <tr id="qdiiEmptyRow" class="qdii-empty-row" style="display:none;">
-                            <td colspan="11">当前筛选条件下暂无匹配基金</td>
+                            <td colspan="16">当前筛选条件下暂无匹配基金</td>
                         </tr>
                     </tbody>
                 </table>
@@ -12496,7 +12607,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         }}
         #qdiiTable {{
             width: 100%;
-            min-width: 0;             /* ★ 去掉固定 min-width，让它自适应容器 */
+            /* 列变多（收益 5 档 + 运作费），给一个下限宽度，不够就横向滚动 */
+            min-width: 1600px;
             border-collapse: collapse;
             font-size: 12px;
             table-layout: fixed;
@@ -12704,6 +12816,26 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             font-weight: 700;
             color: #e67e22;
             font-size: 12px;
+        }}
+        /* 运作费：上行合计，下行「管 / 托 / 销」三项明细 */
+        .qdii-opfee {{
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            line-height: 1.25;
+        }}
+        .qdii-opfee-total {{
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-weight: 700;
+            font-size: 12px;
+            color: var(--text);
+        }}
+        .qdii-opfee-sub {{
+            font-size: 10px;
+            color: var(--footer-text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }}
         /* ★ 表头可排序 */
         #qdiiTable thead th[data-sort] {{
@@ -16874,6 +17006,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         document.querySelectorAll('.cmp-table tbody tr').forEach(tr => {{
                             tr.style.display = (group === 'all' || tr.dataset.group === group) ? '' : 'none';
                         }});
+                        // 跨子页同步：年化收益页跟着切到同一类
+                        window.QDII_TRACK = group;
+                        if (window.qdiiAnnualSetType) window.qdiiAnnualSetType(group);
                     }});
                 }});
             }}
@@ -16892,11 +17027,51 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             function initQdiiFilters() {{
                 const table = document.getElementById('qdiiTable');
                 if (!table) return;
-                const rows = table.querySelectorAll('tbody tr.qdii-row');
+                const rows = Array.from(table.querySelectorAll('tbody tr.qdii-row'));
                 const emptyRow = document.getElementById('qdiiEmptyRow');
+                // 只取本页的两组筛选标签，别把别的子页里同样用 .qdii-chip 的按钮绑进来
+                const trackChips = Array.from(document.querySelectorAll('.qdii-chip[data-filter="track"]'));
+                const buyChips = Array.from(document.querySelectorAll('.qdii-chip[data-filter="buy"]'));
                 let currentTrack = 'all';
                 let currentBuy = 'all';
                 let keyword = '';
+
+                function chipLabel(chip) {{
+                    return chip.dataset.label || chip.textContent.replace(/\\s*\\d+\\s*$/, '').trim();
+                }}
+                function setChipCount(chip, n) {{
+                    chip.textContent = chipLabel(chip) + ' ' + n;
+                }}
+
+                // 两组标签的数量互相联动：
+                // 选了「纳指」后，状态标签上的数字变成纳指下的分布；反之亦然。
+                function refreshChipCounts() {{
+                    let trackTotal = 0, buyTotal = 0;
+                    const byGroup = {{}}, byBuy = {{}};
+                    rows.forEach(row => {{
+                        const grp = row.getAttribute('data-group');
+                        const buy = row.getAttribute('data-buy');
+                        const code = (row.getAttribute('data-code') || '').toLowerCase();
+                        const name = (row.getAttribute('data-name') || '').toLowerCase();
+                        if (keyword && !code.includes(keyword) && !name.includes(keyword)) return;
+                        if (currentBuy === 'all' || buy === currentBuy) {{
+                            trackTotal++;
+                            byGroup[grp] = (byGroup[grp] || 0) + 1;
+                        }}
+                        if (currentTrack === 'all' || grp === currentTrack) {{
+                            buyTotal++;
+                            byBuy[buy] = (byBuy[buy] || 0) + 1;
+                        }}
+                    }});
+                    trackChips.forEach(chip => {{
+                        const v = chip.dataset.value;
+                        setChipCount(chip, v === 'all' ? trackTotal : (byGroup[v] || 0));
+                    }});
+                    buyChips.forEach(chip => {{
+                        const v = chip.dataset.value;
+                        setChipCount(chip, v === 'all' ? buyTotal : (byBuy[v] || 0));
+                    }});
+                }}
 
                 function applyFilters() {{
                     let visible = 0;
@@ -16918,16 +17093,23 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         }}
                     }});
                     if (emptyRow) emptyRow.style.display = visible ? 'none' : '';
+                    refreshChipCounts();
                 }}
 
-                document.querySelectorAll('.qdii-chip').forEach(chip => {{
+                trackChips.concat(buyChips).forEach(chip => {{
                     chip.addEventListener('click', function() {{
-                        const filterType = this.dataset.filter;
-                        const value = this.dataset.value;
-                        document.querySelectorAll(`.qdii-chip[data-filter="${{filterType}}"]`).forEach(c => c.classList.remove('active'));
+                        const type = this.dataset.filter;
+                        const group = (type === 'track') ? trackChips : buyChips;
+                        group.forEach(c => c.classList.remove('active'));
                         this.classList.add('active');
-                        if (filterType === 'track') currentTrack = value;
-                        else if (filterType === 'buy') currentBuy = value;
+                        if (type === 'track') {{
+                            currentTrack = this.dataset.value;
+                            // 跨子页同步：年化收益页直接跟着切到同一类，不用再点一次
+                            window.QDII_TRACK = currentTrack;
+                            if (window.qdiiAnnualSetType) window.qdiiAnnualSetType(currentTrack);
+                        }} else {{
+                            currentBuy = this.dataset.value;
+                        }}
                         applyFilters();
                     }});
                 }});
@@ -16939,11 +17121,90 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         applyFilters();
                     }});
                 }}
+
+                applyFilters();
             }}
             if (document.readyState === 'loading') {{
                 document.addEventListener('DOMContentLoaded', initQdiiFilters);
             }} else {{
                 initQdiiFilters();
+            }}
+        }})();
+
+        // ===== QDII 监控表：表头列宽可手动拖拽（双击分隔条恢复默认）=====
+        (function() {{
+            function initQdiiColResize() {{
+                const table = document.getElementById('qdiiTable');
+                if (!table || table._colResizeBound) return;
+                table._colResizeBound = true;
+                const heads = Array.from(table.querySelectorAll('thead th'));
+                window._qdiiResizing = false;
+
+                // 第一次拖动前把列宽固化成 px，否则 table-layout:fixed 会在拖动时
+                // 把「加宽这一列」的差额摊到其它列上，看起来像没变宽
+                function freezeWidths() {{
+                    if (table._widthsFrozen) return;
+                    heads.forEach(h => {{
+                        h.dataset.prevWidth = h.style.width || '';
+                        h.style.width = Math.round(h.getBoundingClientRect().width) + 'px';
+                    }});
+                    table.dataset.prevWidth = table.style.width || '';
+                    table.style.width = Math.round(table.getBoundingClientRect().width) + 'px';
+                    table._widthsFrozen = true;
+                }}
+                function resetWidths() {{
+                    heads.forEach(h => {{ h.style.width = h.dataset.prevWidth || ''; }});
+                    table.style.width = table.dataset.prevWidth || '';
+                    table._widthsFrozen = false;
+                }}
+
+                heads.forEach(th => {{
+                    if (th.querySelector('.resizer')) return;
+                    const resizer = document.createElement('div');
+                    resizer.className = 'resizer';
+                    th.appendChild(resizer);
+
+                    let startX = 0, startW = 0, startTableW = 0;
+
+                    resizer.addEventListener('mousedown', function(e) {{
+                        e.preventDefault();
+                        e.stopPropagation();
+                        freezeWidths();
+                        window._qdiiResizing = true;
+                        startX = e.clientX;
+                        startW = th.getBoundingClientRect().width;
+                        startTableW = table.getBoundingClientRect().width;
+                        th.classList.add('resizing');
+
+                        function onMove(ev) {{
+                            const w = Math.max(40, startW + (ev.clientX - startX));
+                            th.style.width = Math.round(w) + 'px';
+                            table.style.width = Math.round(startTableW + (w - startW)) + 'px';
+                        }}
+                        function onUp() {{
+                            th.classList.remove('resizing');
+                            document.removeEventListener('mousemove', onMove);
+                            document.removeEventListener('mouseup', onUp);
+                            setTimeout(() => {{ window._qdiiResizing = false; }}, 60);
+                        }}
+                        document.addEventListener('mousemove', onMove);
+                        document.addEventListener('mouseup', onUp);
+                    }});
+
+                    // 双击恢复默认列宽
+                    resizer.addEventListener('dblclick', function(e) {{
+                        e.preventDefault();
+                        e.stopPropagation();
+                        resetWidths();
+                    }});
+                    // 拖拽条不参与表头排序的点击
+                    resizer.addEventListener('click', function(e) {{ e.stopPropagation(); }});
+                }});
+            }}
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', initQdiiColResize);
+            }} else {{
+                initQdiiColResize();
             }}
         }})();
 
@@ -17091,6 +17352,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 table._sortBound = true;
 
                 table.addEventListener('click', function(e) {{
+                    if (window._qdiiResizing) return;   // 拖完列宽不要顺手触发排序
                     const th = e.target.closest('thead th[data-sort]');
                     if (!th) return;
                     const colIndex = parseInt(th.getAttribute('data-col'), 10);
