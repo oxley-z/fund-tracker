@@ -6779,6 +6779,36 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             return 'limited'
         return 'open'
 
+    # ============ 份额类别（A / C / E 等）============
+    # 名称形如「国富全球科技互联混合(QDII)人民币A(012922)基金」：
+    #   先剥掉尾部「(6位代码)基金」，再反复剥掉尾部括号块与币种词
+    #   （(QDII) / (人民币份额) / (QDII-LOF)(人民币) / 人民币），
+    #   最后取剩余名称末尾的那个大写字母作为份额类别。
+    # 非基金品种（SPY / BTC / XAU 等）名字不带「(6位代码)基金」尾巴，返回空串，
+    # 这样选任何份额类别时它们都会被排除，选「全部」时照常显示。
+    _SHARE_CLASS_LETTERS = ("A", "B", "C", "D", "E", "H", "I", "O", "R", "Y")
+
+    def _share_class(name):
+        s = str(name or "").strip()
+        if not re.search(r"\(\d{6}\)基金$", s):
+            return ""
+        s = re.sub(r"\(\d{6}\)基金$", "", s)
+        while True:
+            m = re.match(r"^(.*)\([^()]*\)$", s)
+            if m:
+                s = m.group(1)
+                continue
+            m = re.match(r"^(.*?)(人民币现汇|人民币现钞|美元现汇|美元现钞|人民币|美元|港币)$", s)
+            if m:
+                s = m.group(1)
+                continue
+            break
+        # 只认单个字母，避免把「…ETF」的 F、「ETF-SPDR」的 R 之类误判成份额类别
+        m = re.search(r"([A-Z])$", s)
+        if m and m.group(1) in _SHARE_CLASS_LETTERS:
+            return m.group(1)
+        return "none"
+
     # ============ 年化跟踪误差 & 同类平均 ============
     # ★ 仅使用 tsdata 页面的权威数据，不再本地兜底计算
     #    原因：本地计算用「基金净值 vs 对标指数净值」的日收益率差异标准差，
@@ -7745,7 +7775,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
 
     rows_html = ""
     cmp_meta = {}
+    share_counts = {}
     for r in results:
+        _sc = _share_class(r.get('name'))
+        if _sc:
+            share_counts[_sc] = share_counts.get(_sc, 0) + 1
         INDEX_URL_MAP = {
             # ---- 主流指数（Yahoo 指数符号需加 ^ 前缀）----
             "NDX":  "https://sg.finance.yahoo.com/quote/%5ENDX/",
@@ -7847,7 +7881,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         te_peer = _te_attr(_te.get('peer_avg'))
 
         rows_html += f"""
-        <tr data-group="{group}" data-macro="{macro_category}" data-buy-status="{r.get('buy_status', '')}" class="fund-row" data-code="{r['code']}" data-navdate="{r['latest_date']}" data-sharp1y="{te_sharp1y}" data-sharp3y="{te_sharp3y}" data-te="{te_track}" data-peer="{te_peer}">
+        <tr data-group="{group}" data-macro="{macro_category}" data-share="{_sc}" data-buy-status="{r.get('buy_status', '')}" class="fund-row" data-code="{r['code']}" data-navdate="{r['latest_date']}" data-sharp1y="{te_sharp1y}" data-sharp3y="{te_sharp3y}" data-te="{te_track}" data-peer="{te_peer}">
             <td class="fav-col" data-val="0"><span class="fav-tools"><button class="star-btn" data-code="{r['code']}" title="点击添加/取消自选">☆</button><input type="checkbox" class="cmp-check" data-code="{r['code']}" title="勾选加入对比（最多 6 只）" aria-label="加入对比"></span></td>
             <td class="code" data-val="{r['code']}">{r['code']}</td>
             <td class="name" data-val="{r['name']}">
@@ -10272,6 +10306,19 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     # 对比弹窗的深度资料很小（≈100KB），直接内联，不必再拆一个 js 文件。
     cmp_meta_json = json.dumps(cmp_meta, ensure_ascii=False, separators=(",", ":"))
 
+    # ===== 份额类别筛选按钮（A / C / E ... 按实际出现的情况动态生成）=====
+    _share_order = [k for k in ("A", "C", "E", "D", "I", "R", "Y", "B", "H", "O") if k in share_counts]
+    _share_order += sorted(k for k in share_counts if k not in _share_order and k != "none")
+    share_filter_btns_html = "".join(
+        f'<button class="cat-btn share-filter" data-share="{_k}" data-sub="all">{_k}类 {share_counts[_k]}</button>'
+        for _k in _share_order
+    )
+    if share_counts.get("none"):
+        share_filter_btns_html += (
+            f'<button class="cat-btn share-filter" data-share="none" data-sub="all" '
+            f'title="名称里没有 A/C/E 等份额标识的基金">无份额 {share_counts["none"]}</button>'
+        )
+
     html_content = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -11054,6 +11101,14 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         /* 桌面端：申购状态主行样式 */
         .buy-status-main-row {{
             display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }}
+
+        /* 份额类别按钮组：桌面端跟在申购状态后面同一行，窄屏时整体换行 */
+        .share-group {{
+            display: inline-flex;
             align-items: center;
             gap: 6px;
             flex-wrap: wrap;
@@ -12780,6 +12835,24 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 display: none;
             }}
 
+            /* 份额类别按钮：移动端独占第二行并可换行，
+               否则会和申购状态挤在同一条 nowrap 横向滚动条里，「份额:」标签还会被下面的 rule 隐藏掉 */
+            .dca-mobile-row .buy-status-main-row {{
+                flex-wrap: wrap;
+                overflow-x: visible;
+            }}
+            .dca-mobile-row .share-group {{
+                flex: 1 1 100%;
+                margin-top: 2px;
+            }}
+            /* 特异性要压过下面「移动端隐藏申购状态标签」的 .buy-status-main-row .category-title */
+            .dca-mobile-row .buy-status-main-row .share-group .category-title {{
+                display: inline;
+            }}
+            .dca-mobile-row .share-group .toolbar-sep {{
+                display: none;
+            }}
+
             /* 移动端隐藏"申购状态:"文字标签，节省横向空间 */
             .dca-mobile-row .buy-status-main-row .category-title {{
                 display: none;
@@ -14118,6 +14191,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         <button class="cat-btn buy-filter active" data-buy="all">全部</button>
                         <button class="cat-btn buy-filter" data-buy="open">仅开放申购</button>
                         <button class="cat-btn buy-filter" data-buy="closed">暂停申购</button>
+
+                        <!-- 份额类别筛选：按名称末尾的 A / C / E 等标识筛；
+                             ETF / 商品 / 指数等非基金品种不含份额类别，选具体类别时不参与 -->
+                        <span class="share-group">
+                            <span class="toolbar-sep" style="margin: 0 4px;"></span>
+                            <span class="category-title" style="margin-right: 2px;">份额:</span>
+                            <button class="cat-btn share-filter active" data-share="all">全部</button>
+                            {share_filter_btns_html}
+                        </span>
                     </div>
 
                     <!-- 视图切换：常驻显示（原来在悬停菜单里，鼠标移开就看不到了） -->
@@ -15184,6 +15266,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         document.addEventListener('DOMContentLoaded', function() {{
             const macroBtns = document.querySelectorAll('.macro-filter');
             const buyBtns = document.querySelectorAll('.buy-filter');
+            const shareBtns = document.querySelectorAll('.share-filter');
             const searchInput = document.getElementById('searchInput');
             const emptyRow = document.getElementById('empty-row');
             const allRows = document.querySelectorAll('#fundTable tbody tr:not(#empty-row)');
@@ -15191,6 +15274,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             let currentMacro = 'all';
             let currentSub = 'all';
             let currentBuyStatus = 'all';
+            let currentShare = 'all';
             let searchKeyword = '';
 
             // 全局面板日期范围要等净值数据加载完（fundNavData 在 DOMContentLoaded 后才可靠）
@@ -15264,7 +15348,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     }}
 
                     const matchSearch = keyword === '' || name.includes(keyword) || code.includes(keyword);
-                    const visible = matchCategory && matchSearch && matchBuy;
+
+                    // 份额类别：非基金品种（ETF/商品/指数/加密）的 data-share 为空串，
+                    // 选任何具体类别时自然落选，选「全部」时不参与过滤。
+                    let matchShare = true;
+                    if (currentShare !== 'all') {{
+                        matchShare = (row.getAttribute('data-share') || '') === currentShare;
+                    }}
+
+                    const visible = matchCategory && matchSearch && matchBuy && matchShare;
 
                     if (visible) {{
                         row.style.display = '';
@@ -15279,8 +15371,14 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     if (!hasVisible) {{
                         if (currentMacro === 'favorites') {{
                             emptyRow.querySelector('td').textContent = '您尚未收藏任何基金，请点击表格首列 ☆ 进行添加';
+                        }} else if (keyword) {{
+                            emptyRow.querySelector('td').textContent = '未找到匹配基金';
+                        }} else if (currentShare !== 'all') {{
+                            emptyRow.querySelector('td').textContent = currentShare === 'none'
+                                ? '当前分类下没有未标注份额类别的基金'
+                                : '当前分类下没有 ' + currentShare + ' 类份额的基金';
                         }} else {{
-                            emptyRow.querySelector('td').textContent = keyword ? '未找到匹配基金' : '当前分类与状态暂无数据';
+                            emptyRow.querySelector('td').textContent = '当前分类与状态暂无数据';
                         }}
                     }}
                 }}
@@ -15304,6 +15402,15 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     buyBtns.forEach(b => b.classList.remove('active'));
                     this.classList.add('active');
                     currentBuyStatus = this.dataset.buy;
+                    applyFilters();
+                }});
+            }});
+
+            shareBtns.forEach(btn => {{
+                btn.addEventListener('click', function() {{
+                    shareBtns.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    currentShare = this.dataset.share || 'all';
                     applyFilters();
                 }});
             }});
