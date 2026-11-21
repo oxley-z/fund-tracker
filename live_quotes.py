@@ -132,6 +132,37 @@ US_ACTIVE_FUNDS: list[tuple[str, str, Optional[str]]] = [
     ("378006", "摩根全球新兴市场混合(QDII)", None),
 ]
 
+
+# 同一只基金的 A / C 份额净值走势几乎重合，实时页并排显示只是噪音，只留一只。
+# 规则：去掉名称末尾的份额标记（A / C，可带 (QDII) (人民币) 这类后缀括号）得到「基名」，
+# 同基名优先留 A 类（申购费一次性，长期持有总费率更低）；没有 A 类的（独一份额）原样保留。
+_SHARE_CLASS_RE = re.compile(r"[AC](\([^)]*\))*$")
+
+
+def _dedupe_share_classes(
+    rows: list[tuple[str, str, Optional[str]]],
+) -> list[tuple[str, str, Optional[str]]]:
+    """把 A/C 双份额收敛成一只，保持原有先后顺序。"""
+    picked: dict[str, tuple[str, str, Optional[str]]] = {}
+    order: list[str] = []
+    for code, name, bench in rows:
+        m = _SHARE_CLASS_RE.search(name)
+        base = (name[:m.start()] if m else name).strip()
+        cls = m.group(0)[0] if m else ""
+        key = base or name
+        if key not in picked:
+            picked[key] = (code, name, bench)
+            order.append(key)
+        elif cls == "A":
+            # 先遇到 C、后面才遇到 A 的，换成 A 类（同基名只会出现一次 A/C 互换）
+            prev_cls = _SHARE_CLASS_RE.search(picked[key][1])
+            if not prev_cls or prev_cls.group(0)[0] != "A":
+                picked[key] = (code, name, bench)
+    return [picked[k] for k in order]
+
+
+US_ACTIVE_FUNDS = _dedupe_share_classes(US_ACTIVE_FUNDS)
+
 # 基准指数：腾讯行情代码 -> 页面显示名。qt.gtimg.cn 回 Access-Control-Allow-Origin: *
 US_BENCH_SOURCES = {
     "NDX": ("usNDX", "纳指100"),

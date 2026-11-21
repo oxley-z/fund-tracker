@@ -1645,66 +1645,17 @@ LIVE_MACRO_RULES = {
     ]},
 }
 
-def _build_etf_secids():
-    """把 live_quotes.ETF_CODES 转成东财 secid（1.=沪 0.=深）。
-
-    直接从 live_quotes 取清单，避免 main.py 里再抄一份、两边慢慢对不上；
-    取不到时退回内联副本（只影响直连刷新，快照渲染不受牵连）。
-    """
-    try:
-        import live_quotes as _lq
-
-        codes = list(_lq.ETF_CODES)
-    except Exception:
-        codes = [
-            "510300", "510310", "510330", "510050", "510500",
-            "512100", "510180", "560010", "588080",
-            "159919", "159915", "159949", "159901", "159922",
-            "159903", "159907", "159906", "159908", "159912",
-            "501225",
-        ]
-    return ["1." + c if c[0] in "56" else "0." + c for c in codes]
-
-
-ETF_SECIDS = _build_etf_secids()
-# 腾讯行情代码（sh510300 / sz159915），前端直连取 IOPV 用。
-# qt.gtimg.cn 返回 Access-Control-Allow-Origin: *，比东财的「回显 Origin」更宽松。
-ETF_GT_CODES = [
-    ("sh" if s.startswith("1.") else "sz") + s.split(".", 1)[1] for s in ETF_SECIDS
-]
 
 # 前端脚本用普通字符串写（不是 f-string），注入时只替换占位符，
 # 免去在模板里对每个 JS 花括号都写两遍的麻烦。
+# 只负责「宏观 12 项」的 60 秒快照刷新：场内宽基 ETF 的盘中价已经搬到独立页 live.html，
+# 首页不再直连行情源，也不再渲染 ETF 卡片。
 _LIVE_JS_SRC = r"""
 (function () {
     'use strict';
     var RULES = __LIVE_RULES__;
     var REFRESH_MS = 60000;      // 快照（data/live_quotes.json）60 秒拉一次
     var FRESH_MINUTES = 20;      // 超过 20 分钟没更新就不再说「实时」
-    var DIRECT_MS = 30000;       // ETF 现价直连东财，30 秒一次
-    var DIRECT_TIMEOUT = 5000;   // 直连超时 5 秒，超了就退回快照
-
-    // ETF 直连的两条腿：
-    //   1) 腾讯 qt.gtimg.cn —— 主源。返回 Access-Control-Allow-Origin: *，
-    //      一次就能拿到现价 + 涨跌幅 + IOPV + 溢价率，溢价率能做到 30 秒级。
-    //      编码是 GBK，必须用 TextDecoder('gbk') 解，否则中文名乱码（数字不受影响）。
-    //   2) 东财 push2 —— 兜底。它按请求头 Origin 原样回显 CORS 头，也能跨域，
-    //      但**没有任何 IOPV 字段**（f71 是均价，别当 IOPV 用：成交额/成交量 正好等于它），
-    //      所以走这条时溢价率只能用快照里的 IOPV 顶着。
-    // 新浪 hq.sinajs.cn 没有跨域头，只能服务端用，前端不要碰。
-    var DIRECT_SECIDS = __ETF_SECIDS__;
-    var GT_CODES = __ETF_GT_CODES__;
-    var GT_URL = 'https://qt.gtimg.cn/q=' + GT_CODES.join(',');   // 只含字母数字，不必编码
-    var DIRECT_URL = 'https://push2.eastmoney.com/api/qt/ulist.np/get'
-        + '?fltt=2&invt=2&fields=f2,f3,f12,f14,f18'
-        + '&ut=fa5fd1943c7b386f172d6893dbfba10b'
-        + '&secids=' + DIRECT_SECIDS.join(',');   // 只含数字/点/逗号，不必编码
-
-    function esc(s) {
-        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-        });
-    }
 
     function hexToRgba(hex, alpha) {
         var m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
@@ -1743,37 +1694,6 @@ _LIVE_JS_SRC = r"""
         }
     }
 
-    // ETF 区块的角标单独一套：它跟着 30 秒直连走，和宏观（15 分钟快照）不同步。
-    function setEtfBadge(text, stale) {
-        var nodes = document.querySelectorAll('[data-etf-badge]');
-        for (var i = 0; i < nodes.length; i++) {
-            nodes[i].textContent = text;
-            nodes[i].hidden = false;
-            nodes[i].className = 'live-badge' + (stale ? ' is-stale' : '');
-        }
-    }
-
-    // 浏览器本地时区不可靠，统一换算成北京时间再判断开收盘。
-    function beijingNow() {
-        return new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000);
-    }
-
-    function beijingHHMM() {
-        var d = beijingNow();
-        function p(n) { return (n < 10 ? '0' : '') + n; }
-        return p(d.getHours()) + ':' + p(d.getMinutes());
-    }
-
-    // A 股连续竞价：工作日 09:30-11:30、13:00-15:00。
-    // 法定节假日识别不了，但那时东财返回的就是收盘价，多刷几次没有副作用。
-    function isTradingTime() {
-        var d = beijingNow();
-        var day = d.getDay();
-        if (day === 0 || day === 6) return false;
-        var m = d.getHours() * 60 + d.getMinutes();
-        return (m >= 570 && m <= 690) || (m >= 780 && m <= 900);
-    }
-
     function applyMacro(quotes, staleKeys) {
         var staleMap = {};
         (staleKeys || []).forEach(function (k) { staleMap[k] = true; });
@@ -1804,159 +1724,6 @@ _LIVE_JS_SRC = r"""
         });
     }
 
-    // ETF 行以代码为键：快照打底，30 秒直连覆盖价格，两者互不覆盖对方已有的东西。
-    var etfOrder = [];
-    var etfByCode = {};
-    var snapshotHhmm = '';
-    var lastDirectMs = 0;        // 上次直连成功的时间戳，用来避免被快照降级
-    var lastDirectFailMs = 0;    // 上次直连失败的时间戳，用来把「已退回」提示留住
-    var failStreak = 0;          // 连续失败次数，用于指数退避
-    var cooldownUntil = 0;       // 退避截止时间：限流期间不要再打
-
-    function renderEtf() {
-        var block = document.getElementById('liveEtfBlock');
-        var grid = document.getElementById('liveEtfGrid');
-        if (!block || !grid) return;
-        if (!etfOrder.length) { block.hidden = true; return; }
-        grid.innerHTML = etfOrder.map(function (code) {
-            var r = etfByCode[code] || {};
-            var chg = (r.change_pct === null || r.change_pct === undefined || isNaN(r.change_pct))
-                ? null : Number(r.change_pct);
-            var cls = chg === null ? 'flat' : (chg >= 0 ? 'up' : 'down');
-            var chgTxt = chg === null ? '--' : (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
-            var price = (r.price === null || r.price === undefined || isNaN(r.price))
-                ? '--' : Number(r.price).toFixed(3);
-            // 溢价率要有 IOPV 才算得出来，快照没给就不显示这一行，不拿均价冒充
-            var prem = (r.premium_pct === null || r.premium_pct === undefined || isNaN(r.premium_pct))
-                ? null : Number(r.premium_pct);
-            var premHtml = prem === null ? '' :
-                '<div class="live-etf-prem ' + (prem >= 0 ? 'up' : 'down') + '">溢价 '
-                + (prem >= 0 ? '+' : '') + prem.toFixed(2) + '%</div>';
-            return '<div class="live-etf-item">' +
-                '<div class="live-etf-code">' + esc(r.code || code) + '</div>' +
-                '<div class="live-etf-name" title="' + esc(r.name || code) + '">' + esc(r.name || code) + '</div>' +
-                '<div class="live-etf-price ' + cls + '">' + price + '</div>' +
-                '<div class="live-etf-chg ' + cls + '">' + chgTxt + '</div>' +
-                premHtml +
-                '</div>';
-        }).join('');
-        block.hidden = false;
-    }
-
-    function setEtfBase(rows) {
-        // 90 秒内刚直连成功过：价格沿用直连的，别让 15 分钟前的快照把它打回去
-        var keepLive = lastDirectMs && (Date.now() - lastDirectMs < 90000);
-        var prev = etfByCode;
-        etfOrder = [];
-        etfByCode = {};
-        (rows || []).forEach(function (r) {
-            if (!r || !r.code) return;
-            var old = prev[r.code];
-            etfOrder.push(r.code);
-            var snapPrice = (r.price === undefined) ? null : r.price;
-            var snapIopv = (r.iopv === undefined || r.iopv === null) ? null : r.iopv;
-            var oldIopv = (old && old.iopv) ? old.iopv : null;
-            var price = (keepLive && old) ? old.price : snapPrice;
-            // IOPV 优先用时新的：刚直连拿到的 > 快照里的
-            var iopv = (keepLive && oldIopv) ? oldIopv : (snapIopv || oldIopv);
-            etfByCode[r.code] = {
-                code: r.code,
-                name: r.name || r.code,
-                price: price,
-                change_pct: (keepLive && old) ? old.change_pct : r.change_pct,
-                iopv: iopv,
-                // 溢价一律用「最终展示的价格 ÷ 手上的 IOPV」重算，保证页面自洽；
-                // 没有 IOPV（LOF）就退回快照给的值，通常也是 null
-                premium_pct: (iopv && price !== null && price !== undefined)
-                    ? (price - iopv) / iopv * 100
-                    : ((r.premium_pct === undefined) ? null : r.premium_pct),
-            };
-        });
-        renderEtf();
-    }
-
-    // 腾讯行情是 GBK，直接用 resp.text() 得到的是乱码（数字不受影响，但名称会烂）
-    function decodeGBK(buf) {
-        try {
-            return new TextDecoder('gbk').decode(buf);
-        } catch (e) {
-            return new TextDecoder('utf-8').decode(buf);
-        }
-    }
-
-    function toNum(v) {
-        if (v === null || v === undefined || v === '' || v === '-') return null;
-        var n = Number(v);
-        return isNaN(n) ? null : n;
-    }
-
-    // 腾讯格式（`~` 分隔，实测 510300 / 159915 逐只核对过）：
-    //   v_sh510300="1~名称~510300~现价[3]~昨收[4]~今开[5]~...~涨跌幅[32]~...~溢价率[77]~IOPV[78]~..."
-    // 510300: 4.018 / -1.03 / -0.31 / 4.0305，(4.018-4.0305)/4.0305 = -0.310%，与 [77] 吻合。
-    function applyLiveEtfGT(text) {
-        var n = 0;
-        var chunks = String(text || '').split(';');
-        for (var i = 0; i < chunks.length; i++) {
-            var eq = chunks[i].indexOf('=');
-            if (eq < 0) continue;
-            var body = chunks[i].slice(eq + 1).trim().replace(/^"/, '').replace(/"$/, '');
-            var f = body.split('~');
-            if (f.length < 79) continue;          // 字段不够说明这只没行情（停牌/退市）
-            var code = (f[2] || '').trim();
-            if (!code) continue;
-            var price = toNum(f[3]);
-            var iopv = toNum(f[78]);
-            if (!etfByCode[code]) {
-                etfOrder.push(code);
-                etfByCode[code] = {
-                    code: code, name: (f[1] || code).trim(),
-                    price: null, change_pct: null, iopv: null, premium_pct: null,
-                };
-            }
-            var row = etfByCode[code];
-            if (price !== null) row.price = price;
-            var chg = toNum(f[32]);
-            if (chg !== null) row.change_pct = chg;
-            // LOF（501225）交易所不发 IOPV，[78] 为空 → 保留快照里的 IOPV，
-            // 真没有就整行不渲染溢价，绝不拿别的数顶替
-            var eff = (iopv !== null) ? iopv : row.iopv;
-            row.iopv = eff;
-            row.premium_pct = (eff && row.price !== null)
-                ? (row.price - eff) / eff * 100
-                : null;
-            n++;
-        }
-        if (n) renderEtf();
-        return n;
-    }
-
-    function applyLiveEtf(diff) {
-        var n = 0;
-        (diff || []).forEach(function (it) {
-            var code = it && it.f12 ? String(it.f12) : '';
-            if (!code) return;
-            if (!etfByCode[code]) {
-                // 快照里没有这只（比如 JSON 拉不到），直连也能自己长出卡片
-                etfOrder.push(code);
-                etfByCode[code] = {
-                    code: code, name: it.f14 || code,
-                    price: null, change_pct: null, premium_pct: null,
-                };
-            }
-            var row = etfByCode[code];
-            if (it.f2 !== null && it.f2 !== undefined && it.f2 !== '-') {
-                row.price = Number(it.f2);
-                // 东财没有 IOPV，只能拿快照里的顶着重算。
-                // 这样至少页面上的价格和溢价是自洽的（IOPV 是 15 分钟前的值）。
-                if (row.iopv) row.premium_pct = (row.price - row.iopv) / row.iopv * 100;
-            }
-            if (it.f3 !== null && it.f3 !== undefined && it.f3 !== '-') row.change_pct = Number(it.f3);
-            n++;
-        });
-        if (n) renderEtf();
-        return n;
-    }
-
     function pull() {
         fetch('data/live_quotes.json?v=' + Date.now(), { cache: 'no-store' })
             .then(function (resp) {
@@ -1966,25 +1733,15 @@ _LIVE_JS_SRC = r"""
             .then(function (data) {
                 window.__LIVE_QUOTES__ = data;
                 applyMacro(data.quotes || {}, data.stale_keys || []);
-                setEtfBase(data.etf || []);
 
                 var stamp = parseBeijing(data.updated_at_beijing);
                 var hhmm = (data.updated_at_beijing || '').slice(11, 16) || '--:--';
-                snapshotHhmm = hhmm;
                 var ageMin = stamp ? (Date.now() - stamp) / 60000 : Infinity;
                 var isStale = !!data.stale || ageMin > FRESH_MINUTES;
                 if (isStale) {
                     setBadges('最后更新 ' + hhmm + (ageMin > FRESH_MINUTES ? '（非交易时段）' : '（部分源滞后）'), true);
                 } else {
                     setBadges('实时 · 更新于 ' + hhmm, false);
-                }
-                // 刚直连成功过就别把 ETF 角标降级回快照；刚失败过则保留「已退回」提示
-                if (etfOrder.length) {
-                    if (lastDirectFailMs && Date.now() - lastDirectFailMs < 90000) {
-                        setEtfBadge('快照 · ' + hhmm + '（直连失败，已退回）', true);
-                    } else if (!lastDirectMs || Date.now() - lastDirectMs > 90000) {
-                        setEtfBadge((isTradingTime() ? '快照 · 更新于 ' : '收盘价 · 快照 ') + hhmm, isStale);
-                    }
                 }
             })
             .catch(function () {
@@ -1995,107 +1752,10 @@ _LIVE_JS_SRC = r"""
             });
     }
 
-    var directTimer = null;
-
-    function stopDirect() {
-        if (directTimer) { clearInterval(directTimer); directTimer = null; }
-    }
-
-    // 单次带超时的 fetch：超时立刻 abort，避免请求堆积
-    function timedFetch(url, parse) {
-        var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-        var kill = setTimeout(function () { if (ctrl) ctrl.abort(); }, DIRECT_TIMEOUT);
-        var opts = ctrl ? { signal: ctrl.signal, cache: 'no-store' } : { cache: 'no-store' };
-        return fetch(url, opts).then(function (resp) {
-            if (!resp.ok) throw new Error('HTTP ' + resp.status);
-            return parse(resp);
-        }).then(function (v) {
-            clearTimeout(kill);
-            return v;
-        }, function (e) {
-            clearTimeout(kill);
-            throw e;
-        });
-    }
-
-    // 主源：腾讯，一次拿现价 + 涨跌幅 + IOPV + 溢价
-    function pullDirectGT() {
-        return timedFetch(GT_URL, function (resp) {
-            return resp.arrayBuffer().then(function (buf) {
-                if (!applyLiveEtfGT(decodeGBK(buf))) throw new Error('gt no match');
-                return 'tencent';
-            });
-        });
-    }
-
-    // 备源：东财，只有价格，溢价用快照 IOPV 顶着
-    function pullDirectEM() {
-        return timedFetch(DIRECT_URL, function (resp) {
-            return resp.json().then(function (payload) {
-                var diff = (payload && payload.data && payload.data.diff) || [];
-                if (!diff.length) throw new Error('em empty diff');
-                if (!applyLiveEtf(diff)) throw new Error('em no match');
-                return 'eastmoney';
-            });
-        });
-    }
-
-    function pullDirect() {
-        if (!isTradingTime()) return;
-        if (Date.now() < cooldownUntil) return;   // 退避窗口内不请求
-        pullDirectGT()
-            .catch(function () { return pullDirectEM(); })   // 腾讯挂了换东财
-            .then(function (src) {
-                lastDirectMs = Date.now();
-                lastDirectFailMs = 0;
-                failStreak = 0;
-                cooldownUntil = 0;
-                setEtfBadge((src === 'tencent' ? '直连腾讯 · 30 秒 · ' : '直连东财 · 30 秒 · ')
-                    + beijingHHMM(), false);
-            })
-            .catch(function () {
-                lastDirectFailMs = Date.now();
-                // 指数退避：30s → 60s → 120s → 240s，封顶 5 分钟。
-                // 两个源都是按 IP 限流的，被限后继续 30 秒一次只会延长封禁。
-                failStreak = Math.min(failStreak + 1, 4);
-                cooldownUntil = Date.now() + Math.min(DIRECT_MS * Math.pow(2, failStreak - 1), 300000);
-                // 直连失败不清页面：保留上一轮价格，角标退回快照
-                if (etfOrder.length) {
-                    setEtfBadge('快照 · ' + (snapshotHhmm || '--:--') + '（直连失败，已退回）', true);
-                }
-            });
-    }
-
-    function syncTimers() {
-        if (isTradingTime()) {
-            if (!directTimer) {
-                directTimer = setInterval(function () {
-                    if (document.hidden) return;              // 切后台不请求
-                    if (!isTradingTime()) {
-                        stopDirect();
-                        if (etfOrder.length) setEtfBadge('已收盘 ' + beijingHHMM() + ' · 显示收盘价', true);
-                        return;
-                    }
-                    pullDirect();
-                }, DIRECT_MS);
-            }
-            if (!document.hidden) pullDirect();
-        } else {
-            stopDirect();
-            if (etfOrder.length) {
-                setEtfBadge(lastDirectMs ? '已收盘 ' + beijingHHMM() + ' · 显示收盘价'
-                                         : '收盘价 · 快照 ' + (snapshotHhmm || '--:--'), true);
-            }
-        }
-    }
-
     function boot() {
-        pull();            // 先拿 15 分钟快照打底
-        syncTimers();      // 交易时段立刻再补一次直连
+        pull();
         document.addEventListener('visibilitychange', function () {
-            if (document.hidden) return;   // 后台不管，回到前台再同步
-            pull();
-            syncTimers();
+            if (!document.hidden) pull();   // 后台不管，回到前台再同步
         });
     }
 
@@ -6667,6 +6327,7 @@ def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
         "today_gain": today_gain, "week_gain": calc_gain(days=7), "month_gain": calc_gain(months=1),
         "quarter_gain": calc_gain(months=3), "half_year_gain": calc_gain(months=6), "year_gain": calc_gain(months=12),
         "three_year_gain": calc_gain(months=36, strict=True), "five_year_gain": calc_gain(months=60, strict=True),
+        "ten_year_gain": calc_gain(months=120, strict=True),
         "ytd_gain": calc_gain(ytd=True)
     }
 
@@ -7049,7 +6710,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
     }
     COMMODITIES_LOCAL = {"XAU", "AUM", "XAG", "BRENT", "CAD"}
     CRYPTO_LOCAL = {"BTC", "ETH", "SOL", "BNB"}
-    col_count = 24
+    col_count = 25
 
     def _te_attr(value):
         """把 tsdata 抓来的字符串指标清洗成纯数字，供 data-* 属性使用。
@@ -8234,6 +7895,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             <td data-val="{r['year_gain'] if r['year_gain'] is not None else -9999}" class="{gain_class(r['year_gain'])}">{format_gain(r['year_gain'])}</td>
             <td data-val="{r['three_year_gain'] if r.get('three_year_gain') is not None else -9999}" class="{gain_class(r.get('three_year_gain'))}">{format_gain(r.get('three_year_gain'))}</td>
             <td data-val="{r['five_year_gain'] if r.get('five_year_gain') is not None else -9999}" class="{gain_class(r.get('five_year_gain'))}">{format_gain(r.get('five_year_gain'))}</td>
+            <td data-val="{r['ten_year_gain'] if r.get('ten_year_gain') is not None else -9999}" class="{gain_class(r.get('ten_year_gain'))}">{format_gain(r.get('ten_year_gain'))}</td>
             <td class="dca-col" data-val="-9999">--</td>
         </tr>
         """
@@ -8624,6 +8286,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     <button class="period-btn" data-period="year" data-code="{r['code']}">近一年</button>
                     <button class="period-btn" data-period="3y" data-code="{r['code']}">近三年</button>
                     <button class="period-btn" data-period="5y" data-code="{r['code']}">近五年</button>
+                    <button class="period-btn" data-period="10y" data-code="{r['code']}">近十年</button>
                     <button class="period-btn" data-period="all" data-code="{r['code']}">成立以来</button>
                 </div>
                 <canvas id="chart-{r['code']}" width="400" height="200"></canvas>
@@ -9237,13 +8900,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         + _LIVE_JS_SRC.replace(
             "__LIVE_RULES__",
             json.dumps(LIVE_MACRO_RULES, ensure_ascii=False, separators=(",", ":")),
-        ).replace(
-            "__ETF_SECIDS__",
-            json.dumps(ETF_SECIDS, separators=(",", ":")),
-        )
-        .replace(
-            "__ETF_GT_CODES__",
-            json.dumps(ETF_GT_CODES, separators=(",", ":")),
         )
         + "</script>"
     )
@@ -10999,47 +10655,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         [data-theme="dark"] .live-badge.is-stale {{ color: #f6ae2d; background: rgba(246, 174, 45, 0.16); }}
         .metric-value.is-live-stale {{ opacity: 0.55; }}
 
-        .live-etf-block {{ margin: 18px 0 4px 0; }}
-        .live-etf-head {{
-            display: flex; justify-content: space-between; align-items: center;
-            gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
-        }}
-        .live-etf-head > h3 {{ flex: 1 1 auto; min-width: 0; }}
-        .live-etf-grid {{
-            display: grid; gap: 8px;
-            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-        }}
-        .live-etf-item {{
-            border: 1px solid var(--border); border-radius: 8px;
-            background: var(--table-bg); padding: 8px 10px;
-            display: flex; flex-direction: column; gap: 2px; min-width: 0;
-        }}
-        .live-etf-code {{ font-size: 10px; color: var(--footer-text); letter-spacing: 0.3px; }}
-        .live-etf-name {{
-            font-size: 12px; color: var(--text); font-weight: 600;
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }}
-        .live-etf-price {{ font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }}
-        .live-etf-chg {{ font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }}
-        .live-etf-prem {{ font-size: 11px; font-variant-numeric: tabular-nums; }}
-        /* A 股习惯：涨红跌绿 */
-        .live-etf-price.up, .live-etf-chg.up {{ color: #d93025; }}
-        .live-etf-price.down, .live-etf-chg.down {{ color: #188038; }}
-        .live-etf-price.flat, .live-etf-chg.flat {{ color: var(--footer-text); }}
-        .live-etf-prem.up {{ color: #d93025; }}
-        .live-etf-prem.down {{ color: #188038; }}
-        [data-theme="dark"] .live-etf-price.up, [data-theme="dark"] .live-etf-chg.up {{ color: #f28b82; }}
-        [data-theme="dark"] .live-etf-price.down, [data-theme="dark"] .live-etf-chg.down {{ color: #6fcf97; }}
-        .live-etf-note {{ margin-top: 8px; font-size: 11px; color: var(--footer-text); }}
         @media (max-width: 640px) {{
-            /* 400px 宽时 auto-fill 会算出 4 列，每列窄到把名称截成 4 个字，固定 2 列更好读 */
-            .live-etf-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }}
-            .live-etf-price {{ font-size: 16px; }}
             .live-meta {{ flex-wrap: wrap; justify-content: flex-end; gap: 4px; }}
             .live-meta > span:first-child {{ font-size: 10px; }}
-            /* 角标是 nowrap 的 flex item，窄屏下会把整行撑破、右侧被裁，
-               直接让标题和角标上下排 */
-            .live-etf-head {{ flex-direction: column; align-items: flex-start; gap: 2px; }}
         }}
 
         .metric-card {{
@@ -11648,7 +11266,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         th:nth-child(11), td:nth-child(11), th:nth-child(12), td:nth-child(12), th:nth-child(13), td:nth-child(13) {{ width: 300px; white-space: nowrap; }}
         th:nth-child(14), td:nth-child(14) {{ width: 80px; white-space: nowrap; }}
         th:nth-child(15), td:nth-child(15) {{ width: 155px; min-width: 90px; white-space: normal; }}
-        th:nth-child(16), td:nth-child(16), th:nth-child(17), td:nth-child(17), th:nth-child(18), td:nth-child(18), th:nth-child(19), td:nth-child(19), th:nth-child(20), td:nth-child(20), th:nth-child(21), td:nth-child(21), th:nth-child(22), td:nth-child(22), th:nth-child(23), td:nth-child(23), th:nth-child(24), td:nth-child(24) {{ width: 80px; white-space: nowrap; }}
+        th:nth-child(16), td:nth-child(16), th:nth-child(17), td:nth-child(17), th:nth-child(18), td:nth-child(18), th:nth-child(19), td:nth-child(19), th:nth-child(20), td:nth-child(20), th:nth-child(21), td:nth-child(21), th:nth-child(22), td:nth-child(22), th:nth-child(23), td:nth-child(23), th:nth-child(24), td:nth-child(24), th:nth-child(25), td:nth-child(25) {{ width: 80px; white-space: nowrap; }}
         th {{ background-color: var(--header-bg); color: var(--header-text); font-weight: 600; text-align: right; user-select: none; cursor: pointer; white-space: normal; word-break: keep-all; line-height: 1.25; height: 38px; vertical-align: middle; position: relative; }}
         th:hover {{ background-color: #e4e7eb; }}
         [data-theme="dark"] th:hover {{ background-color: #3d3d3d; }}
@@ -13482,7 +13100,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 font-size: 10px !important;
             }}
 
-            /* 8 个数值列 */
+            /* 9 个数值列（近一周 … 近十年） */
             #fundView.simple-mode #fundTable th:nth-child(16),
             #fundView.simple-mode #fundTable td:nth-child(16),
             #fundView.simple-mode #fundTable th:nth-child(17),
@@ -13498,7 +13116,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             #fundView.simple-mode #fundTable th:nth-child(22),
             #fundView.simple-mode #fundTable td:nth-child(22),
             #fundView.simple-mode #fundTable th:nth-child(23),
-            #fundView.simple-mode #fundTable td:nth-child(23) {{
+            #fundView.simple-mode #fundTable td:nth-child(23),
+            #fundView.simple-mode #fundTable th:nth-child(24),
+            #fundView.simple-mode #fundTable td:nth-child(24) {{
                 width: 62px !important;
                 min-width: 62px !important;
                 font-size: 10px !important;
@@ -13739,7 +13359,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         #fundView.simple-mode #fundTable th:nth-child(13),
         #fundView.simple-mode #fundTable th:nth-child(14),
         #fundView.simple-mode #fundTable th:nth-child(15),
-        #fundView.simple-mode #fundTable th:nth-child(24),
+        #fundView.simple-mode #fundTable th:nth-child(25),
         #fundView.simple-mode #fundTable td:nth-child(5),
         #fundView.simple-mode #fundTable td:nth-child(6),
         #fundView.simple-mode #fundTable td:nth-child(8),
@@ -13750,7 +13370,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
         #fundView.simple-mode #fundTable td:nth-child(13),
         #fundView.simple-mode #fundTable td:nth-child(14),
         #fundView.simple-mode #fundTable td:nth-child(15),
-        #fundView.simple-mode #fundTable td:nth-child(24) {{
+        #fundView.simple-mode #fundTable td:nth-child(25) {{
             display: none !important;
         }}
 
@@ -14224,7 +13844,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             <button class="nav-tab-btn" data-view="dualView"><span class="tab-ico">📈</span>ETF份额看板</button>
         </div>
         <div class="nav-right-tools">
-            <a class="nav-live-link" href="live.html" target="_blank" rel="noopener"
+            <a class="nav-live-link" href="live.html"
                title="A股宽基 ETF 与美股主动 QDII 的盘中实时页（交易时段 30 秒刷新）">⚡ 实时</a>
             <button class="theme-toggle" id="themeToggle">🌓 切换主题</button>
         </div>
@@ -14352,16 +13972,6 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     {stop_profit_html}
 
                     {core_history_panel_html}
-                </div>
-
-                <!-- ===== 场内宽基 ETF 盘中价（快照打底 + 交易时段 30 秒直连东财） ===== -->
-                <div class="live-etf-block" id="liveEtfBlock" hidden>
-                    <div class="live-etf-head">
-                        <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">📈 场内宽基 ETF 盘中价</h3>
-                        <span class="live-badge" data-etf-badge hidden></span>
-                    </div>
-                    <div class="live-etf-grid" id="liveEtfGrid"></div>
-                    <div class="live-etf-note">交易时段每 30 秒直连腾讯刷新现价、涨跌幅与溢价率（IOPV 取交易所公布值），收盘或切后台自动暂停；涨红跌绿。LOF（501225）交易所不发 IOPV，不显示溢价。</div>
                 </div>
 
                 <!-- ===== 大宗商品风向标 ===== -->
@@ -14617,7 +14227,8 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             <th data-col="20" onclick="handleHeaderClick(20)"><span class="th-full">近一年</span><span class="th-simple">近一年</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="21" onclick="handleHeaderClick(21)"><span class="th-full">近三年</span><span class="th-simple">近三年</span> <span class="sort-icon">⇅</span></th>
                             <th data-col="22" onclick="handleHeaderClick(22)"><span class="th-full">近五年</span><span class="th-simple">近五年</span> <span class="sort-icon">⇅</span></th>
-                            <th data-col="23" onclick="handleHeaderClick(23)"><span class="th-full"><span id="dcaHeaderTitle">月定投</span>收益</span><span class="th-simple">定投</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="23" onclick="handleHeaderClick(23)"><span class="th-full">近十年</span><span class="th-simple">近十年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="24" onclick="handleHeaderClick(24)"><span class="th-full"><span id="dcaHeaderTitle">月定投</span>收益</span><span class="th-simple">定投</span> <span class="sort-icon">⇅</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -14806,7 +14417,11 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                         <button type="button" class="fcmp-period-btn" data-period="month">近1月</button>
                         <button type="button" class="fcmp-period-btn active" data-period="quarter">近3月</button>
                         <button type="button" class="fcmp-period-btn" data-period="half">近6月</button>
+                        <button type="button" class="fcmp-period-btn" data-period="ytd">今年内</button>
                         <button type="button" class="fcmp-period-btn" data-period="year">近1年</button>
+                        <button type="button" class="fcmp-period-btn" data-period="3y">近3年</button>
+                        <button type="button" class="fcmp-period-btn" data-period="5y">近5年</button>
+                        <button type="button" class="fcmp-period-btn" data-period="10y">近10年</button>
                         <button type="button" class="fcmp-period-btn" data-period="all">全区间</button>
                     </div>
                     <span class="fcmp-note" id="cmpAnchorNote"></span>
@@ -15793,6 +15408,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             else if (period === 'year') startDate.setFullYear(latest.getFullYear() - 1);
             else if (period === '3y') startDate.setFullYear(latest.getFullYear() - 3);
             else if (period === '5y') startDate.setFullYear(latest.getFullYear() - 5);
+            else if (period === '10y') startDate.setFullYear(latest.getFullYear() - 10);
             else if (period === 'ytd') {{
                 // ★ 与「年度收益率」热力图口径严格对齐：
                 //   基准取「上一年最后一个交易日」的净值，而不是当年第一个交易日。
@@ -17365,10 +16981,16 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             const COL = {{
                 SCALE: 3, FEE: 4, FEE_PUR: 5, MAXDD: 10, REBOUND: 11, RECOVERY: 12,
                 RECOVERY_DAYS: 13, TODAY: 14, WEEK: 15, MONTH: 16, QUARTER: 17,
-                HALF: 18, YTD: 19, YEAR: 20, YEAR3: 21, YEAR5: 22
+                HALF: 18, YTD: 19, YEAR: 20, YEAR3: 21, YEAR5: 22, YEAR10: 23
             }};
-            const PERIOD_MONTHS = {{ month: 1, quarter: 3, half: 6, year: 12, all: 0 }};
-            const PERIOD_LABEL = {{ month: '近1月', quarter: '近3月', half: '近6月', year: '近1年', all: '全区间' }};
+            const PERIOD_MONTHS = {{
+                month: 1, quarter: 3, half: 6, year: 12,
+                '3y': 36, '5y': 60, '10y': 120, all: 0
+            }};
+            const PERIOD_LABEL = {{
+                month: '近1月', quarter: '近3月', half: '近6月', ytd: '今年内',
+                year: '近1年', '3y': '近3年', '5y': '近5年', '10y': '近10年', all: '全区间'
+            }};
             const PALETTE = {{
                 light: ['#1a73e8', '#e8710a', '#188038', '#9334e6', '#d93025', '#12b5cb'],
                 dark:  ['#6ea8fe', '#f6ae2d', '#5bb974', '#c58af9', '#f28b82', '#4dd0c4']
@@ -17565,7 +17187,16 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 }});
                 return anchor;
             }}
-            function sliceOne(code, anchor, months) {{
+            // 区间起点：今年内取「基准日所在年的 1 月 1 日」（自然年口径），
+            // 其余按月份回溯；空串 = 不设下限（全区间）。
+            function periodStart(anchor, key) {{
+                if (!anchor) return '';
+                if (key === 'ytd') return anchor.slice(0, 4) + '-01-01';
+                const months = PERIOD_MONTHS[key];
+                if (!months) return '';
+                return shiftMonths(anchor, months);
+            }}
+            function sliceOne(code, anchor, start) {{
                 const raw = fundNavData[code];
                 const name = (typeof fundNames !== 'undefined' && fundNames[code]) || code;
                 if (!raw || !Array.isArray(raw.dates) || !raw.dates.length) {{
@@ -17578,8 +17209,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     navs = navs.slice().reverse();
                 }}
                 let i0 = 0;
-                if (months > 0) {{
-                    const start = shiftMonths(anchor, months);
+                if (start) {{
                     while (i0 < dates.length && dates[i0] < start) i0++;
                 }}
                 const d2 = [];
@@ -17737,6 +17367,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                     year: num(COL.YEAR),
                     year3: num(COL.YEAR3),
                     year5: num(COL.YEAR5),
+                    year10: num(COL.YEAR10),
                     ytd: num(COL.YTD),
                     sharp1y: attrNum('data-sharp1y'),
                     sharp3y: attrNum('data-sharp3y'),
@@ -17831,6 +17462,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                 html += domRow('近一年', 'year', 'pct');
                 html += domRow('近三年', 'year3', 'pct');
                 html += domRow('近五年', 'year5', 'pct');
+                html += domRow('近十年', 'year10', 'pct');
                 html += domRow('今日涨跌', 'today', 'pct');
                 html += rowOf('最大回撤（当前窗口）', function (c) {{
                     if (!c.dom || c.dom.maxdd == null) return plainCell('--');
@@ -17986,9 +17618,9 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             function render() {{
                 if (!selected.length) return;
                 const codes = selected.slice();
-                const months = PERIOD_MONTHS[period] == null ? 0 : PERIOD_MONTHS[period];
                 const anchor = commonAnchor(codes);
-                const slices = codes.map(function (code) {{ return sliceOne(code, anchor, months); }});
+                const start = periodStart(anchor, period);
+                const slices = codes.map(function (code) {{ return sliceOne(code, anchor, start); }});
                 const payload = alignAndNormalize(slices);
 
                 const domRows = {{}};

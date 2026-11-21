@@ -67,7 +67,7 @@ a:hover{text-decoration:underline}
 .wrap{max-width:1800px; margin:0 auto; padding:14px 16px 40px}
 .grid{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; align-items:start}
 @media (max-width:1200px){ .grid{grid-template-columns:minmax(0,1fr)} }
-/* 宽屏下两栏等高、各自内部滚动：左 20 行、右 51 行，不至于右边拖出一条长尾巴 */
+/* 宽屏下两栏等高、各自内部滚动：左 20 行、右 27 行，不至于右边拖出一条长尾巴 */
 @media (min-width:1201px){
   .grid{align-items:stretch}
   .card{display:flex; flex-direction:column; height:calc(100vh - 215px); min-height:420px}
@@ -116,6 +116,12 @@ tbody tr:hover{background:var(--chip-bg)}
 .up{color:var(--up)} .down{color:var(--down)} .flat{color:var(--sub)}
 .dim{color:var(--muted)}
 .hl{font-family:var(--mono); font-size:11.5px; color:var(--sub)}
+/* ── 可排序表头 ── */
+thead th.sortable{cursor:pointer; user-select:none}
+thead th.sortable:hover{color:var(--text)}
+thead th.sortable .arrow{display:inline-block; width:9px; font-size:10px; color:var(--muted)}
+thead th.sortable.on{color:var(--text)}
+thead th.sortable.on .arrow{color:var(--up)}
 .flash-up{animation:fu .7s ease-out}
 .flash-down{animation:fd .7s ease-out}
 @keyframes fu{from{background:rgba(217,48,37,.22)}to{background:transparent}}
@@ -164,8 +170,9 @@ footer b{color:var(--sub); font-weight:500}
   <div class="notice">
     <span class="ico">ℹ️</span>
     <span id="topNotice">
-      左栏 A股宽基 ETF 为交易所实时价，交易时段每 30 秒直连刷新；右栏 51 只美股主动是<b>场外 QDII</b>，
-      没有盘中市场价，只给「官方净值 + 美股基准涨幅参考」，<b>基准涨幅不等于本基金涨跌</b>，不编造估值净值。
+      左栏 A股宽基 ETF 为交易所实时价，交易时段每 30 秒直连刷新；右栏美股主动是<b>场外 QDII</b>，
+      同一只基金只保留 A 类份额（C 类走势与净值一致，并排只是噪音），没有盘中市场价，
+      只给「官方净值 + 美股基准涨幅参考」，<b>基准涨幅不等于本基金涨跌</b>，不编造估值净值。
     </span>
   </div>
 
@@ -182,9 +189,12 @@ footer b{color:var(--sub); font-weight:500}
         <table>
           <thead>
             <tr>
-              <th>代码</th><th>名称</th><th>现价</th><th>涨跌幅</th><th>昨收</th><th>今开</th>
+              <th>代码</th><th>名称</th><th>现价</th>
+              <th class="sortable" data-sort="cn" data-key="pct" title="点击按涨跌幅排序（再点切换升/降序）">涨跌幅 <span class="arrow"></span></th>
+              <th>昨收</th><th>今开</th>
               <th>最高/最低</th><th>IOPV<br><span style="font-weight:400">(参考净值)</span></th>
-              <th>溢价率</th><th>成交额</th><th>更新</th>
+              <th class="sortable" data-sort="cn" data-key="prem" title="点击按溢价率排序（再点切换升/降序）">溢价率 <span class="arrow"></span></th>
+              <th>成交额</th><th>更新</th>
             </tr>
           </thead>
           <tbody id="cnBody">
@@ -202,7 +212,7 @@ footer b{color:var(--sub); font-weight:500}
     <!-- ================= 右栏：美股主动 ================= -->
     <section class="card">
       <div class="card-head">
-        <h2>🇺🇸 美股主动 QDII <span class="cnt">51 只 · 场外，无盘中价</span></h2>
+        <h2>🇺🇸 美股主动 QDII <span class="cnt" id="usCount">场外，无盘中价</span></h2>
         <span class="spacer"></span>
         <span class="hint" id="usBenchHint">—</span>
         <span class="badge halt" id="usBadge"><span class="dot"></span><span id="usBadgeTxt">—</span></span>
@@ -211,8 +221,11 @@ footer b{color:var(--sub); font-weight:500}
         <table>
           <thead>
             <tr>
-              <th>代码</th><th>名称</th><th>最新净值</th><th>净值日期</th><th>当日涨幅</th>
-              <th>参考基准</th><th>基准涨幅<br><span style="font-weight:400">仅供参考·非净值</span></th><th>状态</th>
+              <th>代码</th><th>名称</th><th>最新净值</th><th>净值日期</th>
+              <th class="sortable" data-sort="us" data-key="pct" title="点击按当日涨幅排序（再点切换升/降序）">当日涨幅 <span class="arrow"></span></th>
+              <th>参考基准</th>
+              <th class="sortable" data-sort="us" data-key="bench" title="点击按基准涨幅排序（再点切换升/降序）">基准涨幅<br><span style="font-weight:400">仅供参考·非净值</span> <span class="arrow"></span></th>
+              <th>状态</th>
             </tr>
           </thead>
           <tbody id="usBody">
@@ -258,7 +271,9 @@ footer b{color:var(--sub); font-weight:500}
     snapAt: null,
     lastSnapFetch: 0,
     timer: null,
-    paused: false
+    paused: false,
+    cnSort: null,       // {key:'pct'|'prem', dir:±1}，null = 原始顺序
+    usSort: null        // {key:'pct'|'bench', dir:±1}
   };
 
   var CN_REF = {};      // code -> {price, pct, prev, open, hl, iopv, prem, amt, time}
@@ -388,11 +403,13 @@ footer b{color:var(--sub); font-weight:500}
         iopv: tr.querySelector('[data-f=iopv]'),
         prem: tr.querySelector('[data-f=prem]'),
         amt: tr.querySelector('[data-f=amt]'),
-        time: tr.querySelector('[data-f=time]')
+        time: tr.querySelector('[data-f=time]'),
+        row: tr
       };
       updateCN(r, false);
     });
     body.appendChild(frag);
+    applySort('cn');
   }
 
   function updateCN(r, flash) {
@@ -467,6 +484,9 @@ footer b{color:var(--sub); font-weight:500}
       ref.bench.className = 'dim';
     });
     body.appendChild(frag);
+    var cnt = document.getElementById('usCount');
+    if (cnt) cnt.textContent = funds.length + ' 只 · A/C 份额已合并 · 无盘中价';
+    applySort('us');
   }
 
   var BENCH_NAME = { NDX: '纳指100', SPX: '标普500' };
@@ -541,8 +561,8 @@ footer b{color:var(--sub); font-weight:500}
     parts.push(cnLive ? 'A股 30 秒刷新中' : 'A股已停刷');
     parts.push(usLive ? '美股基准 30 秒刷新中' : '美股已停刷');
     $('#cnHint').textContent = cnLive ? (POLL_MS / 1000) + ' 秒一刷' : '停刷（非交易时段）';
-    $('#topNotice').innerHTML = '左栏 A股宽基 ETF 为交易所实时价，交易时段每 30 秒直连刷新；右栏 51 只美股主动是<b>场外 QDII</b>，' +
-      '没有盘中市场价，只给「官方净值 + 美股基准涨幅参考」，<b>基准涨幅不等于本基金涨跌</b>，不编造估值净值。' +
+    $('#topNotice').innerHTML = '左栏 A股宽基 ETF 为交易所实时价，交易时段每 30 秒直连刷新；右栏美股主动是<b>场外 QDII</b>，' +
+      '同一只基金只留 A 类份额，没有盘中市场价，只给「官方净值 + 美股基准涨幅参考」，<b>基准涨幅不等于本基金涨跌</b>，不编造估值净值。' +
       '<span class="dim">（当前：' + parts.join(' · ') + '）</span>';
   }
 
@@ -746,6 +766,82 @@ footer b{color:var(--sub); font-weight:500}
 
   document.getElementById('refreshBtn').addEventListener('click', manualRefresh);
 
+  // ============ 按当日涨幅排序 ============
+  // 只重排已有的 <tr>，不重建节点：重建会打断闪烁动画，也会丢当前滚动位置。
+  // 首次点某列按降序（涨得最多的排最前），再点一次切升序，与看板习惯一致。
+  function sortValue(kind, row, key) {
+    if (kind === 'cn') {
+      return key === 'prem' ? num(row.premium_pct) : num(row.change_pct);
+    }
+    if (key === 'bench') {
+      var b = row.bench ? state.bench[row.bench] : null;
+      return b ? num(b.change_pct) : null;
+    }
+    return num(row.day_pct);
+  }
+
+  function applySort(kind) {
+    var st = kind === 'cn' ? state.cnSort : state.usSort;
+    if (!st) return;
+    var rows = kind === 'cn' ? state.etf : state.us;
+    var refs = kind === 'cn' ? CN_REF : US_REF;
+    var body = $(kind === 'cn' ? '#cnBody' : '#usBody');
+    if (!body || !rows || !rows.length) return;
+
+    var base = {};
+    rows.forEach(function (r, i) { base[r.code] = i; });
+    var sorted = rows.slice().sort(function (a, b) {
+      var va = sortValue(kind, a, st.key);
+      var vb = sortValue(kind, b, st.key);
+      // 取不到值的一律沉底，不参与比较
+      if (va === null && vb === null) return base[a.code] - base[b.code];
+      if (va === null) return 1;
+      if (vb === null) return -1;
+      if (va === vb) return base[a.code] - base[b.code];
+      return (va - vb) * st.dir;
+    });
+
+    var frag = document.createDocumentFragment();
+    sorted.forEach(function (r) {
+      var ref = refs[r.code];
+      if (ref && ref.row) frag.appendChild(ref.row);
+    });
+    body.appendChild(frag);
+  }
+
+  function paintSortArrows() {
+    var ths = document.querySelectorAll('th.sortable');
+    for (var i = 0; i < ths.length; i++) {
+      var th = ths[i];
+      var kind = th.getAttribute('data-sort');
+      var key = th.getAttribute('data-key');
+      var st = kind === 'cn' ? state.cnSort : state.usSort;
+      var on = !!(st && st.key === key);
+      th.classList.toggle('on', on);
+      var arrow = th.querySelector('.arrow');
+      if (arrow) arrow.textContent = on ? (st.dir < 0 ? '▼' : '▲') : '⇅';
+    }
+  }
+
+  function toggleSort(kind, key) {
+    var cur = kind === 'cn' ? state.cnSort : state.usSort;
+    var next = { key: key, dir: (cur && cur.key === key) ? -cur.dir : -1 };
+    if (kind === 'cn') state.cnSort = next; else state.usSort = next;
+    applySort(kind);
+    paintSortArrows();
+  }
+
+  document.addEventListener('click', function (e) {
+    var node = e.target;
+    while (node && node !== document.body) {
+      if (node.tagName === 'TH' && node.className.indexOf('sortable') >= 0) {
+        toggleSort(node.getAttribute('data-sort'), node.getAttribute('data-key'));
+        return;
+      }
+      node = node.parentNode;
+    }
+  });
+
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) schedule();
   });
@@ -753,6 +849,7 @@ footer b{color:var(--sub); font-weight:500}
   // 启动
   tickClock();
   setInterval(tickClock, 1000);
+  paintSortArrows();
   loadSnapshot(true).then(schedule);
 })();
 </script>
