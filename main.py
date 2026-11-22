@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import json
 import csv
@@ -19698,6 +19699,18 @@ def main():
             index_annual_drawdown=index_annual_drawdown
         )
         print(f"\n🎉 升级版网页构建成功！文件路径: {abs_path}")
+        # ★ CI 下「构建成功」后必须硬退出（2026-11-22，#77 事故）：
+        #   进程正常返回时会执行 concurrent.futures.thread 注册的 atexit 钩子
+        #   `_python_exit`，它会把**所有**线程池的工作线程 join 一遍。只要有一个
+        #   线程还卡在网络调用里（DNS 的 getaddrinfo、akshare 内部的 sleep 重试，
+        #   都不受 socket 超时约束），进程就会停在上面这行日志之后一动不动：
+        #   #77 在这里静默了 21 分 49 秒，最后撞上 75 分钟作业超时被杀，
+        #   后面的 Commit / Snapshot / Publish 一步都没跑，线上页面没更新。
+        #   产物此时已落盘，跳过所有清理直接退，把退出码 0 交给后续步骤。
+        if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
         try:
             webbrowser.open(f"file://{abs_path}")
         except Exception: pass
