@@ -22,6 +22,9 @@ concurrency:
 jobs:
   update-cftc-and-deploy:
     runs-on: ubuntu-latest
+    # ★ 同 fund_daily：默认 360 分钟超时。主程序卡死时会白占 6 小时并一直占着
+    #   "pages" 并发组。main.py 内部预算 50 分钟，这里留到 75 分钟。
+    timeout-minutes: 75
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -64,7 +67,7 @@ jobs:
       # 4. 同步生成主看板 index.html，保证全站统一上线最新数据
       - name: Generate Main Dashboard (index.html)
         run: |
-          python main.py --out index.html
+          python -u main.py --out index.html
 
       # 5. 部署至 GitHub Pages
       - name: Setup Pages

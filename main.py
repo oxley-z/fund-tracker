@@ -24,6 +24,7 @@ from calendar import monthrange
 from http.cookiejar import CookieJar
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 import requests
 from datetime import datetime
 import logging
@@ -36,6 +37,14 @@ for _noisy_logger in ("pypdf", "pdfminer", "pdfminer.pdfparser", "pdfminer.pspar
 # 强制清空代理环境变量
 for env_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
     os.environ.pop(env_var, None)
+
+# ★ 全局 socket 超时（2026-11-21/22 两次 CI 卡死事故的直接防护）
+#   akshare、requests 内部大量请求不传 timeout，命中「对端丢包」时会无限阻塞在 recv 上：
+#   - 本文件里自己写的 urllib 调用都带了 timeout，但第三方库没有；
+#   - 一个工作线程永久阻塞，ThreadPoolExecutor 在解释器退出时仍会 join 它，
+#     于是整个构建挂到 GitHub 默认的 360 分钟作业上限才被取消。
+#   设一个全局兜底后，任何阻塞式 socket 操作最多等这么久（显式 timeout 仍然优先）。
+socket.setdefaulttimeout(20)
 
 # ==============================================================================
 # 北京时间工具（所有网页展示时间统一使用北京时间 UTC+8）
@@ -19452,25 +19461,46 @@ def main():
         return code, meta["name"], None
 
     max_workers = 8 if is_debug else 12
-    print(f"⚙️ 启用多线程并发抓取 (并发数: {max_workers}) ...")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    print(f"⚙️ 启用多线程并发抓取 (并发数: {max_workers}) ...", flush=True)
+    # ★ 这里刻意不再用 `with ThreadPoolExecutor(...)`：
+    #   with 退出时是 shutdown(wait=True)，会 join 所有工作线程；
+    #   配合下面「as_completed 无超时」的写法，只要有一个基金卡在无 timeout 的
+    #   网络请求上，循环就永远等不到下一只，预算检查也执行不到，最后挂到
+    #   GitHub 的 360 分钟作业上限（2026-11-21、11-22 两次事故都是这个形态：
+    #   进度停在 119/162 和 124/162 后彻底静默）。
+    #   现在 as_completed 自带截止时间，退出时不等待线程。
+    budget = 600 if is_debug else 3000   # 全局预算：默认 50 分钟
+    deadline = time.time() + budget
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    done_count = 0
+    try:
         futures = [executor.submit(process_single_fund, code) for code in target_funds]
-        deadline = time.time() + (600 if is_debug else 3000)   # 全局预算：50 分钟
-        for done_count, fut in enumerate(as_completed(futures), start=1):
-            if time.time() > deadline:
-                print("⏰ 达到总时间预算，跳过剩余基金任务（缓存已写入，下次可复用）")
-                executor.shutdown(wait=False, cancel_futures=True)
-                break
+        completed_iter = as_completed(futures, timeout=max(0.1, deadline - time.time()))
+        while True:
             try:
-                code, name, res = fut.result(timeout=180)     # 单只基金 3 分钟硬上限
+                fut = next(completed_iter)
+            except StopIteration:
+                break
+            except FuturesTimeoutError:
+                print("⏰ 达到总时间预算，跳过剩余基金任务（缓存已写入，下次可复用）", flush=True)
+                break
+            done_count += 1
+            try:
+                code, name, res = fut.result(timeout=1)
             except Exception as exc:
-                print(f"[{done_count}/{len(target_funds)}] 处理异常: {exc}")
+                print(f"[{done_count}/{len(target_funds)}] 处理异常: {exc}", flush=True)
                 continue
             if res:
                 c_date = res["countries_info"].get("date", "--")
-                print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ✅ 完成 (国家披露期: {c_date})")
+                print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ✅ 完成 (国家披露期: {c_date})", flush=True)
             else:
-                print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ❌ 历史净值抓取失败")
+                print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ❌ 历史净值抓取失败", flush=True)
+    finally:
+        # wait=False：剩余结果已经用不上（缓存已落盘，下次接着跑），
+        # 不能为了个别慢请求把整轮构建拖住。
+        executor.shutdown(wait=False, cancel_futures=True)
+    if done_count < len(target_funds):
+        print(f"⚠️ 本轮完成 {done_count}/{len(target_funds)} 只，其余跳过（未完成的缓存为空，下轮自动重抓）", flush=True)
 
     if _F10_ERR["n"] > 3:
         print(f"    [F10] 费率页累计 {_F10_ERR['n']} 次请求异常（已由蛋卷费率兜底，不影响出图）")
