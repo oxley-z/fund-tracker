@@ -63,14 +63,41 @@ SINA_HEADERS = {**HEADERS, "Referer": "https://finance.sina.com.cn/"}
 EM_HEADERS = {**HEADERS, "Referer": "https://quote.eastmoney.com/"}
 GT_HEADERS = {**HEADERS, "Referer": "https://gu.qq.com/"}
 
-# ── 场内宽基 ETF：dual_etf_dashboard.py 里的 19 只 + 501225（全球芯片 LOF） ──
-ETF_CODES = [
-    "510300", "510310", "510330", "510050", "510500",
-    "512100", "510180", "560010", "588080",          # 上交所 9 只
-    "159919", "159915", "159949", "159901", "159922",
-    "159903", "159907", "159906", "159908", "159912",  # 深交所 10 只
-    "501225",                                         # 上交所 LOF（QDII-LOF，交易所不发 IOPV）
-]
+# ── 场内 ETF 分组：宽基（A股）+ 跨境（QDII，跟踪海外） ──
+# 为什么要分组：两类 ETF 的「涨跌幅」含义不同，混在一张表里排序会串味。
+#   * 宽基：IOPV 由交易所实时发布，溢价率基本贴 0；
+#   * 跨境：IOPV 含 T-1 净值与汇率折算，溢价率天然更大（限购/额度紧张时会走得很夸张），
+#     且盘中涨跌幅是 A 股时段对海外隔夜行情的二次定价，跟当晚美股走势可能背离。
+# 第二列是「跟踪标的」，只给跨境表用；宽基留空串。
+ETF_GROUPS: dict[str, list[tuple[str, str]]] = {
+    "宽基": [
+        ("510300", ""), ("510310", ""), ("510330", ""), ("510050", ""), ("510500", ""),
+        ("512100", ""), ("510180", ""), ("560010", ""), ("588080", ""),   # 上交所 9 只
+        ("159919", ""), ("159915", ""), ("159949", ""), ("159901", ""), ("159922", ""),
+        ("159903", ""), ("159907", ""), ("159906", ""), ("159908", ""), ("159912", ""),  # 深交所 10 只
+    ],
+    "跨境": [
+        # 纳指100（9 只：同一标的、不同基金公司，溢价率常有明显差异）
+        ("513100", "纳指100"), ("513300", "纳指100"), ("159941", "纳指100"),
+        ("159632", "纳指100"), ("513110", "纳指100"), ("159501", "纳指100"),
+        ("513390", "纳指100"), ("159696", "纳指100"), ("513870", "纳指100"),
+        # 标普500
+        ("513500", "标普500"), ("159612", "标普500"), ("513650", "标普500"),
+        # 半导体 / 芯片 / 科技
+        ("513310", "中韩半导体"), ("501225", "全球芯片"), ("159509", "纳指科技"),
+        # 日经225
+        ("513520", "日经225"), ("513880", "日经225"), ("159866", "日经225"),
+        # 欧洲
+        ("159561", "德国DAX"), ("513080", "法国CAC40"),
+        # 亚太 / 新兴
+        ("159687", "亚太精选"), ("164824", "印度"),
+        # 中概 / 港股科技
+        ("513050", "中概互联"), ("159605", "中概互联"), ("513130", "恒生科技"),
+    ],
+}
+ETF_CODES: list[str] = [code for _items in ETF_GROUPS.values() for code, _track in _items]
+ETF_TRACK: dict[str, str] = {code: track for _items in ETF_GROUPS.values() for code, track in _items}
+ETF_GROUP_OF: dict[str, str] = {code: g for g, _items in ETF_GROUPS.items() for code, _t in _items}
 
 # ── 美股主动 QDII：与 main.py 的 US_ACTIVE_CODES 同一份 51 只 ──
 # 第三列是「参考基准」：QDII 场外基金没有盘中市场价，只能拿美股指数涨幅当参考。
@@ -508,7 +535,7 @@ def _gt_code(code: str) -> str:
 
 
 def fetch_etf_iopv(session: requests.Session) -> dict[str, dict]:
-    """腾讯行情：一次批量取 20 只的 IOPV 与溢价率。
+    """腾讯行情：一次批量取全部 ETF 的 IOPV 与溢价率（实测 44 只单请求 0.5s / 417 字符）。
 
     交易所 IOPV 的免费口子只剩这一个（都实测过）：
       * 东财 push2 —— 没有任何 IOPV 字段，`f71` 是均价
@@ -575,7 +602,7 @@ def fetch_etf_iopv(session: requests.Session) -> dict[str, dict]:
 
 
 def _em_etf_rows(session: requests.Session) -> tuple[list[dict], str]:
-    """东财 push2 一次批量拿 20 只的现价/涨跌幅/昨收/今开/最高最低/成交额。失败时抛异常。
+    """东财 push2 一次批量拿全部 ETF 的现价/涨跌幅/昨收/今开/最高最低/成交额。失败时抛异常。
 
     字段（fltt=2 时已是十进制）：f2 现价 f3 涨跌幅 f4 涨跌额 f5 成交量(手)
     f6 成交额(元) f12 代码 f13 市场 f14 名称 f15 最高 f16 最低 f17 今开
@@ -701,6 +728,11 @@ def fetch_etf_quotes(session: requests.Session,
                 break
     for row in em_rows:
         row.pop("quote_date", None)
+
+    # 打上分组与跟踪标的：前端据此拆成「宽基」「跨境」两张表，不混排
+    for row in em_rows:
+        row["group"] = ETF_GROUP_OF.get(row["code"], "宽基")
+        row["track"] = ETF_TRACK.get(row["code"]) or None
 
     order = {c: i for i, c in enumerate(ETF_CODES)}
     em_rows.sort(key=lambda r: order.get(r["code"], 999))

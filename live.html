@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>盘中实时 · A股宽基 ETF / 美股主动 QDII</title>
+<title>盘中实时 · A股宽基 / 跨境场内 ETF / 美股主动 QDII</title>
 <style>
 :root{
   --bg:#f5f6f8; --card:#fff; --border:#e3e6ea; --text:#1f2328; --sub:#5b6470;
@@ -159,7 +159,7 @@ footer b{color:var(--sub); font-weight:500}
 
 <div class="topbar">
   <a class="back" href="index.html">← 返回主看板</a>
-  <h1>⚡ 盘中实时<small>A股宽基 ETF · 美股主动 QDII</small></h1>
+  <h1>⚡ 盘中实时<small>A股宽基 · 跨境场内 ETF · 美股主动 QDII</small></h1>
   <div class="topright">
     <span class="clock">北京时间 <b id="clock">--:--:--</b></span>
     <button class="btn" id="refreshBtn">立即刷新</button>
@@ -170,7 +170,7 @@ footer b{color:var(--sub); font-weight:500}
   <div class="notice">
     <span class="ico">ℹ️</span>
     <span id="topNotice">
-      左栏 A股宽基 ETF 为交易所实时价，交易时段每 30 秒直连刷新；右栏美股主动是<b>场外 QDII</b>，
+      左栏 A股宽基 ETF、下方跨境 QDII 场内 ETF 均为交易所实时价，A 股交易时段每 30 秒直连刷新；右栏美股主动是<b>场外 QDII</b>，
       同一只基金只保留 A 类份额（C 类走势与净值一致，并排只是噪音），没有盘中市场价，
       只给「官方净值 + 美股基准涨幅参考」，<b>基准涨幅不等于本基金涨跌</b>，不编造估值净值。
     </span>
@@ -180,7 +180,7 @@ footer b{color:var(--sub); font-weight:500}
     <!-- ================= 左栏：A股宽基 ETF ================= -->
     <section class="card">
       <div class="card-head">
-        <h2>🇨🇳 A股宽基 ETF <span class="cnt">20 只 · 含 501225 LOF</span></h2>
+        <h2>🇨🇳 A股宽基 ETF <span class="cnt" id="cnCount">19 只</span></h2>
         <span class="spacer"></span>
         <span class="hint" id="cnHint">—</span>
         <span class="badge halt" id="cnBadge"><span class="dot"></span><span id="cnBadgeTxt">—</span></span>
@@ -205,7 +205,6 @@ footer b{color:var(--sub); font-weight:500}
       <div class="card-foot">
         数据源：<b>腾讯行情</b>（现价 / 昨收 / 今开 / 最高最低 / 成交额 / IOPV / 溢价率），
         失败时退回<b>东财 push2</b>（无 IOPV 与溢价）。溢价率 = (现价 − IOPV) ÷ IOPV，红为溢价、绿为折价。
-        501225 为 QDII-LOF，交易所不发布 IOPV，溢价列留空。
       </div>
     </section>
 
@@ -240,6 +239,37 @@ footer b{color:var(--sub); font-weight:500}
         收盘后停刷期间新净值不会自动进来，点「立即刷新」或重新打开页面即可同步。
       </div>
     </section>
+    <!-- ================= 第三块：跨境 ETF（场内） ================= -->
+    <section class="card" style="grid-column:1/-1;height:auto">
+      <div class="card-head">
+        <h2>🌏 跨境 ETF（场内） <span class="cnt" id="cbCount">QDII · 25 只</span></h2>
+        <span class="spacer"></span>
+        <span class="hint" id="cbHint">—</span>
+        <span class="badge halt" id="cbBadge"><span class="dot"></span><span id="cbBadgeTxt">—</span></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>代码</th><th>名称</th><th>跟踪</th><th>现价</th>
+              <th>涨跌幅</th>
+              <th>昨收</th><th>今开</th><th>最高/最低</th>
+              <th>IOPV<br><span style="font-weight:400">(参考净值)</span></th>
+              <th>溢价率</th><th>成交额</th><th>更新</th>
+            </tr>
+          </thead>
+          <tbody id="cbBody">
+            <tr><td colspan="12" class="dim" style="text-align:center;padding:22px">正在加载…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-foot">
+        跨境 QDII 场内 ETF：<b>涨跌幅是 A 股时段对海外隔夜行情的二次定价</b>，与当晚美股走势可能背离；
+        IOPV 含 T-1 净值与汇率折算，<b>溢价率天然比宽基大</b>（限购或额度紧张时会走得很夸张），仅作参考。
+        501225 / 164824 为 LOF，交易所不发布 IOPV，溢价率取腾讯口径。
+      </div>
+    </section>
+
   </div>
 </div>
 
@@ -253,12 +283,29 @@ footer b{color:var(--sub); font-weight:500}
 (function () {
   'use strict';
 
-  // ── 需要刷新的 ETF（与 live_quotes.py 的 ETF_CODES 一致） ──
-  var ETF_CODES = ['510300','510310','510330','510050','510500',
+  // ── 需要刷新的 ETF（与 live_quotes.py 的 ETF_GROUPS 严格一致） ──
+  // 宽基：A股宽基，IOPV 由交易所实时发布，溢价率基本贴 0
+  var ETF_BROAD = ['510300','510310','510330','510050','510500',
                    '512100','510180','560010','588080',
                    '159919','159915','159949','159901','159922',
-                   '159903','159907','159906','159908','159912',
-                   '501225'];
+                   '159903','159907','159906','159908','159912'];
+  // 跨境：[代码, 跟踪标的]，QDII 场内 ETF，IOPV 含 T-1 净值与汇率折算
+  var ETF_CROSS = [
+    ['513100','纳指100'], ['513300','纳指100'], ['159941','纳指100'],
+    ['159632','纳指100'], ['513110','纳指100'], ['159501','纳指100'],
+    ['513390','纳指100'], ['159696','纳指100'], ['513870','纳指100'],
+    ['513500','标普500'], ['159612','标普500'], ['513650','标普500'],
+    ['513310','中韩半导体'], ['501225','全球芯片'], ['159509','纳指科技'],
+    ['513520','日经225'], ['513880','日经225'], ['159866','日经225'],
+    ['159561','德国DAX'], ['513080','法国CAC40'],
+    ['159687','亚太精选'], ['164824','印度'],
+    ['513050','中概互联'], ['159605','中概互联'], ['513130','恒生科技']
+  ];
+  var ETF_GROUP = {};      // code -> '宽基' | '跨境'
+  var ETF_TRACK = {};      // code -> 跟踪标的
+  ETF_BROAD.forEach(function (c) { ETF_GROUP[c] = '宽基'; });
+  ETF_CROSS.forEach(function (x) { ETF_GROUP[x[0]] = '跨境'; ETF_TRACK[x[0]] = x[1]; });
+  var ETF_CODES = ETF_BROAD.concat(ETF_CROSS.map(function (x) { return x[0]; }));
   var GT_BASE = 'https://qt.gtimg.cn/q=';
   var POLL_MS = 30000;      // 交易时段轮询间隔
   var IDLE_MS = 60000;      // 非交易时段：只重算状态，不发请求
@@ -370,12 +417,13 @@ footer b{color:var(--sub); font-weight:500}
   }
 
   // ============ 渲染：左栏 ============
-  function renderCN(rows) {
-    var body = $('#cnBody');
+  // 一张 ETF 表：宽基（11 列）与跨境（12 列，多「跟踪」）共用同一套 data-f 键
+  function renderETFTable(bodySel, rows, withTrack) {
+    var body = $(bodySel);
     body.innerHTML = '';
-    CN_REF = {};
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="11" class="dim" style="text-align:center;padding:22px">暂无数据</td></tr>';
+      body.innerHTML = '<tr><td colspan="' + (withTrack ? 12 : 11) +
+        '" class="dim" style="text-align:center;padding:22px">暂无数据</td></tr>';
       return;
     }
     var frag = document.createDocumentFragment();
@@ -384,6 +432,7 @@ footer b{color:var(--sub); font-weight:500}
       tr.innerHTML =
         '<td class="c">' + esc(r.code) + '</td>' +
         '<td class="nm" title="' + esc(r.name) + '">' + esc(r.name || r.code) + '</td>' +
+        (withTrack ? '<td class="dim">' + esc(r.track || ETF_TRACK[r.code] || '—') + '</td>' : '') +
         '<td class="v" data-f="price">—</td>' +
         '<td class="v" data-f="pct">—</td>' +
         '<td class="v" data-f="prev">—</td>' +
@@ -409,7 +458,22 @@ footer b{color:var(--sub); font-weight:500}
       updateCN(r, false);
     });
     body.appendChild(frag);
+  }
+
+  // 分组以快照里的 group 为准；老快照没有该字段时退回本地映射，不至于把跨境行塞进宽基表
+  function groupOf(r) {
+    return r.group || ETF_GROUP[r.code] || '宽基';
+  }
+
+  function renderCN(rows) {
+    CN_REF = {};
+    var broad = rows.filter(function (r) { return groupOf(r) === '宽基'; });
+    var cross = rows.filter(function (r) { return groupOf(r) === '跨境'; });
+    renderETFTable('#cnBody', broad, false);
+    renderETFTable('#cbBody', cross, true);
     applySort('cn');
+    var cnt = $('#cbCount');
+    if (cnt) cnt.textContent = 'QDII · ' + cross.length + ' 只';
   }
 
   function updateCN(r, flash) {
@@ -552,8 +616,14 @@ footer b{color:var(--sub); font-weight:500}
     $('#usBadge').className = 'badge ' + u[0];
     $('#usBadgeTxt').textContent = u[1];
 
-    var dsTag = us.dst ? '夏令时' : '冬令时';
-    $('#usBenchHint').textContent = '基准 ' + benchLabel('NDX') + ' / ' + benchLabel('SPX') + ' · ' + dsTag;
+    // 跨境表与宽基同一个交易时段，徽标与刷新提示跟着走
+    var cbBadge = $('#cbBadge');
+    if (cbBadge) {
+      cbBadge.className = 'badge ' + c[0];
+      $('#cbBadgeTxt').textContent = c[1];
+    }
+    var cbHint = $('#cbHint');
+    if (cbHint) cbHint.textContent = (cn === 'open') ? (POLL_MS / 1000) + ' 秒一刷' : '停刷（非交易时段）';
 
     var cnLive = cn === 'open';
     var usLive = us.phase === 'open';
@@ -790,7 +860,10 @@ footer b{color:var(--sub); font-weight:500}
 
     var base = {};
     rows.forEach(function (r, i) { base[r.code] = i; });
-    var sorted = rows.slice().sort(function (a, b) {
+    // 两张表共用 state.etf / CN_REF：宽基表排序只动宽基行，别把跨境行拽进来
+    var sorted = rows.slice().filter(function (r) {
+      return kind !== 'cn' || groupOf(r) === '宽基';
+    }).sort(function (a, b) {
       var va = sortValue(kind, a, st.key);
       var vb = sortValue(kind, b, st.key);
       // 取不到值的一律沉底，不参与比较
