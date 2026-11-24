@@ -15730,10 +15730,109 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
         }};
 
+        // ★ 区间涨幅徽标：把当前选中周期（近一周/近三月/成立以来…）的累计涨幅直接画在图上，
+        //   省得为了看一个数字去逐个 hover。底色带圆角，压在折线上也读得清。
+        const PERIOD_LABEL_TEXT = {{
+            week: '近一周', month: '近一月', quarter: '近三月', half: '近半年',
+            ytd: '今年内', year: '近一年', '3y': '近三年', '5y': '近五年',
+            '10y': '近十年', all: '成立以来'
+        }};
+
+        function computePeriodGain(filtered, period) {{
+            const navs = (filtered && filtered.navs) || [];
+            const dates = (filtered && filtered.dates) || [];
+            const out = {{
+                label: PERIOD_LABEL_TEXT[period] || String(period || ''),
+                pct: null, from: '', to: ''
+            }};
+            if (navs.length < 2) return out;
+            const base = Number(navs[0]);
+            const last = Number(navs[navs.length - 1]);
+            if (!isFinite(base) || !isFinite(last) || base <= 0) return out;
+            out.pct = ((last - base) / base) * 100.0;
+            out.from = dates.length ? String(dates[0]) : '';
+            out.to = dates.length ? String(dates[dates.length - 1]) : '';
+            return out;
+        }}
+
+        const fundPeriodGainPlugin = {{
+            id: 'fundPeriodGain',
+            afterDraw(chart) {{
+                const cfg = chart.$periodGain;
+                if (!cfg || cfg.pct === null || cfg.pct === undefined || !isFinite(cfg.pct)) return;
+                const area = chart.chartArea;
+                if (!area) return;
+                const ctx = chart.ctx;
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                const up = cfg.pct >= 0;
+                // 中国习惯：涨红跌绿
+                const valueColor = up ? (isDark ? '#ff7b72' : '#d93025')
+                                      : (isDark ? '#4ec9a4' : '#188038');
+                const labelColor = isDark ? '#9aa4ae' : '#5f6368';
+                const dateColor  = isDark ? '#7d8690' : '#80868b';
+                const bgColor    = isDark ? 'rgba(40,40,40,0.88)' : 'rgba(255,255,255,0.90)';
+                const lineColor  = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
+
+                const valueText = `${{up ? '+' : ''}}${{cfg.pct.toFixed(2)}}%`;
+                const subText = (cfg.from && cfg.to) ? `${{cfg.from}} → ${{cfg.to}}` : '';
+
+                const FONT_MAIN = '600 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+                const FONT_VAL  = '700 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+                const FONT_SUB  = '9px system-ui, -apple-system, "Segoe UI", sans-serif';
+
+                ctx.save();
+                ctx.font = FONT_MAIN;
+                const labelW = ctx.measureText(cfg.label).width;
+                ctx.font = FONT_VAL;
+                const valueW = ctx.measureText(valueText).width;
+                ctx.font = FONT_SUB;
+                const subW = subText ? ctx.measureText(subText).width : 0;
+
+                const padX = 7, padY = 5, gap = 6;
+                const boxW = Math.ceil(Math.max(labelW + gap + valueW, subW) + padX * 2);
+                const boxH = subText ? 30 : 22;
+                const bx = area.left + 6;
+                const by = area.top + 5;
+                const r = 5;
+
+                ctx.beginPath();
+                ctx.moveTo(bx + r, by);
+                ctx.lineTo(bx + boxW - r, by);
+                ctx.quadraticCurveTo(bx + boxW, by, bx + boxW, by + r);
+                ctx.lineTo(bx + boxW, by + boxH - r);
+                ctx.quadraticCurveTo(bx + boxW, by + boxH, bx + boxW - r, by + boxH);
+                ctx.lineTo(bx + r, by + boxH);
+                ctx.quadraticCurveTo(bx, by + boxH, bx, by + boxH - r);
+                ctx.lineTo(bx, by + r);
+                ctx.quadraticCurveTo(bx, by, bx + r, by);
+                ctx.closePath();
+                ctx.fillStyle = bgColor;
+                ctx.fill();
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = lineColor;
+                ctx.stroke();
+
+                ctx.textBaseline = 'top';
+                ctx.font = FONT_MAIN;
+                ctx.fillStyle = labelColor;
+                ctx.fillText(cfg.label, bx + padX, by + padY);
+                ctx.font = FONT_VAL;
+                ctx.fillStyle = valueColor;
+                ctx.fillText(valueText, bx + padX + labelW + gap, by + padY);
+                if (subText) {{
+                    ctx.font = FONT_SUB;
+                    ctx.fillStyle = dateColor;
+                    ctx.fillText(subText, bx + padX, by + padY + 15);
+                }}
+                ctx.restore();
+            }}
+        }};
+
         function registerFundChartPlugins() {{
             if (window._fundChartPluginsRegistered || typeof Chart === 'undefined') return;
             Chart.register(pieLabelsPlugin);
             Chart.register(fundCrosshairPlugin);
+            Chart.register(fundPeriodGainPlugin);
             window._fundChartPluginsRegistered = true;
         }}
 
@@ -16041,6 +16140,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }}
 
             const filtered = filterNavData(data, currentPeriod);
+            const periodGain = computePeriodGain(filtered, currentPeriod);
             const baseNav = filtered.navs.length > 0 ? filtered.navs[0] : 1.0;
             const textColor = getComputedStyle(document.documentElement).getPropertyValue('--footer-text').trim() || '#70757a';
             const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#e0e0e0';
@@ -16171,6 +16271,10 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
             }});
 
             chartInstances[code] = chart;
+            // 绑到实例上而不是 options 里：插件没有 defaults，Chart.js 会丢掉自定义字段。
+            // 构造期间已经画过一帧，这里补一次重绘把徽标补上。
+            chart.$periodGain = periodGain;
+            chart.draw();
 
             if (container && !container._eventsBound) {{
                 const btns = container.querySelectorAll('.period-btn');
@@ -16187,6 +16291,7 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             curChart.data.datasets[0].data = fData.navs;
                             curChart.data.datasets[1].data = fData.navs;
                             const newBaseNav = fData.navs.length > 0 ? fData.navs[0] : 1.0;
+                            curChart.$periodGain = computePeriodGain(fData, period);
                             curChart.options.plugins.tooltip.callbacks.label = function(context) {{
                                 const nav = Number(context.parsed.y);
                                 let gainText = '--';
@@ -18079,6 +18184,17 @@ def generate_html_report(results, start_date, end_date, today_str, metrics, inde
                             tooltip: {{
                                 mode: 'index',
                                 intersect: false,
+                                // ★ 逐条按当前横坐标的值从高到低排列，与折线在图上「从上到下」的
+                                //   上下关系严格一致（默认按数据集顺序排，读起来和图对不上）。
+                                //   归一化后 y 就是累计涨幅，降序 = 图上从高到低；缺值的排到最后。
+                                itemSort: function (a, b) {{
+                                    const av = (a.parsed && a.parsed.y != null) ? a.parsed.y : null;
+                                    const bv = (b.parsed && b.parsed.y != null) ? b.parsed.y : null;
+                                    if (av === null && bv === null) return 0;
+                                    if (av === null) return 1;
+                                    if (bv === null) return -1;
+                                    return bv - av;
+                                }},
                                 callbacks: {{
                                     label: function (ctx) {{
                                         const v = ctx.parsed.y;
