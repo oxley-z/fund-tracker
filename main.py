@@ -1,0 +1,19837 @@
+import os
+import sys
+import re
+import json
+import csv
+import io
+import html
+import socket
+import hashlib
+import time
+import random
+import argparse
+import webbrowser
+import urllib.request
+import urllib.parse
+import urllib.error
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="akshare")
+import akshare as ak
+import pandas as pd
+import requests
+from requests.adapters import HTTPAdapter
+from datetime import datetime, timedelta, timezone
+from calendar import monthrange
+from http.cookiejar import CookieJar
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+import requests
+from datetime import datetime
+import logging
+
+# 公告 PDF 里常带残缺的交叉引用表，pypdf 会把 startxref / Object Streams 这类
+# 内部容错过程当告警刷到控制台。它们不影响正文抽取，统一压到 ERROR。
+for _noisy_logger in ("pypdf", "pdfminer", "pdfminer.pdfparser", "pdfminer.psparser"):
+    logging.getLogger(_noisy_logger).setLevel(logging.ERROR)
+
+# 强制清空代理环境变量
+for env_var in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]:
+    os.environ.pop(env_var, None)
+
+# ★ 全局 socket 超时（2026-11-21/22 两次 CI 卡死事故的直接防护）
+#   akshare、requests 内部大量请求不传 timeout，命中「对端丢包」时会无限阻塞在 recv 上：
+#   - 本文件里自己写的 urllib 调用都带了 timeout，但第三方库没有；
+#   - 一个工作线程永久阻塞，ThreadPoolExecutor 在解释器退出时仍会 join 它，
+#     于是整个构建挂到 GitHub 默认的 360 分钟作业上限才被取消。
+#   设一个全局兜底后，任何阻塞式 socket 操作最多等这么久（显式 timeout 仍然优先）。
+socket.setdefaulttimeout(20)
+
+# ==============================================================================
+# 北京时间工具（所有网页展示时间统一使用北京时间 UTC+8）
+# ==============================================================================
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+def now_beijing() -> datetime:
+    """返回当前北京时间（带时区）"""
+    return datetime.now(BEIJING_TZ)
+
+def ts_to_beijing(ts: float) -> datetime:
+    """将 Unix 时间戳转换为北京时间"""
+    return datetime.fromtimestamp(ts, BEIJING_TZ)
+
+# 通用请求头
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
+}
+
+# ==============================================================================
+# 配置中心：测试环境 / 发布环境 快速切换开关
+# ==============================================================================
+IS_DEBUG = False  # True: 调试测试模式(几秒完成); False: 正式发布模式(全量抓取)
+
+TEST_FUNDS = [
+    "002891",  # 美股主动代表
+    "014002",
+    "006555",
+    "161125",  # 标普被动代表
+    "022365",  # A股 CPO 代表
+    "025500",  # A股 存储芯片代表
+]
+
+PROD_FUNDS = [
+    # 美股主动组
+    "163813", "080006", "486002", "011420", "015204",   # 11-24 按限额日报补齐
+    "002891", "014002", "006555", "012922", "012920", "021662", "457001", "539002",
+    "018147", "021842", "006373", "018036", "501226", "008254", "008253", "017731",
+    "017730", "016665", "016664", "018230", "018229", "021277", "270023", "005698",
+    "024239", "501312", "017204", "017654", "017653", "022184", "100055", "017437",
+    "017436", "017145", "017144", "016702", "016701", "016823", "164212", "019156",
+    "019155", "016668", "501225", "015202", "001668", "000043", "007280", "019449",
+    "019454", "019455", "378006",
+    # 纳指被动组
+    "017091", "016055", "160213", "019172", "019441", "018043", "019547", "016532",
+    "040046", "161130", "016452", "270042", "019736", "000834", "019524", "015299",
+    "539001", "018966",
+    # 标普被动组
+    "161125", "007721", "017028", "050025", "018064", "096001", "017641", "018738",
+    "161128", "519981",
+    # CPO 组
+    "022365", "540010", "002112", "011892", "021528",
+    "009645", "011370", "011452", "016371", "001956",
+    "016234", "016173", "006616", "018291", "020661",
+    "017462", "001438", "008984", "180031", "004320", "027063",
+    # 存储芯片组
+    "025500", "025209", "018816", "014320",
+    # 半导体材料设备组
+    "024418", "024975", "020640", "019633", "024424",
+    "017811", "013841", "007491", "020629", "017747",
+    "026633", "162214", "007343", "018777",
+    # 人工智能组
+    "024663", "024726", "023286", "023408", "025506",
+    "025493", "025653", "005963", "014162", "011840",
+    "024412", "024775", "026613", "023551", "024561",
+    # 电网设备组
+    "025857", "023639", "023675", "019411", "167002",
+    "020425", "002164", "017133", "017042", "026681",
+    "016387", "025833", "011172", "001665", "018919",
+    # 机器人组
+    "016531", "018345", "020482", "018125", "007519",
+    "014243", "018957", "003835", "014939", "008998",
+    "004233", "008182", "017968", "024648"
+]
+
+US_ACTIVE_CODES = {
+    "002891", "014002", "006555", "012922", "012920", "021662", "457001", "539002",
+    "018147", "021842", "006373", "018036", "501226", "008254", "008253", "017731",
+    "017730", "016665", "016664", "018230", "018229", "021277", "270023", "005698",
+    "024239", "501312", "017204", "017654", "017653", "022184", "100055", "017437",
+    "017436", "017145", "017144", "016702", "016701", "016823", "164212", "019156",
+    "019155", "016668", "501225", "015202", "001668", "000043", "007280", "019449",
+    "019454", "019455", "378006",
+    "163813", "080006", "486002", "011420", "015204",   # 11-24 按限额日报补齐
+}
+
+NDX_PASSIVE_CODES = {
+    "017091", "016055", "160213", "019172", "019441", "018043", "019547", "016532",
+    "040046", "161130", "016452", "270042", "019736", "000834", "019524", "015299",
+    "539001", "018966"
+}
+
+SPX_PASSIVE_CODES = {
+    "161125", "007721", "017028", "050025", "018064", "096001", "017641", "018738",
+    "161128", "519981"
+}
+
+# 分级 C 份额到主代码/A 份额映射（补全新增的美股/标普/行业子份额映射）
+MAIN_CODE_MAP = {
+    "014002": "006555",
+    "012922": "012920",
+    "018230": "018229",
+    "017731": "017730",
+    "016665": "016664",
+    "017654": "017653",
+    "017145": "017144",
+    "016702": "016701",
+    "019156": "019155",
+    "019455": "019454",     # 华泰柏瑞中韩半导体ETF联接C → A(019454)
+    "018738": "050025",     # 博时标普500ETF联接E → A(050025)
+    "021662": "457001",
+    "018147": "539002",
+    "021842": "006373",     # 国富全球科技互联C → A(006373)
+}
+
+# 指数历年回报的完整目标清单（用于缓存完整性校验）
+ANNUAL_INDEX_TARGETS = ["纳指100", "标普500", "费城半导体指数", "沪深300", "科创50", "恒生科技"]
+
+CFTC_DASHBOARD_FILE = "web/cftc_dashboard.html"
+DUAL_DASHBOARD_FILE = "web/dual_final_dashboard.html"
+
+INDEX_NAMES = {
+    "NDX": "纳斯达克100指数",
+    "SPX": "标普500指数",
+    "SOX": "费城半导体指数",
+    "COMP": "纳斯达克综合指数",
+}
+
+# 【修改】原 PRECIOUS_METALS_NAMES 扩展为大宗商品（新增布伦特原油、COMEX 铜）
+COMMODITY_NAMES = {
+    "XAU": "伦敦金 (XAU)",
+    "AUM": "沪金主连 (AUM)",
+    "XAG": "伦敦银 (XAG)",
+    "BRENT": "布伦特原油 (BRENT)",
+    "CAD": "COMEX 铜 (HG)"
+}
+
+CRYPTO_NAMES = {
+    "BTC": "比特币 (BTC/USDT)",
+    "ETH": "以太坊 (ETH/USDT)",
+    "SOL": "索拉纳 (SOL/USDT)",
+    "BNB": "币安币 (BNB/USDT)"
+}
+
+SINA_US_INDEX_MAP = {
+    "NDX":  ".ndx",
+    "SPX":  ".inx",
+    "SOX":  ".sox",
+    "COMP": ".ixic",
+}
+
+# ==================== 美股ETF 配置（合并自 fetch_us_etfs_data.py） ====================
+SINA_US_ETF_MAP = {
+    "QQQ":  "QQQ",
+    "SPY":  "SPY",
+    "IVV":  "IVV",
+    "IVW":  "IVW",
+    "VOO":  "VOO",
+    "SMH":  "SMH",
+    "VGT":  "VGT",
+    "ARKW": "ARKW",
+    "DIA":  "DIA",
+    "XLK":  "xlk",
+    "SOXL": "soxl",
+    "SOXQ": "soxq",
+}
+
+US_ETF_NAMES = {
+    "QQQ":  "纳斯达克100 ETF-Invesco",
+    "SPY":  "标普500 ETF-SPDR",
+    "IVV":  "标普500 ETF-iShares",
+    "IVW":  "标普500成长型 ETF-iShares",
+    "VOO":  "标普500 ETF-Vanguard",
+    "SMH":  "半导体 ETF-VanEck",
+    "VGT":  "信息科技 ETF-Vanguard",
+    "ARKW": "下一代互联网 ETF-ARK",
+    "DIA":  "道琼斯指数 ETF-SPDR",
+    "XLK":  "科技行业 ETF-SPDR",
+    "SOXL": "三倍做多半导体 ETF-Direxion",
+    "SOXQ": "半导体行业 ETF-SPDR"
+}
+
+US_ETF_LOCAL = set(US_ETF_NAMES.keys())
+# ===================================================================================
+
+# 全历史时序数据的统一「最早起点」：能取到多早就取多早，取不到就落到标的的
+# 成立/上市日（例如沪深300 2005-04、科创50 2019-12、恒生科技 2020-07）。
+# 首页指数历年回报、年内最大回撤、宏观历史、基金净值都以它为准。
+HISTORY_START = "2000-01-01"
+HISTORY_START_YEAR = 2000
+
+
+def _year_of(value):
+    """把年份字段（"2008" / 2008 / "2008-12-31"）稳稳解析成 int，脏数据返回 0。"""
+    try:
+        return int(str(value).strip()[:4])
+    except (TypeError, ValueError):
+        return 0
+
+
+# --refresh-history 时置 True：忽略已有快照，重新抓全历史（仅调试/修数据时用）
+REFRESH_HISTORY = False
+
+CACHE_DIR = "cache"
+# 季报持仓缓存必须跨 CI 运行保留（/cache 在 .gitignore 里，CI 每次都是空目录），
+# 因此放到已提交的 data/ 下，配合「只在披露期刷新」避免每天全量重抓。
+HOLDINGS_CACHE_DIR = os.path.join("data", "holdings")
+# 基金全历史净值快照：历史部分只抓一次并入库（本地 + 远程），
+# 之后每次构建只补「上次最后一条 → 今天」的增量，把 300+ 页/只 的翻页降到 1~2 页。
+FUND_NAV_FULL_DIR = os.path.join("data", "fund_nav")
+# 资产配置（股票/债券/现金/其他）随季报更新，节奏和持仓一致，
+# 同样放 data/ 下跟着仓库走，CI 首次跑完后续几天就不必再发请求。
+ASSET_ALLOC_CACHE_DIR = os.path.join("data", "asset_alloc")
+NAV_CACHE_DIR = os.path.join(CACHE_DIR, "nav")
+HOLDER_CACHE_DIR = os.path.join(CACHE_DIR, "holder")
+COUNTRY_CACHE_DIR = os.path.join(CACHE_DIR, "country")
+FEE_CACHE_DIR = os.path.join(CACHE_DIR, "fees")
+
+# 费率 / 申购状态缓存的有效期（小时，可用环境变量覆盖）。
+# 费率、规模这类字段几个月才变一次，但「申购状态 + 单日限额」是按天甚至按小时变的：
+# 缓存如果没有时效，某只基金把限额从 10 元下调到 5 元后，页面上会一直显示旧值
+# （万家纳斯达克 019441 就是这么错了整整一个月）。过期后只补抓申购状态/限额，
+# 不重抓费率、持仓这些耗时又稳定的内容。
+META_CACHE_TTL_SECONDS = 12 * 3600
+try:
+    META_CACHE_TTL_SECONDS = max(0, int(float(os.environ.get("FUND_META_TTL_HOURS", "12")) * 3600))
+except Exception:
+    pass
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(HOLDINGS_CACHE_DIR, exist_ok=True)
+os.makedirs(FUND_NAV_FULL_DIR, exist_ok=True)
+os.makedirs(ASSET_ALLOC_CACHE_DIR, exist_ok=True)
+os.makedirs(NAV_CACHE_DIR, exist_ok=True)
+os.makedirs(HOLDER_CACHE_DIR, exist_ok=True)
+os.makedirs(COUNTRY_CACHE_DIR, exist_ok=True)
+os.makedirs(FEE_CACHE_DIR, exist_ok=True)
+
+_THREAD_LOCAL = threading.local()
+
+# ==============================================================================
+# F10 专用：线程级 Session + 全局限速器 + 重试/514 退避 + 本地缓存
+# ==============================================================================
+import threading as _threading
+
+# --- 1. 线程级 Session（连接池复用） ---
+def _get_f10_session():
+    if not hasattr(_THREAD_LOCAL, "f10_session"):
+        _s = requests.Session()
+        _adapter = HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=0,
+            pool_block=False,
+        )
+        _s.mount("https://", _adapter)
+        _s.mount("http://", _adapter)
+        _s.trust_env = False
+        _THREAD_LOCAL.f10_session = _s
+    return _THREAD_LOCAL.f10_session
+
+
+# --- 2. 全局令牌桶限速器（所有线程共享） ---
+class _RateLimiter:
+    """控制每秒最多发出 rate 个请求，允许 burst 个瞬时突发。"""
+    def __init__(self, rate=1.2, burst=2):
+        self.rate = rate
+        self.capacity = burst
+        self.tokens = float(burst)
+        self.lock = _threading.Lock()
+        self.last = time.monotonic()
+
+    def acquire(self, timeout=60):
+        deadline = time.monotonic() + timeout
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                self.tokens = min(
+                    self.capacity,
+                    self.tokens + (now - self.last) * self.rate,
+                )
+                self.last = now
+                if self.tokens >= 1:
+                    self.tokens -= 1
+                    return True
+                wait = (1 - self.tokens) / self.rate
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(min(wait, 0.8))
+
+
+_F10_LIMITER = _RateLimiter(rate=1.2, burst=2)
+# 季报持仓接口单独限速：批量拉取 160+ 只基金时，1.2/s 太慢，4/s 实测不触发 514。
+_HOLDINGS_LIMITER = _RateLimiter(rate=3.0, burst=3)
+# ★ 已取消 F10 HTML 本地缓存：不再创建 cache/f10 目录，也不再写盘
+# F10 费率页异常计数：只报前几次 + 结束时汇总一次，避免刷屏
+_F10_ERR = {"n": 0}
+
+
+# --- 3. 底层抓取：限速 + 514 专属退避 + 普通重试 ---
+def _fetch_f10_html(url, max_retries=4, timeout=15):
+    sess = _get_f10_session()
+    headers = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": url,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Connection": "keep-alive",
+    }
+
+    last_exc = None
+    for attempt in range(max_retries):
+        # 发请求前先拿令牌（全局共享）
+        if not _F10_LIMITER.acquire(timeout=60):
+            raise TimeoutError(f"限速器等待超时: {url}")
+
+        try:
+            r = sess.get(url, headers=headers, timeout=timeout)
+
+            # 514：频率限制，走长退避，不 raise
+            if r.status_code == 514:
+                last_exc = requests.HTTPError(f"514 Frequency Capped: {url}")
+                backoff = [5, 12, 25, 45][min(attempt, 3)]
+                time.sleep(backoff + random.random() * 2)
+                continue
+
+            r.raise_for_status()
+            return r.text
+
+        except requests.HTTPError as e:
+            last_exc = e
+            time.sleep(1.5 * (attempt + 1) + random.random())
+        except Exception as e:
+            last_exc = e
+            time.sleep(1.0 * (attempt + 1) + random.random() * 0.5)
+
+    raise last_exc
+
+# --- 4. 直接网络抓取（已取消本地 HTML 缓存，不落盘） ---
+def _fetch_f10_html_cached(code, url):
+    """保留函数名与签名以兼容旧调用；内部不再读写任何磁盘文件。"""
+    return _fetch_f10_html(url)
+
+# ================= requests.Session 包装器：复用连接，兼容 urllib 风格 =================
+class _RespWrapper:
+    """把 requests.Response 包装成 urllib 风格的响应对象。"""
+    def __init__(self, resp):
+        self._r = resp
+    def read(self, amt=None):
+        return self._r.content if amt is None else self._r.raw.read(amt)
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        pass
+    def __getattr__(self, name):
+        return getattr(self._r, name)
+
+
+class RequestsOpener:
+    """urllib opener 的 requests 版替代品，复用连接池，大幅降低 TLS 握手开销。"""
+    def __init__(self):
+        self.session = requests.Session()
+        adapter = HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=0,
+            pool_block=False,
+        )
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        # 强制不使用环境代理
+        self.session.trust_env = False
+
+    def open(self, req, timeout=5, **kwargs):
+        url = req.full_url if hasattr(req, "full_url") else req
+        headers = dict(req.headers) if hasattr(req, "headers") else {}
+        r = self.session.get(url, headers=headers, timeout=timeout, stream=False)
+        return _RespWrapper(r)
+
+
+def get_thread_opener():
+    if not hasattr(_THREAD_LOCAL, "opener"):
+        _THREAD_LOCAL.opener = get_direct_opener()
+    return _THREAD_LOCAL.opener
+
+def get_direct_opener():
+    return RequestsOpener()
+# =======================================================================================
+
+# ==============================================================================
+# 蛋卷指数估值获取模块 (融合 Guchacha 兜底引擎)
+# ==============================================================================
+TARGET_INDICES = ["纳指100", "标普500", "沪深300", "科创50", "恒生科技"]
+
+NAME_MAP = {
+    "纳指100": ["纳斯达克100", "纳斯达克", "纳指100"],
+    "标普500": ["标普500", "S&P500", "S&P 500"],
+    "沪深300": ["沪深300"],
+    "科创50": ["科创50"],
+    "恒生科技": ["恒生科技", "恒生科技指数"]
+}
+
+TICKER_MAP = {
+    "纳指100": "NDX",
+    "标普500": "SPX",
+    "沪深300": "000300",
+    "科创50": "000688",
+    "恒生科技": "HSTECH"
+}
+
+def _resolve_month_day(raw, today=None):
+    """把蛋卷返回的 "11-19" 还原成 "2026-11-19"。
+
+    蛋卷的 date 字段只给月-日，跨年时（1 月初返回 12-31）要回退一年。
+    """
+    match = re.match(r"^(\d{1,2})-(\d{1,2})$", str(raw or "").strip())
+    if not match:
+        return ""
+    today = today or now_beijing().date()
+    month, day = int(match.group(1)), int(match.group(2))
+    for year in (today.year, today.year - 1):
+        try:
+            candidate = datetime(year, month, day).date()
+        except ValueError:
+            return ""
+        if candidate <= today:
+            return candidate.strftime("%Y-%m-%d")
+    return ""
+
+
+def fetch_index_valuations(opener):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://danjuanfunds.com/djapi/v3/filter/fund"
+    }
+
+    try:
+        init_req = urllib.request.Request("https://xueqiu.com", headers=headers)
+        opener.open(init_req, timeout=5)
+    except Exception:
+        pass
+
+    api_url = "https://danjuanfunds.com/djapi/index_eva/dj"
+    req = urllib.request.Request(api_url, headers=headers)
+    items = []
+    try:
+        with opener.open(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("result_code") == 0:
+                items = data.get("data", {}).get("items", [])
+    except Exception:
+        pass
+
+    eva_dict = {}
+    for item in items:
+        eva_dict[item.get("name", "").strip()] = item
+
+    guchacha_html = ""
+    try:
+        req_g = urllib.request.Request("https://guchacha.com/index-valuation", headers={"User-Agent": headers["User-Agent"]})
+        with opener.open(req_g, timeout=5) as resp:
+            guchacha_html = resp.read().decode("utf-8", errors="ignore")
+    except Exception:
+        pass
+
+    results = []
+    for target in TARGET_INDICES:
+        matched = None
+        aliases = NAME_MAP.get(target, [target])
+
+        for alias in aliases:
+            for k, v in eva_dict.items():
+                if alias in k:
+                    matched = v
+                    break
+            if matched:
+                break
+
+        if not matched and guchacha_html:
+            for alias in aliases:
+                for row in re.findall(r'<tr[^>]*>.*?</tr>', guchacha_html, re.S):
+                    if alias in row:
+                        tds = re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)
+                        clean_tds = [re.sub(r'<[^>]+>', '', td).strip() for td in tds]
+
+                        pe_val = None
+                        pct_val = None
+
+                        for t in clean_tds:
+                            if '%' in t:
+                                if pct_val is None:
+                                    try:
+                                        pct_val = float(t.replace('%', '')) / 100.0
+                                    except ValueError:
+                                        pass
+                            else:
+                                if pe_val is None:
+                                    try:
+                                        pe_val = float(t)
+                                    except ValueError:
+                                        pass
+
+                        if pe_val is not None and pct_val is not None:
+                            matched = {
+                                'pe': pe_val,
+                                'pe_percentile': pct_val
+                            }
+                            break
+                if matched: break
+
+        ticker = TICKER_MAP.get(target, "")
+
+        if matched:
+            pe = matched.get('pe')
+            pct = matched.get("pe_percentile")
+            pe_val = f"{pe:.2f}" if pe else "--"
+            pct_val = f"{pct * 100:.2f}%" if pct is not None else "--"
+            pct_raw = pct * 100 if pct is not None else 0
+
+            if pct is None:
+                status, color = "⚪ 暂无数据", "#70757a"
+            else:
+                p = pct * 100
+                if p <= 20: status, color = "🟢 极度低估", "#188038"
+                elif p <= 40: status, color = "🌱 低估", "#34a853"
+                elif p <= 60: status, color = "🟡 适中", "#fbbc04"
+                elif p <= 80: status, color = "🟠 偏高", "#e67e22"
+                else: status, color = "🔴 高估", "#d93025"
+
+            results.append({
+                "name": target, "ticker": ticker, "pe": pe_val, "pct": pct_val, "pct_raw": pct_raw,
+                "status": status, "color": color,
+                "date": _resolve_month_day(matched.get("date")),
+            })
+        else:
+            results.append({
+                "name": target, "ticker": ticker, "pe": "--", "pct": "--", "pct_raw": 0,
+                "status": "⚪ 暂无数据", "color": "#70757a", "date": "",
+            })
+
+    return results
+
+def fetch_sina_us_kline(symbol_code, start_date_str="2000-01-01"):
+    """通过新浪美股日 K 线接口抓取历史数据（合并自 get_meiguzhishu.py 实测稳定版）。
+
+    ★ 关键修复（相对旧实现）：
+       1) 去掉 URL 中的 &___qn=3 参数 —— 加了这个参数反而只返回近期数据；
+       2) 显式使用无代理的干净 opener，避免环境代理干扰；
+       3) 起始日期默认改为 2000-01-01，一次性拉完整历史用于计算年度收益率。
+    """
+    callback_name = "US_KLINE_CB"
+    url = (
+        f"https://stock.finance.sina.com.cn/usstock/api/jsonp.php/{callback_name}"
+        f"/US_MinKService.getDailyK?symbol={urllib.parse.quote(symbol_code)}"
+    )
+    headers = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": "https://finance.sina.com.cn/",
+        "Accept": "*/*"
+    }
+    req = urllib.request.Request(url, headers=headers)
+    records = []
+    try:
+        _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with _opener.open(req, timeout=15) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'\((\[.*\])\)', content)
+            if not match:
+                return records
+            raw_list = json.loads(match.group(1))
+            for item in raw_list:
+                d_str = item.get("d")
+                if d_str and d_str >= start_date_str:
+                    try:
+                        nav = float(item.get("c", 0.0))
+                        if nav > 0:
+                            records.append({"date": d_str, "nav": nav})
+                    except (ValueError, TypeError):
+                        continue
+    except Exception:
+        pass
+    records.sort(key=lambda x: x["date"])
+    return records
+
+# ==============================================================================
+# 【保留】2000年后主要指数年度收益率及收盘点位获取模块（仅数据抓取，不再用于页面展示）
+# ==============================================================================
+def fetch_index_annual_data(force=False):
+    """获取 2000 年以来主要指数年度收益率和年末收盘点位。
+
+    数据源方案（与 zhishuniandushouyi.py 保持一致）：
+    - 纳指100 / 标普500：historyofmarket.com JSON API -> 新浪美股兜底
+    - 沪深300 / 科创50：搜狐财经历史行情 API
+    - 恒生科技：腾讯财经港股 K 线 -> 东方财富 -> 天天基金 513180 净值
+
+    缓存策略（只抓一次，入库）：
+    - 快照文件：data/index_annual.json（data/ 会随仓库提交，本地与 CI 共用）
+    - 历史年份不会变，只有「当年那一行」每天在动，所以同一自然日内
+      第二次及以后的构建直接读快照、不发任何请求；跨天才刷新一次（6 只指数，约 2s）。
+    - 需要强制重抓时用 `python main.py --refresh-history`。
+    """
+    # ===== 1. 优先读取本地快照（带完整性校验） =====
+    cache_file = os.path.join("data", "index_annual.json")
+    cached = None
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            if not (isinstance(cached, dict) and cached):
+                cached = None
+        except Exception as e:
+            print(f"📅 读取缓存 {cache_file} 失败: {e}，将重新抓取...")
+            cached = None
+
+    # 说明：快照里的 `_meta.generated_at` 才是「抓取时间」。
+    # 不能用文件 mtime —— CI 每次 checkout 都会把 mtime 刷成当天，
+    # 那样会永远判定「今天已抓过」，当年那一行就再也不更新了。
+    meta = (cached or {}).get("_meta") or {}
+    cached_day = str(meta.get("generated_at") or "")[:10]
+
+    if cached:
+        missing = set(ANNUAL_INDEX_TARGETS) - set(cached.keys())
+        if missing:
+            print(f"📅 缓存 {cache_file} 缺少以下指数，将重新抓取: {sorted(missing)}")
+        elif cached_day == now_beijing().strftime("%Y-%m-%d") and not force:
+            print(f"📅 命中当日快照 {cache_file}（{cached_day} 已抓取过），跳过网络请求")
+            print(f"📊 指数年度数据最终获取成功: {len([k for k in cached if k != '_meta'])}/{len(ANNUAL_INDEX_TARGETS)} （来源：本地快照）")
+            return cached
+        else:
+            print(f"📅 快照 {cache_file} 生成于 {cached_day or '未知'}，今日需刷新「当年」一行（6 只指数，约 2s）")
+
+    print("📅 正在获取指数年度数据 (2000年至今)...")
+    result = {}
+
+    # 创建一个无代理的 opener
+    _opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    # ---------- 数据获取函数（从 zhishuniandushouyi.py 移植） ----------
+    def _fetch_historyofmarket_robust(url):
+        records = []
+        req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+        try:
+            with _opener.open(req, timeout=15) as resp:
+                content = resp.read().decode("utf-8")
+                raw = json.loads(content)
+
+            raw_list = []
+            if isinstance(raw, list):
+                raw_list = raw
+            elif isinstance(raw, dict):
+                for k in ["points", "data", "history", "prices", "values", "series"]:
+                    if k in raw and isinstance(raw[k], list):
+                        raw_list = raw[k]
+                        break
+
+            for item in raw_list:
+                if isinstance(item, dict):
+                    d = item.get("date") or item.get("d") or item.get("time") or item.get("x")
+                    c = item.get("close") or item.get("c") or item.get("val") or item.get("y") or item.get("value")
+                    if d and c is not None:
+                        records.append({"date": str(d)[:10], "close": float(c)})
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    d_val, c_val = item[0], item[1]
+                    if isinstance(d_val, (int, float)) and d_val > 100000000:
+                        d_str = datetime.fromtimestamp(d_val / 1000 if d_val > 1e11 else d_val).strftime("%Y-%m-%d")
+                    else:
+                        d_str = str(d_val)[:10]
+                    records.append({"date": d_str, "close": float(c_val)})
+        except Exception:
+            pass
+        records.sort(key=lambda x: x["date"])
+        return records
+
+    def _fetch_sina_us(symbol):
+        url = f"https://stock.finance.sina.com.cn/usstock/api/jsonp.php/IO.XSRF.K/US_MinKService.getDailyK?symbol={symbol}&_={int(time.time()*1000)}"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        records = []
+        try:
+            with _opener.open(req, timeout=10) as resp:
+                text = resp.read().decode("gbk", errors="ignore")
+                l_idx, r_idx = text.find("("), text.rfind(")")
+                if l_idx != -1 and r_idx != -1:
+                    data = json.loads(text[l_idx + 1:r_idx])
+                    for item in data:
+                        records.append({
+                            "date": item["d"],
+                            "open": float(item["o"]),
+                            "close": float(item["c"])
+                        })
+        except Exception:
+            pass
+        records.sort(key=lambda x: x["date"])
+        return records
+
+    def _fetch_sohu_index(zs_code, start_date="19991201"):
+        end_date = datetime.now().strftime("%Y%m%d")
+        url = f"https://q.stock.sohu.com/hisHq?code={zs_code}&start={start_date}&end={end_date}&stat=1&order=D&period=d"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://q.stock.sohu.com/"})
+        records = []
+        try:
+            with _opener.open(req, timeout=12) as resp:
+                content = resp.read().decode("gbk", errors="ignore")
+                data = json.loads(content)
+                if isinstance(data, list) and len(data) > 0:
+                    hq = data[0].get("hq", [])
+                    for bar in hq:
+                        if len(bar) >= 3:
+                            records.append({
+                                "date": bar[0],
+                                "open": float(bar[1]),
+                                "close": float(bar[2])
+                            })
+        except Exception:
+            pass
+        records.sort(key=lambda x: x["date"])
+        return records
+
+    def _fetch_hstech_final():
+        records = []
+        # 方案 A: 腾讯财经港股日 K 线
+        try:
+            url_tx = "https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get?param=hkHSTECH,day,,,2000,qfq"
+            req_tx = urllib.request.Request(url_tx, headers={**DEFAULT_HEADERS, "Referer": "https://gu.qq.com/"})
+            with _opener.open(req_tx, timeout=8) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                data_node = res.get("data", {}).get("hkHSTECH", {})
+                kline_list = data_node.get("day") or data_node.get("qfqday", [])
+                for k in kline_list:
+                    if len(k) >= 3:
+                        records.append({"date": k[0], "open": float(k[1]), "close": float(k[2])})
+            if records:
+                records.sort(key=lambda x: x["date"])
+                return records
+        except Exception:
+            pass
+
+        # 方案 B: 东方财富移动端行情接口
+        try:
+            url_em = "https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=100.HSTECH&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53&klt=101&fqt=1&end=20500101&lmt=2000"
+            req_em = urllib.request.Request(url_em, headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+                "Referer": "https://quote.eastmoney.com/"
+            })
+            with _opener.open(req_em, timeout=8) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+                lines = raw.get("data", {}).get("klines", [])
+                for line in lines:
+                    parts = line.split(",")
+                    records.append({"date": parts[0], "open": float(parts[1]), "close": float(parts[2])})
+            if records:
+                records.sort(key=lambda x: x["date"])
+                return records
+        except Exception:
+            pass
+
+        # 方案 C: 天天基金 513180 历史净值
+        try:
+            url_fund = "https://api.fund.eastmoney.com/f10/lsjz?fundCode=513180&pageIndex=1&pageSize=2000&startDate=2020-01-01&endDate=2030-01-01"
+            headers_fund = {
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
+                "Referer": "https://fundf10.eastmoney.com/jjjz_513180.html"
+            }
+            req_fund = urllib.request.Request(url_fund, headers=headers_fund)
+            with _opener.open(req_fund, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                lsjz = data.get("Data", {}).get("LSJZList", [])
+                for item in lsjz:
+                    nav = item.get("LJJZ") or item.get("DWJZ")
+                    if nav:
+                        records.append({"date": item["FSRQ"], "open": float(nav), "close": float(nav)})
+            if records:
+                records.sort(key=lambda x: x["date"])
+                return records
+        except Exception:
+            pass
+
+        return records
+
+    def _fetch_kc50_final():
+        """抓取科创50指数（000688）历史日线。多源兜底：
+        1) 腾讯财经港股/沪市通用 K 线接口
+        2) 东方财富 push2his 接口
+        3) 新浪财经 K 线接口
+        """
+        records = []
+
+        # ---------- 方案 A：腾讯财经 ----------
+        try:
+            url_tx = (
+                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
+                "?param=sh000688,day,,,2000,qfq"
+            )
+            req_tx = urllib.request.Request(
+                url_tx,
+                headers={**DEFAULT_HEADERS, "Referer": "https://gu.qq.com/"}
+            )
+            with _opener.open(req_tx, timeout=8) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                data_node = res.get("data", {}).get("sh000688", {})
+                kline_list = data_node.get("day") or data_node.get("qfqday", [])
+                for k in kline_list:
+                    if len(k) >= 3:
+                        records.append({
+                            "date": k[0],
+                            "open": float(k[1]),
+                            "close": float(k[2])
+                        })
+            if records:
+                records.sort(key=lambda x: x["date"])
+                print(f"    ✅ 科创50: 腾讯财经 {len(records)} 条")
+                return records
+        except Exception as e:
+            print(f"    ⚠️ 科创50 腾讯财经异常: {e}")
+
+        # ---------- 方案 B：东方财富 push2his ----------
+        records = []
+        try:
+            url_em = (
+                "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+                "?secid=1.000688"
+                "&fields1=f1,f2,f3,f4,f5,f6"
+                "&fields2=f51,f52,f53,f54,f55,f56"
+                "&klt=101&fqt=1&end=20500101&lmt=2000"
+            )
+            req_em = urllib.request.Request(url_em, headers={
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)",
+                "Referer": "https://quote.eastmoney.com/"
+            })
+            with _opener.open(req_em, timeout=8) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+                lines = (raw.get("data") or {}).get("klines", [])
+                for line in lines:
+                    parts = line.split(",")
+                    if len(parts) >= 3:
+                        records.append({
+                            "date": parts[0],
+                            "open": float(parts[1]),
+                            "close": float(parts[2])
+                        })
+            if records:
+                records.sort(key=lambda x: x["date"])
+                print(f"    ✅ 科创50: 东方财富 {len(records)} 条")
+                return records
+        except Exception as e:
+            print(f"    ⚠️ 科创50 东方财富异常: {e}")
+
+        # ---------- 方案 C：新浪财经 ----------
+        records = []
+        try:
+            url_sina = (
+                "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+                "CN_MarketData.getKLineData?symbol=sh000688&scale=240&ma=no&datalen=2000"
+            )
+            req_sina = urllib.request.Request(
+                url_sina,
+                headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"}
+            )
+            with _opener.open(req_sina, timeout=8) as resp:
+                raw = resp.read().decode("utf-8", errors="ignore")
+                data = json.loads(raw)
+                for item in data:
+                    records.append({
+                        "date": item["day"],
+                        "open": float(item["open"]),
+                        "close": float(item["close"])
+                    })
+            if records:
+                records.sort(key=lambda x: x["date"])
+                print(f"    ✅ 科创50: 新浪财经 {len(records)} 条")
+                return records
+        except Exception as e:
+            print(f"    ⚠️ 科创50 新浪财经异常: {e}")
+
+        return []
+
+    def _fetch_sox_annual_returns():
+        """从 historyofmarket.com 获取费城半导体指数(SOX)历年回报。
+
+        该接口直接返回年度回报率（百分比），无需二次计算。
+        返回格式：[{'year': int, 'close': None, 'pct': float}, ...]
+        """
+        url = "https://historyofmarket.com/api/semi/annual-returns.json"
+        req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+        try:
+            with _opener.open(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            series = data.get("series", [])
+            yearly_data = []
+            for item in series:
+                year = item.get("year")
+                pct = item.get("value")
+                if year and pct is not None:
+                    yearly_data.append({
+                        "year": int(year),
+                        "close": None,          # 接口未提供年末收盘点位
+                        "pct": round(float(pct), 2)
+                    })
+            yearly_data.sort(key=lambda x: x["year"])
+            return yearly_data
+        except Exception:
+            return []
+
+    def _calculate_annual_metrics(records, start_year=2000):
+        """计算年度收益率与年末收盘点位"""
+        if not records:
+            return []
+
+        from collections import defaultdict
+        year_map = defaultdict(list)
+        for r in records:
+            yr = r["date"].split("-")[0]
+            try:
+                if int(yr) >= (start_year - 1):
+                    year_map[yr].append(r)
+            except ValueError:
+                continue
+
+        all_years = sorted(year_map.keys())
+        results = []
+        prev_year_close = None
+
+        for yr in all_years:
+            yr_bars = year_map[yr]
+            first_bar = yr_bars[0]
+            last_bar = yr_bars[-1]
+            end_point = last_bar["close"]
+
+            if int(yr) >= start_year:
+                base_point = prev_year_close if prev_year_close is not None else first_bar.get("open", first_bar["close"])
+                annual_return = ((end_point - base_point) / base_point) * 100.0 if base_point > 0 else 0.0
+
+                results.append({
+                    "year": yr,
+                    "end_date": last_bar["date"],
+                    "end_point": end_point,
+                    "annual_return": annual_return,
+                    "is_launch_year": (prev_year_close is None)
+                })
+
+            prev_year_close = end_point
+
+        return results
+
+    # ---------- 配置目标指数 ----------
+    targets = [
+        {
+            "name": "纳指100", "ticker": "NDX",
+            "fetcher": lambda: _fetch_historyofmarket_robust("https://historyofmarket.com/api/nasdaq/composite.json") or _fetch_sina_us(".NDX")
+        },
+        {
+            "name": "标普500", "ticker": "SPX",
+            "fetcher": lambda: _fetch_historyofmarket_robust("https://historyofmarket.com/api/sp500/century.json") or _fetch_sina_us(".INX")
+        },
+        {
+            "name": "费城半导体指数", "ticker": "SOX",
+            "fetcher": lambda: _fetch_sox_annual_returns(),
+            "precomputed": True,          # 标记：返回值已是 yearly_data，无需再计算
+        },
+        {
+            "name": "沪深300", "ticker": "000300",
+            "fetcher": lambda: _fetch_sohu_index("zs_000300")
+        },
+        {
+            "name": "科创50", "ticker": "000688",
+            "fetcher": lambda: _fetch_kc50_final()
+        },
+        {
+            "name": "恒生科技", "ticker": "HSTECH",
+            "fetcher": lambda: _fetch_hstech_final()
+        }
+    ]
+
+    # ---------- 并行获取并计算年度数据 ----------
+    def _fetch_one_target(item):
+        name = item["name"]
+        try:
+            records = item["fetcher"]()
+            if not records:
+                return name, None
+            if item.get("precomputed"):
+                yearly_data = records
+            else:
+                stats = _calculate_annual_metrics(records, start_year=2000)
+                if not stats:
+                    return name, None
+                yearly_data = [
+                    {"year": int(row["year"]),
+                     "close": round(row["end_point"], 2),
+                     "pct":   round(row["annual_return"], 2)}
+                    for row in stats
+                ]
+            if not yearly_data:
+                return name, None
+            # 统一口径：2000 年起（2000 年前成立的指数裁到 2000，之后成立的自然从成立当年起）
+            yearly_data = [r for r in yearly_data if _year_of(r.get("year")) >= HISTORY_START_YEAR]
+            if not yearly_data:
+                return name, None
+            return name, {"ticker": item["ticker"], "data": yearly_data}
+        except Exception as e:
+            print(f"    ❌ {name} 异常: {e}")
+            return name, None
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = [executor.submit(_fetch_one_target, item) for item in targets]
+        for fut in as_completed(futures):
+            name, payload = fut.result()
+            if payload:
+                result[name] = payload
+                print(f"    ✅ {name}: {len(payload['data'])} 个年度")
+
+    print(f"📊 指数年度数据最终获取成功: {len(result)}/{len(ANNUAL_INDEX_TARGETS)}")
+
+    # ===== 2. 本轮个别指数抓取失败时，用旧快照补齐（历史年份不丢） =====
+    if cached:
+        for name, payload in cached.items():
+            if name == "_meta":
+                continue
+            result.setdefault(name, payload)
+
+    # ===== 3. 写回快照（data/index_annual.json 随仓库提交） =====
+    if result:
+        result["_meta"] = {"generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S")}
+        try:
+            tmp = cache_file + ".tmp"
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            os.replace(tmp, cache_file)
+            print(f"💾 已写入指数年度快照: {cache_file}")
+        except Exception as e:
+            print(f"⚠️ 写入快照失败: {e}")
+
+    return result
+
+# ==============================================================================
+# 多源宏观指标获取模块
+# ==============================================================================
+def fetch_from_yahoo_finance(opener, symbol: str, timeout: int = 4) -> float:
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?interval=1d&range=5d"
+    req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+    with opener.open(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        result = data.get("chart", {}).get("result", [{}])[0]
+        price = result.get("meta", {}).get("regularMarketPrice")
+        if price is None:
+            closes = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+            valid_closes = [c for c in closes if c is not None]
+            if valid_closes:
+                price = valid_closes[-1]
+        if price is not None:
+            return round(float(price), 2)
+    return 0.0
+
+def fetch_from_cboe_quote(opener, symbol: str, timeout: int = 5) -> float:
+    url = f"https://cdn.cboe.com/api/global/delayed_quotes/quotes/{symbol}.json"
+    req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+    with opener.open(req, timeout=timeout) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        quote_data = data.get("data", {})
+        price = quote_data.get("last_trade_price") or quote_data.get("current_price") or quote_data.get("close")
+        if price is not None:
+            return round(float(price), 2)
+    return 0.0
+
+def get_vix(opener) -> tuple[float, str, str]:
+    try:
+        val = fetch_from_yahoo_finance(opener, "^VIX")
+        if val > 0:
+            return val, "Yahoo Finance (^VIX)", "https://finance.yahoo.com/quote/%5EVIX/"
+    except Exception: pass
+
+    try:
+        val = fetch_from_cboe_quote(opener, "_VIX")
+        if val > 0:
+            return val, "CBOE 官方 (_VIX)", "https://www.cboe.com/us/indices/dashboard/vix/"
+    except Exception: pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=gb_$vix"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 1 and float(parts[1]) > 0:
+                    return round(float(parts[1]), 2), "新浪财经 (gb_$vix)", "https://stock.finance.sina.com.cn/usstock/quotes/$VIX.html"
+    except Exception: pass
+    return 0.0, "获取失败", "https://cn.investing.com/indices/volatility-s-p-500"
+
+def _fng_rating_from_score(score):
+    """按卡片上的五档刻度把分数翻成文字评级（与展开图的背景分段一致）。"""
+    try:
+        score = float(score)
+    except (TypeError, ValueError):
+        return "暂无数据"
+    if score <= 25:
+        return "极度恐惧"
+    if score < 45:
+        return "恐惧"
+    if score <= 55:
+        return "中性观望"
+    if score < 75:
+        return "贪婪"
+    return "极度贪婪"
+
+
+def get_cnn_fear_greed(opener) -> tuple[float, str, str, str]:
+    """获取 CNN 恐慌贪婪指数：仅从 CNN 官方获取"""
+    cnn_page_url = "https://edition.cnn.com/markets/fear-and-greed"
+    cls_map = {
+        "extreme fear": "极度恐惧", "fear": "恐惧",
+        "neutral": "中性观望", "greed": "贪婪", "extreme greed": "极度贪婪"
+    }
+
+    api_url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+    headers_api = {
+        **DEFAULT_HEADERS,
+        "Referer": cnn_page_url,
+        "Origin": "https://edition.cnn.com",
+        "Accept": "application/json, text/plain, */*"
+    }
+    try:
+        req = urllib.request.Request(api_url, headers=headers_api)
+        with opener.open(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            fg = data.get("fear_and_greed", {})
+            score = fg.get("score")
+            raw_cls = str(fg.get("rating", "neutral")).lower().strip()
+            if score is not None:
+                rating = cls_map.get(raw_cls, raw_cls.capitalize())
+                return (
+                    round(float(score), 1),
+                    rating,
+                    "CNN 官方",
+                    cnn_page_url
+                )
+    except Exception:
+        pass
+
+    headers_web = {
+        **DEFAULT_HEADERS,
+        "Referer": "https://edition.cnn.com/",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+    try:
+        req_web = urllib.request.Request(cnn_page_url, headers=headers_web)
+        with opener.open(req_web, timeout=5) as resp:
+            html_text = resp.read().decode("utf-8", errors="ignore")
+
+        score_match = re.search(r'"score"\s*:\s*([0-9]+(?:\.[0-9]+)?)', html_text)
+        rating_match = re.search(r'"rating"\s*:\s*"([^"]+)"', html_text)
+
+        if score_match:
+            score = round(float(score_match.group(1)), 1)
+            raw_cls = rating_match.group(1).lower().strip() if rating_match else "neutral"
+            rating = cls_map.get(raw_cls, raw_cls.capitalize())
+            return (
+                score,
+                rating,
+                "CNN 官方",
+                cnn_page_url
+            )
+    except Exception:
+        pass
+
+    return (
+        0.0,
+        "暂无数据",
+        "获取失败",
+        cnn_page_url
+    )
+
+def get_usd_cny(opener) -> tuple[float, str, str]:
+    try:
+        url = "https://hq.sinajs.cn/list=fx_susdcny"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=3) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                for idx in [1, 8]:
+                    if len(parts) > idx and float(parts[idx]) > 0:
+                        return round(float(parts[idx]), 4), "新浪外汇 (实时)", "https://finance.sina.com.cn/money/forex/hq/USDCNY.shtml"
+    except Exception: pass
+
+    try:
+        url = "https://open.er-api.com/v6/latest/USD"
+        req = urllib.request.Request(url, headers=DEFAULT_HEADERS)
+        with opener.open(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            rate = data.get("rates", {}).get("CNY")
+            if rate is not None and float(rate) > 0:
+                return round(float(rate), 4), "Open Exchange API", "https://open.er-api.com/"
+    except Exception: pass
+
+    try:
+        val = fetch_from_yahoo_finance(opener, "USDCNY=X")
+        if val > 0:
+            return round(val, 4), "Yahoo Finance (USDCNY=X)", "https://finance.yahoo.com/quote/USDCNY=X/"
+    except Exception: pass
+    return 0.0, "获取失败", "https://cn.investing.com/currencies/usd-cny"
+
+def get_vxn(opener) -> tuple[float, str, str]:
+    try:
+        val = fetch_from_yahoo_finance(opener, "^VXN")
+        if val > 0:
+            return val, "Yahoo Finance (^VXN)", "https://finance.yahoo.com/quote/%5EVXN/"
+    except Exception: pass
+
+    try:
+        val = fetch_from_cboe_quote(opener, "_VXN")
+        if val > 0:
+            return val, "CBOE 官方 (_VXN)", "https://www.cboe.com/us/indices/dashboard/vxn/"
+    except Exception: pass
+    return 0.0, "获取失败", "https://cn.investing.com/indices/cboe-nasdaq-100-voltility"
+
+def get_skew(opener) -> tuple[float, str, str]:
+    try:
+        val = fetch_from_yahoo_finance(opener, "^SKEW")
+        if val > 0:
+            return val, "Yahoo Finance (^SKEW)", "https://finance.yahoo.com/quote/SKEW/"
+    except Exception: pass
+
+    # CBOE 日线历史 CSV 的末尾就是最新 SKEW，避开需要额外 cookie 的实时报价接口。
+    try:
+        points = fetch_cboe_macro_history("SKEW", (now_beijing() - timedelta(days=14)).strftime("%Y-%m-%d"))
+        if points:
+            return points[-1][1], "CBOE 官方 (SKEW)", "https://www.cboe.com/us/indices/dashboard/SKEW/"
+    except Exception: pass
+
+    try:
+        val = fetch_from_cboe_quote(opener, "_SKEW")
+        if val > 0:
+            return val, "CBOE 官方 (_SKEW)", "https://www.cboe.com/us/indices/dashboard/SKEW/"
+    except Exception: pass
+    return 0.0, "获取失败", "https://sc.macromicro.me/series/4407/cboe-skew"
+
+def get_vxsmh(opener) -> tuple[float, str, str]:
+    """Cboe 半导体 ETF 波动率指数（基于 VanEck Semiconductor ETF / SMH）。
+
+    该指数 2025-09 才发布，历史序列较短；CBOE 没有提供对应的实时报价接口，
+    只能从日线 CSV 末尾取最新收盘价。
+    """
+    try:
+        points = fetch_cboe_macro_history("VXSMH", (now_beijing() - timedelta(days=20)).strftime("%Y-%m-%d"))
+        if points:
+            return points[-1][1], "CBOE 官方 (VXSMH)", "https://www.cboe.com/us/indices/dashboard/vxsmh/"
+    except Exception: pass
+
+    try:
+        val = fetch_from_cboe_quote(opener, "_VXSMH")
+        if val > 0:
+            return val, "CBOE 官方 (_VXSMH)", "https://www.cboe.com/us/indices/dashboard/vxsmh/"
+    except Exception: pass
+    return 0.0, "获取失败", "https://www.cboe.com/us/indices/dashboard/vxsmh/"
+
+def get_brent_oil(opener) -> tuple[float, str, str]:
+    """获取布伦特原油连续价格"""
+    try:
+        val = fetch_from_yahoo_finance(opener, "BZ=F")
+        if val > 0:
+            return val, "Yahoo Finance (BZ=F)", "https://finance.yahoo.com/quote/BZ%3DF/"
+    except Exception: pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=hf_OIL"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 0 and float(parts[0]) > 0:
+                    return round(float(parts[0]), 2), "新浪财经 (hf_OIL)", "https://finance.sina.com.cn/futures/quotes/OIL.shtml"
+    except Exception: pass
+    return 0.0, "获取失败", "https://cn.investing.com/commodities/brent-oil"
+
+# ==============================================================================
+# 大宗商品相关指标获取模块 (伦敦金 / 沪金主连 / 伦敦银 / COMEX 铜)
+# ==============================================================================
+def get_gold_london(opener) -> tuple[float, str, str]:
+    """获取伦敦金 (XAU/USD 现货) 价格"""
+    try:
+        val = fetch_from_yahoo_finance(opener, "GC=F")
+        if val > 0:
+            return val, "Yahoo Finance (GC=F)", "https://www.investing.com/currencies/xau-usd"
+    except Exception: pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=hf_XAU"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 0:
+                    try:
+                        v = float(parts[0])
+                        if v > 0:
+                            return round(v, 2), "英为财经 (XAU/USD)", "https://www.investing.com/currencies/xau-usd"
+                    except ValueError:
+                        pass
+    except Exception: pass
+    return 0.0, "获取失败", "https://www.investing.com/currencies/xau-usd"
+
+
+def get_gold_shfe(opener) -> tuple[float, str, str]:
+    """获取沪金主连 (AU0) 价格"""
+    try:
+        df = ak.futures_main_sina(symbol="AU0")
+        if df is not None and not df.empty:
+            close_col = "收盘价" if "收盘价" in df.columns else ("close" if "close" in df.columns else df.columns[-1])
+            try:
+                v = float(df.iloc[-1][close_col])
+                if v > 0:
+                    return round(v, 2), "新浪财经 (AU0)", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=nf_AU0"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                for idx in [8, 7, 6, 5]:
+                    if len(parts) > idx:
+                        try:
+                            v = float(parts[idx])
+                            if v > 0:
+                                return round(v, 2), "新浪财经 (nf_AU0)", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
+                        except ValueError:
+                            pass
+    except Exception: pass
+    return 0.0, "获取失败", "https://finance.sina.com.cn/futures/quotes/AU0.shtml"
+
+
+def get_silver_london(opener) -> tuple[float, str, str]:
+    """获取伦敦银 (XAG/USD 现货) 价格"""
+    try:
+        val = fetch_from_yahoo_finance(opener, "SI=F")
+        if val > 0:
+            return val, "Yahoo Finance (SI=F)", "https://www.investing.com/currencies/xag-usd"
+    except Exception: pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=hf_XAG"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 0:
+                    try:
+                        v = float(parts[0])
+                        if v > 0:
+                            return round(v, 3), "英为财经 (XAG/USD)", "https://www.investing.com/currencies/xag-usd"
+                    except ValueError:
+                        pass
+    except Exception: pass
+    return 0.0, "获取失败", "https://www.investing.com/currencies/xag-usd"
+
+
+def get_copper_lme(opener) -> tuple[float, str, str]:
+    """获取 COMEX 铜连续合约价格，统一按美元/磅展示。"""
+    try:
+        val = fetch_from_yahoo_finance(opener, "HG=F")
+        if val > 0:
+            return round(val, 2), "Yahoo Finance (HG=F)", "https://finance.yahoo.com/quote/HG%3DF/"
+    except Exception:
+        pass
+
+    try:
+        url = "https://hq.sinajs.cn/list=hf_CAD"
+        req = urllib.request.Request(url, headers={**DEFAULT_HEADERS, "Referer": "https://finance.sina.com.cn/"})
+        with opener.open(req, timeout=4) as resp:
+            content = resp.read().decode("gbk", errors="ignore")
+            match = re.search(r'"([^"]+)"', content)
+            if match:
+                parts = match.group(1).split(",")
+                if len(parts) > 0:
+                    try:
+                        v = float(parts[0])
+                        if v > 0:
+                            # 新浪 CAD 以美元/吨报价，换算为美元/磅。
+                            return round(v / 2204.62, 2), "新浪财经 (hf_CAD)", "https://finance.sina.com.cn/futures/quotes/CAD.shtml"
+                    except ValueError:
+                        pass
+    except Exception: pass
+
+    return 0.0, "获取失败", "https://cn.investing.com/commodities/copper"
+
+def get_btc_price(opener) -> tuple[float, str, str]:
+    """获取比特币最新现货价格（多个源并行竞速，谁先返回用谁）。"""
+    sources = [
+        (
+            "https://data-api.binance.vision/api/v3/ticker/price?symbol=BTCUSDT",
+            {**DEFAULT_HEADERS, "Accept": "application/json"},
+            6,
+            lambda j: (float(j.get("price", 0)),
+                       "Binance (BTC/USDT)", "https://www.binance.com/zh-CN/trade/BTC_USDT"),
+        ),
+        (
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
+            {**DEFAULT_HEADERS, "Accept": "application/json"},
+            5,
+            lambda j: (float(j.get("bitcoin", {}).get("usd", 0)),
+                       "CoinGecko (BTC/USD)", "https://www.coingecko.com/zh/coins/bitcoin"),
+        ),
+        (
+            "https://api.coinbase.com/v2/prices/BTC-USD/spot",
+            DEFAULT_HEADERS,
+            5,
+            lambda j: (float(j.get("data", {}).get("amount", 0)),
+                       "Coinbase (BTC/USD)", "https://www.coinbase.com/price/bitcoin"),
+        ),
+        (
+            "https://bian.4url.cn/api/v3/ticker/price?symbol=BTCUSDT",
+            {**DEFAULT_HEADERS, "Accept": "application/json"},
+            4,
+            lambda j: (float(j.get("price", 0)),
+                       "Binance镜像 (BTC/USDT)", "https://www.binance.com/zh-CN/trade/BTC_USDT"),
+        ),
+        (
+            "https://okx.4url.cn/api/v5/market/ticker?instId=BTC-USDT",
+            DEFAULT_HEADERS,
+            4,
+            lambda j: (float((j.get("data") or [{}])[0].get("last", 0)),
+                       "OKX镜像 (BTC/USDT)", "https://www.okx.com/zh-hans/trade-spot/btc-usdt"),
+        ),
+    ]
+
+    def _try(url, headers, timeout, parser):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with get_thread_opener().open(req, timeout=timeout) as resp:
+                j = json.loads(resp.read().decode("utf-8"))
+                v, src, u = parser(j)
+                if v > 0:
+                    return round(v, 2), src, u
+        except Exception:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=len(sources)) as ex:
+        futs = [ex.submit(_try, u, h, t, p) for u, h, t, p in sources]
+        try:
+            for f in as_completed(futs, timeout=8):
+                r = f.result()
+                if r:
+                    # 取消其余任务
+                    for x in futs:
+                        x.cancel()
+                    return r
+        except Exception:
+            # 所有源都超时/失败时 as_completed 会抛 "N (of M) futures unfinished"，
+            # 属于正常的"全都不可用"，直接走下面的兜底返回值，不向主流程抛异常。
+            pass
+        finally:
+            for x in futs:
+                x.cancel()
+
+    return 0.0, "获取失败", "https://www.tradingview.com/symbols/BTCUSD/"
+
+def fetch_home_market_metrics(opener):
+    """并行抓取所有宏观指标（11 个任务并发），总耗时 ≈ 最慢的单个指标。"""
+    now_str = now_beijing().strftime("%Y-%m-%d %H:%M:%S")
+
+    # ============ 并行抓取所有宏观指标 ============
+    # 每个任务独立线程内创建自己的 opener（requests.Session 不是线程安全的）
+    indicator_specs = [
+        ("fng",           get_cnn_fear_greed,  (0.0, "暂无数据", "获取失败", "#")),
+        ("vix",           get_vix,             (0.0, "获取失败", "#")),
+        ("usdcny",        get_usd_cny,         (0.0, "获取失败", "#")),
+        ("vxn",           get_vxn,             (0.0, "获取失败", "#")),
+        ("vxsmh",         get_vxsmh,           (0.0, "获取失败", "#")),
+        ("skew",          get_skew,            (0.0, "获取失败", "#")),
+        ("brent",         get_brent_oil,       (0.0, "获取失败", "#")),
+        ("gold_london",   get_gold_london,     (0.0, "获取失败", "#")),
+        ("gold_shfe",     get_gold_shfe,       (0.0, "获取失败", "#")),
+        ("silver_london", get_silver_london,   (0.0, "获取失败", "#")),
+        ("copper_lme",    get_copper_lme,      (0.0, "获取失败", "#")),
+        ("btc",           get_btc_price,       (0.0, "获取失败", "#")),
+    ]
+    default_map = {k: d for k, _, d in indicator_specs}
+
+    def _run(fn, default):
+        try:
+            return fn(get_thread_opener())
+        except Exception as e:
+            print(f"    [warn] 宏观指标 {fn.__name__}: {_brief_error(e)}")
+            return default
+
+    out = {}
+    with ThreadPoolExecutor(max_workers=len(indicator_specs)) as ex:
+        future_map = {
+            ex.submit(_run, fn, default): key
+            for key, fn, default in indicator_specs
+        }
+        for fut in as_completed(future_map):
+            key = future_map[fut]
+            try:
+                out[key] = fut.result(timeout=60)     # 兜底 60s 单任务上限
+            except Exception as e:
+                print(f"    [warn] 宏观指标 {key} 超时/异常: {_brief_error(e)}")
+                out[key] = default_map[key]
+
+    # ============ 解包结果 ============
+    fng_score, fng_rating, fng_src, fng_url       = out["fng"]
+    vix_val, vix_src, vix_url                     = out["vix"]
+    usdcny_val, usdcny_src, usdcny_url            = out["usdcny"]
+    vxn_val, vxn_src, vxn_url                     = out["vxn"]
+    vxsmh_val, vxsmh_src, vxsmh_url               = out["vxsmh"]
+    skew_val, skew_src, skew_url                  = out["skew"]
+    brent_val, brent_src, brent_url               = out["brent"]
+    gold_val, gold_src, gold_url                  = out["gold_london"]
+    shfe_gold_val, shfe_gold_src, shfe_gold_url   = out["gold_shfe"]
+    silver_val, silver_src, silver_url            = out["silver_london"]
+    copper_val, copper_src, copper_url            = out["copper_lme"]
+    btc_val, btc_src, btc_url                     = out["btc"]
+    # ===============================================
+
+    # ============ 以下为原有状态计算逻辑，不变 ============
+    vix_status = "数据暂缺" if vix_val <= 0 else ("极度恐慌" if vix_val >= 30 else ("警惕波动" if vix_val >= 20 else ("温和震荡" if vix_val >= 15 else "平稳低波")))
+    usdcny_status = "数据暂缺" if usdcny_val <= 0 else ("美元走强" if usdcny_val >= 7.30 else ("区间震荡" if usdcny_val >= 7.15 else "人民币升值"))
+    vxn_status = "数据暂缺" if vxn_val <= 0 else ("科技股极恐" if vxn_val >= 30 else ("杀估值抛压" if vxn_val >= 22 else "波动平缓"))
+    # VXSMH 中枢显著高于 VIX/VXN（历史中位数约 42），阈值按自身分布分档
+    vxsmh_status = "数据暂缺" if vxsmh_val <= 0 else ("半导体极恐" if vxsmh_val >= 55 else ("警惕波动" if vxsmh_val >= 45 else ("正常震荡" if vxsmh_val >= 38 else "平稳低波")))
+    skew_status = "数据暂缺" if skew_val <= 0 else ("尾部黑天鹅预警" if skew_val >= 140 else ("风险积聚" if skew_val >= 132 else "常态平稳"))
+    brent_status = "数据暂缺" if brent_val <= 0 else ("极度高企" if brent_val >= 95 else ("通胀溢价" if brent_val >= 80 else ("温和中性" if brent_val >= 65 else "需求疲软")))
+    gold_status = "数据暂缺" if gold_val <= 0 else ("极度高企" if gold_val >= 2500 else ("高位震荡" if gold_val >= 2000 else ("温和中性" if gold_val >= 1500 else "低位盘整")))
+    shfe_gold_status = "数据暂缺" if shfe_gold_val <= 0 else ("极度高企" if shfe_gold_val >= 700 else ("高位震荡" if shfe_gold_val >= 600 else ("温和中性" if shfe_gold_val >= 500 else "低位盘整")))
+    silver_status = "数据暂缺" if silver_val <= 0 else ("极度高企" if silver_val >= 35 else ("高位震荡" if silver_val >= 28 else ("温和中性" if silver_val >= 20 else "低位盘整")))
+    copper_status = "数据暂缺" if copper_val <= 0 else ("极度高企" if copper_val >= 5.5 else ("高位震荡" if copper_val >= 4.5 else ("温和中性" if copper_val >= 3.5 else "需求疲软")))
+    btc_status = "数据暂缺" if btc_val <= 0 else ("极度高企" if btc_val >= 100000 else ("高位震荡" if btc_val >= 70000 else ("温和中性" if btc_val >= 40000 else "低位盘整")))
+
+    return {
+        "fng": {"score": fng_score, "rating": fng_rating, "time": now_str, "source": fng_src, "url": fng_url},
+        "vix": {"val": vix_val, "status": vix_status, "time": now_str, "source": vix_src, "url": vix_url, "desc": "<15 平稳低波 | 15~20 正常震荡 | 20~30 警惕波动 | >30 极度恐慌"},
+        "usdcny": {"val": usdcny_val, "status": usdcny_status, "time": now_str, "source": usdcny_src, "url": usdcny_url, "desc": "美元兑人民币汇率，QDII换汇成本及折溢价关键锚"},
+        "vxn": {"val": vxn_val, "status": vxn_status, "time": now_str, "source": vxn_src, "url": vxn_url, "desc": "纳斯达克100期权隐波，监测科技成长股杀估值抛压"},
+        "vxsmh": {"val": vxsmh_val, "status": vxsmh_status, "time": now_str, "source": vxsmh_src, "url": vxsmh_url, "desc": "半导体 ETF(SMH) 期权隐波，衡量芯片股情绪与拥挤度"},
+        "skew": {"val": skew_val, "status": skew_status, "time": now_str, "source": skew_src, "url": skew_url, "desc": "基准100。>135提示期权市场尾部极度对冲成本升高"},
+        "brent": {"val": brent_val, "status": brent_status, "time": now_str, "source": brent_src, "url": brent_url, "desc": "国际基准原油，大宗通胀与全球工业周期核心温度计"},
+        "gold_london": {"val": gold_val, "status": gold_status, "time": now_str, "source": gold_src, "url": gold_url, "desc": "伦敦现货金价（美元/盎司），全球避险与美元信用对冲核心锚点"},
+        "gold_shfe": {"val": shfe_gold_val, "status": shfe_gold_status, "time": now_str, "source": shfe_gold_src, "url": shfe_gold_url, "desc": "上海期货交易所黄金主连（元/克），国内实物金与人民币金价风向标"},
+        "silver_london": {"val": silver_val, "status": silver_status, "time": now_str, "source": silver_src, "url": silver_url, "desc": "伦敦现货白银（美元/盎司），兼具贵金属避险与光伏新能源工业需求属性"},
+        "copper_lme": {"val": copper_val, "status": copper_status, "time": now_str, "source": copper_src, "url": copper_url, "desc": "COMEX 铜连续合约（美元/磅），'铜博士' 全球工业周期与经济景气核心温度计"},
+        "btc": {"val": btc_val, "status": btc_status, "time": now_str, "source": btc_src, "url": btc_url, "desc": "比特币现货价格（USDT），加密市场风险偏好与全球流动性的核心风向标"}
+    }
+
+
+# ==============================================================================
+# 盘中轻量刷新：live_quotes.py → data/live_quotes.json → 前端覆盖
+# ==============================================================================
+# 每晚全量生成的页面里，卡片数字是 22:30 那一刻的快照。
+# 盘中由 live_quotes.py 每 15 分钟写一份 JSON，前端拿到后按同一套阈值重算状态标签，
+# 否则会出现「VIX 已经冲到 30，标签还写着平稳低波」这种自相矛盾。
+# buckets 用「下界」语义：value >= min 即命中，从上往下取第一个。
+LIVE_MACRO_RULES = {
+    # fng 分数越高越贪婪，边界取 xx.01 以贴合 main.py 里 <=25 / <45 的分档口径
+    "fng": {"digits": 1, "buckets": [
+        (75.01, "极度贪婪", "#0b8043"), (55.01, "贪婪", "#188038"),
+        (45.01, "中性观望", "#5f6368"), (25.01, "恐惧", "#e8710a"),
+        (-1, "极度恐惧", "#d93025"),
+    ]},
+    "vix": {"digits": 2, "buckets": [
+        (30, "极度恐慌", "#d93025"), (20, "警惕波动", "#e67e22"),
+        (15, "正常震荡", "#188038"), (0, "平稳低波", "#1a73e8"),
+    ]},
+    "vxn": {"digits": 2, "buckets": [
+        (30, "科技股极恐", "#d93025"), (22, "杀估值抛压", "#e67e22"),
+        (0, "波动平缓", "#188038"),
+    ]},
+    "vxsmh": {"digits": 2, "buckets": [
+        (55, "半导体极恐", "#d93025"), (45, "警惕波动", "#e67e22"),
+        (38, "正常震荡", "#188038"), (0, "平稳低波", "#1a73e8"),
+    ]},
+    "skew": {"digits": 2, "buckets": [
+        (140, "尾部黑天鹅预警", "#d93025"), (132, "风险积聚", "#e67e22"),
+        (0, "常态平稳", "#188038"),
+    ]},
+    "usdcny": {"digits": 4, "buckets": [
+        (7.30, "美元走强", "#d93025"), (7.15, "区间震荡", "#e67e22"),
+        (0, "人民币升值", "#188038"),
+    ]},
+    "gold_london": {"digits": 2, "buckets": [
+        (2500, "极度高企", "#d93025"), (2000, "高位震荡", "#e67e22"),
+        (1500, "温和中性", "#188038"), (0, "低位盘整", "#1a73e8"),
+    ]},
+    "gold_shfe": {"digits": 2, "buckets": [
+        (700, "极度高企", "#d93025"), (600, "高位震荡", "#e67e22"),
+        (500, "温和中性", "#188038"), (0, "低位盘整", "#1a73e8"),
+    ]},
+    "silver_london": {"digits": 3, "buckets": [
+        (35, "极度高企", "#d93025"), (28, "高位震荡", "#e67e22"),
+        (20, "温和中性", "#188038"), (0, "低位盘整", "#1a73e8"),
+    ]},
+    "copper_lme": {"digits": 2, "buckets": [
+        (5.5, "极度高企", "#d93025"), (4.5, "高位震荡", "#e67e22"),
+        (3.5, "温和中性", "#188038"), (0, "需求疲软", "#1a73e8"),
+    ]},
+    "brent": {"digits": 2, "buckets": [
+        (95, "极度高企", "#d93025"), (80, "通胀溢价", "#e67e22"),
+        (65, "温和中性", "#188038"), (0, "需求疲软", "#1a73e8"),
+    ]},
+    "btc": {"digits": 2, "buckets": [
+        (100000, "极度高企", "#d93025"), (70000, "高位震荡", "#e67e22"),
+        (40000, "温和中性", "#188038"), (0, "低位盘整", "#1a73e8"),
+    ]},
+}
+
+
+# 前端脚本用普通字符串写（不是 f-string），注入时只替换占位符，
+# 免去在模板里对每个 JS 花括号都写两遍的麻烦。
+# 只负责「宏观 12 项」的 60 秒快照刷新：场内宽基 ETF 的盘中价已经搬到独立页 live.html，
+# 首页不再直连行情源，也不再渲染 ETF 卡片。
+_LIVE_JS_SRC = r"""
+(function () {
+    'use strict';
+    var RULES = __LIVE_RULES__;
+    var REFRESH_MS = 60000;      // 快照（data/live_quotes.json）60 秒拉一次
+    var FRESH_MINUTES = 20;      // 超过 20 分钟没更新就不再说「实时」
+
+    function hexToRgba(hex, alpha) {
+        var m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+        if (!m) return 'rgba(128,128,128,' + alpha + ')';
+        var n = parseInt(m[1], 16);
+        return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + alpha + ')';
+    }
+
+    function bucketOf(key, v) {
+        var rule = RULES[key];
+        if (!rule) return null;
+        for (var i = 0; i < rule.buckets.length; i++) {
+            if (v >= rule.buckets[i][0]) return rule.buckets[i];
+        }
+        return null;
+    }
+
+    function fmtNum(v, digits) {
+        if (v === null || v === undefined || v === '' || isNaN(v)) return '--';
+        return Number(v).toFixed(digits);
+    }
+
+    // 北京时间字符串 -> 毫秒时间戳（浏览器本地时区不可靠，必须手工按 UTC+8 解析）
+    function parseBeijing(s) {
+        var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(s || '');
+        if (!m) return null;
+        return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 8, +m[5], +(m[6] || 0));
+    }
+
+    function setBadges(text, stale) {
+        var nodes = document.querySelectorAll('[data-live-badge]');
+        for (var i = 0; i < nodes.length; i++) {
+            nodes[i].textContent = text;
+            nodes[i].hidden = false;
+            nodes[i].className = 'live-badge' + (stale ? ' is-stale' : '');
+        }
+    }
+
+    function applyMacro(quotes, staleKeys) {
+        var staleMap = {};
+        (staleKeys || []).forEach(function (k) { staleMap[k] = true; });
+        Object.keys(quotes).forEach(function (key) {
+            var rule = RULES[key];
+            var valEl = document.querySelector('[data-live-key="' + key + '"]');
+            if (!rule || !valEl) return;
+            var v = quotes[key];
+            if (v === null || v === undefined || v === '' || isNaN(v)) {
+                // 取不到就保持页面原值，不要写成 0/-- 把每晚的数据也弄没了
+                return;
+            }
+            v = Number(v);
+            valEl.textContent = fmtNum(v, rule.digits);
+            valEl.classList.toggle('is-live-stale', !!staleMap[key]);
+
+            var tag = document.querySelector('[data-live-tag="' + key + '"]');
+            var bucket = bucketOf(key, v);
+            if (tag && bucket) {
+                tag.textContent = bucket[1];
+                tag.style.color = bucket[2];
+                tag.style.background = hexToRgba(bucket[2], 0.12);
+            }
+            if (key === 'fng') {
+                var ptr = document.querySelector('.fng-bar-pointer');
+                if (ptr) ptr.style.left = Math.max(0, Math.min(100, v)) + '%';
+            }
+        });
+    }
+
+    function pull() {
+        fetch('data/live_quotes.json?v=' + Date.now(), { cache: 'no-store' })
+            .then(function (resp) {
+                if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                return resp.json();
+            })
+            .then(function (data) {
+                window.__LIVE_QUOTES__ = data;
+                applyMacro(data.quotes || {}, data.stale_keys || []);
+
+                var stamp = parseBeijing(data.updated_at_beijing);
+                var hhmm = (data.updated_at_beijing || '').slice(11, 16) || '--:--';
+                var ageMin = stamp ? (Date.now() - stamp) / 60000 : Infinity;
+                var isStale = !!data.stale || ageMin > FRESH_MINUTES;
+                if (isStale) {
+                    setBadges('最后更新 ' + hhmm + (ageMin > FRESH_MINUTES ? '（非交易时段）' : '（部分源滞后）'), true);
+                } else {
+                    setBadges('实时 · 更新于 ' + hhmm, false);
+                }
+            })
+            .catch(function () {
+                // 拿不到就当没有：保留每晚生成的数据，不弹错、不把数字清空
+                if (!window.__LIVE_QUOTES__) {
+                    setBadges('暂无盘中数据 · 沿用每晚快照', true);
+                }
+            });
+    }
+
+    function boot() {
+        pull();
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) pull();   // 后台不管，回到前台再同步
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot);
+    } else {
+        boot();
+    }
+    setInterval(pull, REFRESH_MS);
+})();
+"""
+
+
+# ==============================================================================
+# 核心宏观指标历史序列（卡片展开图）
+# ==============================================================================
+MACRO_HISTORY_CACHE = os.path.join("data", "macro_history.json")
+# 与首页「指数历年回报（2000 年至今）」对齐；各序列按自身可得性落地
+# （VIX/黄金/汇率可回溯到 2000，沪金 2008、白银/铜 2011、Brent 2016、BTC 2017）。
+MACRO_HISTORY_START = HISTORY_START
+
+# 宽基指数估值图右轴：指数收盘点位（东方财富日线）。
+# 蛋卷只给 PE，不给点位；点位需要按 PE 的观测日对齐后再叠加展示。
+# key -> (标题, 单位, 来源, 东方财富 secid, 对应 PE 序列 key, 指数简称)
+INDEX_POINT_TARGETS = {
+    "idx_ndx":    ("纳指100指数点位", "点", "东方财富 NDX 日线",     "100.NDX",     "pe_ndx",    "纳指100"),
+    "idx_sp500":  ("标普500指数点位", "点", "东方财富 SPX 日线",     "100.SPX",     "pe_sp500",  "标普500"),
+    "idx_hs300":  ("沪深300指数点位", "点", "东方财富 沪深300 日线", "1.000300",   "pe_hs300",  "沪深300"),
+    "idx_kc50":   ("科创50指数点位", "点", "东方财富 科创50 日线",  "1.000688",   "pe_kc50",   "科创50"),
+    "idx_hstech": ("恒生科技指数点位", "点", "东方财富 HSTECH 日线", "124.HSTECH", "pe_hstech", "恒生科技"),
+}
+# PE 序列 -> (点位序列 key, 指数简称)，供生成页面时挂载右轴数据
+INDEX_PE_OVERLAY = {
+    spec[4]: (key, spec[5]) for key, spec in INDEX_POINT_TARGETS.items()
+}
+# 点位走独立缓存：宏观历史任务超时会整体回退旧缓存，不能把点位绑在那条链上
+INDEX_POINT_CACHE = os.path.join("data", "index_point_history.json")
+# 多源降级：东方财富 push2his 偶发被限流/重置连接，新浪与腾讯可作为稳定替代。
+# 每条按顺序尝试，取到足够长的日线就停。
+INDEX_POINT_SOURCES = {
+    "idx_ndx":    [("sina_us", ".NDX"), ("tx_us", "usNDX"), ("eastmoney", "100.NDX")],
+    "idx_sp500":  [("sina_us", ".INX"), ("tx_us", "us.INX"), ("eastmoney", "100.SPX")],
+    "idx_hs300":  [("sina_a", "sh000300"), ("tx_a", "sh000300"), ("eastmoney", "1.000300")],
+    "idx_kc50":   [("sina_a", "sh000688"), ("tx_a", "sh000688"), ("eastmoney", "1.000688")],
+    "idx_hstech": [("tx_hk", "hkHSTECH"), ("eastmoney", "124.HSTECH")],
+}
+INDEX_POINT_SOURCE_LABELS = {
+    "sina_a": "新浪财经 A 股指数日线",
+    "sina_us": "新浪财经美股指数日线",
+    "tx_a": "腾讯财经 A 股指数日线",
+    "tx_us": "腾讯财经美股指数日线",
+    "tx_hk": "腾讯财经港股指数日线",
+    "eastmoney": "东方财富指数日线",
+}
+
+# ===== 指数「年内最大收盘价回撤」=====
+# 口径：每个自然年内，用当年内的收盘价滚动高点算最大回撤（peak 起算点不跨年），
+#      即「年内从阶段高点到之后阶段低点的最大跌幅」，与年度涨跌幅（12/31 对 12/31）不同。
+# 数据源用指数日线（腾讯/新浪），只缓存算好的年度结果，日线本身不入库。
+ANNUAL_DD_CACHE = os.path.join("data", "index_annual_drawdown.json")
+ANNUAL_DD_CACHE_VERSION = 1
+ANNUAL_DD_START_YEAR = 2000          # 与「指数历年回报（2000 年至今）」对齐
+ANNUAL_DD_MIN_BARS = 5               # 年内有效交易日少于该值则不参与（新上市/数据残缺）
+# 指数日线的「周采样」快照：年内回撤本来就要拉全量日线，顺手把每周最后一个交易日
+# 存下来，供宽基估值卡把横轴从 PE 起点（蛋卷只给 10 年）一直补到指数起点（2000 年起）。
+# 单独存盘是因为估值图需要的是「2000 年起的点位」，而 index_point_history 只有
+# 与 PE 日期对齐后的 2016 年起片段。
+INDEX_DAILY_WEEKLY_CACHE = os.path.join("data", "index_daily_weekly.json")
+ANNUAL_DD_TARGETS = {
+    # 坑：东财 100.NDX 实际返回的是纳斯达克综合指数（2000-03-10 收盘 5048.62，
+    # 那是综合指数的历史高点），与卡片上的「纳指100」不同标的，只能走腾讯/新浪的 .NDX
+    "纳指100":        [("tx_us", "usNDX"), ("sina_us", ".NDX")],
+    "标普500":        [("eastmoney", "100.SPX"), ("tx_us", "us.INX"), ("sina_us", ".INX")],
+    # 费城半导体没有长期免费日线，新浪只有 2014 年起，故该指数从 2014 年算起
+    "费城半导体指数": [("sina_us", ".SOX"), ("eastmoney", "100.SOX")],
+    "沪深300":        [("eastmoney", "1.000300"), ("tx_a", "sh000300"), ("sina_a", "sh000300")],
+    "科创50":         [("eastmoney", "1.000688"), ("tx_a", "sh000688"), ("sina_a", "sh000688")],
+    # 东财的 HSTECH 用官方回溯序列（2014-12-31=3000）会与 2020 年起的年度收益错位，改用腾讯
+    "恒生科技":       [("tx_hk", "hkHSTECH"), ("eastmoney", "124.HSTECH")],
+}
+
+MACRO_HISTORY_VALUE_LIMITS = {
+    "gold_london": (100.0, 20000.0),
+    "silver_london": (2.0, 80.0),
+}
+
+
+def _sanitize_macro_history(data):
+    """Remove impossible outlier points from legacy macro history data."""
+    if not isinstance(data, dict):
+        return False
+    changed = False
+    for key, (lower, upper) in MACRO_HISTORY_VALUE_LIMITS.items():
+        item = data.get(key)
+        if not isinstance(item, dict) or not isinstance(item.get("points"), list):
+            continue
+        clean_points = []
+        for point in item["points"]:
+            try:
+                value = float(point[1])
+            except (IndexError, TypeError, ValueError):
+                changed = True
+                continue
+            if lower <= value <= upper:
+                clean_points.append([str(point[0]), value])
+            else:
+                changed = True
+        if len(clean_points) != len(item["points"]):
+            item["points"] = clean_points
+    return changed
+
+
+def _read_macro_history_cache():
+    try:
+        with open(MACRO_HISTORY_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # 兼容旧缓存：早期把美元/磅价格误按 22.0462 放大后标成了“美分/磅”。
+        # 修正后立即落盘，确保下一次抓取合并时不会再次读取旧口径。
+        copper = data.get("copper_lme") if isinstance(data, dict) else None
+        migrated = False
+        if isinstance(copper, dict) and copper.get("points"):
+            if copper.get("unit") == "美分/磅" or float(copper["points"][-1][1]) > 20:
+                for point in copper["points"]:
+                    point[1] = round(float(point[1]) / 22.0462, 4)
+                copper["unit"] = "美元/磅"
+                migrated = True
+        if _sanitize_macro_history(data):
+            migrated = True
+        if migrated and isinstance(data, dict):
+            _write_macro_history_cache(data)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_macro_history_cache(data):
+    try:
+        _sanitize_macro_history(data)
+        os.makedirs(os.path.dirname(MACRO_HISTORY_CACHE), exist_ok=True)
+        tmp = MACRO_HISTORY_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, MACRO_HISTORY_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ 宏观历史缓存写入失败: {e}")
+
+
+def _compact_macro_points(point_map):
+    # 统一口径：早于 HISTORY_START（2000-01-01）的点一律丢弃，
+    # 免得某个数据源回吐 90 年代的历史把首页时间轴拉长。
+    return [
+        [date_str, round(float(value), 2)]
+        for date_str, value in sorted(point_map.items())
+        if date_str and value is not None and str(date_str)[:10] >= HISTORY_START
+    ]
+
+
+def _align_points_to_dates(target_dates, source_points):
+    """把 [日期, 值] 序列对齐到 target_dates，取当日或之前最近一个观测值。
+
+    蛋卷 PE 是不规则低频序列，指数是日频收盘；三个市场休市日不同，
+    用前向填充避免把休市日误判成缺口。返回与 target_dates 等长的值列表（缺失为 None）。
+    """
+    rows = []
+    for row in source_points or []:
+        try:
+            rows.append((str(row[0]), float(row[1])))
+        except (IndexError, TypeError, ValueError):
+            continue
+    rows.sort(key=lambda item: item[0])
+    aligned = []
+    cursor = 0
+    last_value = None
+    for date_str in target_dates or []:
+        date_str = str(date_str)
+        while cursor < len(rows) and rows[cursor][0] <= date_str:
+            last_value = rows[cursor][1]
+            cursor += 1
+        aligned.append(round(last_value, 2) if last_value is not None else None)
+    return aligned
+
+
+def fetch_cboe_macro_history(symbol, start_date=MACRO_HISTORY_START):
+    """读取 CBOE 官方指数历史 CSV 的日收盘价。"""
+    url = f"https://cdn.cboe.com/api/global/us_indices/daily_prices/{symbol}_History.csv"
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Accept": "text/csv,text/plain,*/*",
+        "Referer": "https://www.cboe.com/",
+    })
+    with get_thread_opener().open(req, timeout=25) as resp:
+        text = resp.read().decode("utf-8-sig", errors="replace")
+
+    points = {}
+    reader = csv.DictReader(io.StringIO(text))
+    value_columns = [
+        name for name in (reader.fieldnames or ())
+        if name and name.strip().upper() != "DATE"
+    ]
+    if not value_columns:
+        return []
+
+    # CBOE 的 CSV 通常用 CLOSE，个别指数（例如 SKEW）用指数名作为列名。
+    value_column = next(
+        (name for name in value_columns if name.strip().upper() == "CLOSE"),
+        value_columns[0],
+    )
+    for row in reader:
+        raw_date = (row.get("DATE") or "").strip()
+        raw_close = (row.get(value_column) or "").strip()
+        if not raw_date or not raw_close:
+            continue
+        try:
+            date_str = datetime.strptime(raw_date, "%m/%d/%Y").strftime("%Y-%m-%d")
+            close = float(raw_close)
+        except (TypeError, ValueError):
+            continue
+        if date_str >= start_date and close > 0:
+            points[date_str] = close
+    return _compact_macro_points(points)
+
+
+def fetch_cnn_macro_history():
+    """读取 CNN 官方恐惧贪婪指数历史序列（尽量往前取）。
+
+    坑一：不带日期的 graphdata 只回吐最近 1 年（约 252 个交易日），历史图会有 3/4 空白。
+    坑二：接口虽然支持在路径后追加起始日期（/graphdata/2011-01-01），但服务端对
+          单次返回条数有上限（约 1500 个交易日），起始日过早会直接 500，
+          而不是截断返回。2011 与 2019 起都已被拒，2021 起可以正常返回。
+    因此这里按「由远到近」的年份阶梯逐档试，第一档成功即返回；越晚的档位
+    只是兜底，避免将来上限定死时彻底抓不到。
+    """
+    base = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+    current_year = now_beijing().year
+    ladder = [year for year in (2011, 2014, 2017, 2019, 2021, 2023, 2025) if year <= current_year]
+    candidates = [f"{base}/{year}-01-01" for year in ladder] + [base]
+    headers = {
+        **DEFAULT_HEADERS,
+        "Referer": "https://edition.cnn.com/markets/fear-and-greed",
+        "Origin": "https://edition.cnn.com",
+        "Accept": "application/json,text/plain,*/*",
+    }
+    last_error = None
+    network_down = False
+    for url in candidates:
+        # 网络层不可达时继续逐档试只会白等超时，直接跳到不带日期的兜底
+        if network_down and url != base:
+            continue
+        for attempt in range(1 if url != base else 2):
+            try:
+                req = urllib.request.Request(url, headers=headers)
+                with get_thread_opener().open(req, timeout=10) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as exc:
+                # 起始日过早会被服务端直接拒（500），换下一档即可，不必重试
+                last_error = exc
+                break
+            except Exception as exc:      # 超时/连不上，换兜底端点，不再逐档重试
+                last_error = exc
+                network_down = True
+                break
+
+            rows = (payload.get("fear_and_greed_historical") or {}).get("data") or []
+            points = {}
+            for row in rows:
+                try:
+                    date_str = datetime.fromtimestamp(
+                        float(row["x"]) / 1000.0, timezone.utc
+                    ).strftime("%Y-%m-%d")
+                    score = float(row["y"])
+                except (KeyError, TypeError, ValueError, OSError):
+                    continue
+                if 0 <= score <= 100:
+                    points[date_str] = score
+            if points:
+                return _compact_macro_points(points)
+            last_error = RuntimeError("CNN 历史序列为空")
+            break
+    if last_error:
+        raise last_error
+    return []
+
+
+def _brief_error(exc, limit=80):
+    """把网络异常压成一行短描述，避免日志被完整堆栈/长错误刷屏。"""
+    name = type(exc).__name__
+    text = " ".join(str(exc).split())
+    low = text.lower()
+    if "remote disconnected" in low or "remote end closed" in low or "server closed" in low:
+        return "服务端主动断开"
+    if "connection reset" in low or "connection aborted" in low or "connectionreseterror" in low:
+        return "连接被重置"
+    if name in ("TimeoutError", "ConnectTimeout", "ReadTimeout") or "timed out" in low or "timeout" in low:
+        return "超时"
+    if "name or service not known" in low or "getaddrinfo" in low or "nodename" in low:
+        return "域名解析失败"
+    if "certificate" in low or "ssl" in low:
+        return "TLS 握手失败"
+    if not text:
+        return name
+    return f"{name}: {text[:limit]}"
+
+
+def _fetch_eastmoney_macro_history(secid, start_date=MACRO_HISTORY_START, convert_factor=1.0):
+    """读取东方财富日 K 收盘价，用作商品和指数的历史兜底。"""
+    convert_factor = float(convert_factor)
+    start_compact = start_date.replace("-", "")
+    end_compact = now_beijing().strftime("%Y%m%d")
+    fields = urllib.parse.urlencode({
+        "secid": secid,
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f53",
+        "klt": "101",
+        "fqt": "1",
+        "beg": start_compact,
+        "end": end_compact,
+        "lmt": "1000000",
+    })
+    url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{fields}"
+    last_error = None
+    # 该接口在部分网络下会被服务端直接掐断（RemoteDisconnected，秒失败），
+    # 重试次数给 2 次即可：多试也拿不到，只会白吃掉宏观历史任务的整体时间预算。
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(url, headers={
+                **DEFAULT_HEADERS,
+                "Referer": "https://quote.eastmoney.com/",
+                "Connection": "close",
+            })
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+            rows = (payload.get("data") or {}).get("klines") or []
+            points = {}
+            for row in rows:
+                parts = str(row).split(",")
+                if len(parts) < 2:
+                    continue
+                try:
+                    date_str = parts[0]
+                    close = float(parts[1]) * float(convert_factor)
+                except (TypeError, ValueError):
+                    continue
+                if date_str >= start_date and close > 0:
+                    points[date_str] = close
+            if points:
+                return _compact_macro_points(points)
+        except Exception as exc:
+            last_error = exc
+        if attempt == 0:
+            time.sleep(1.0 + random.random())
+    if last_error:
+        raise last_error
+    return []
+
+
+# 东财 kline 被掐断时的新浪兜底：(kind, symbol, 换算系数)
+#   kind="fx"     新浪外汇日线，报文形如 var _fx("日期,开,高,低,收,|...")
+#   kind="global" 新浪国际期货日线，报文形如 var _gc([{"date":..,"close":..}])
+# 铜在新浪按美分/磅报价，需除以 100 还原为美元/磅；其余品种与东财口径一致。
+# 布伦特原油不在其中：卡片实时值取的是 Brent（BZ=F），历史也必须用 Brent，
+# 不能再走东财 102.CL00Y（WTI 连续），详见 fetch_macro_history 里的 brent 任务。
+_MACRO_HISTORY_FALLBACK = {
+    "usdcny":       ("fx",     "fx_susdcny", 1.0),
+    "gold_london":  ("global", "GC",         1.0),
+    "silver_london": ("global", "SI",        1.0),
+    "copper_lme":   ("global", "HG",         0.01),
+}
+
+_SINA_SOURCE_LABEL = {
+    "usdcny":        "新浪财经 USD/CNY 历史日线",
+    "gold_london":   "新浪财经 COMEX 黄金历史日线",
+    "silver_london": "新浪财经 COMEX 白银历史日线",
+    "copper_lme":    "新浪财经 COMEX 铜历史日线",
+    "brent":         "新浪财经 Brent 原油历史日线 + EIA 布伦特现货",
+}
+
+# 口径切换过的序列：旧缓存里切换日之前的数据属于另一种标的，必须整段丢弃，
+# 否则图上的接缝会出现一次假的跳空。brent 曾长期按 WTI(CL00Y) 记录，
+# 现在由 _fetch_brent_macro_history 自己做「EIA 现货 + 新浪期货」拼接，
+# 旧缓存里只剩正确的 Brent 段，不再需要按首日截断（截断反而会在某次抓取
+# 只回近期数据时把补好的 2000-2016 段删掉）。
+_HISTORY_EPOCH_RESET = set()
+
+# 日期整体平移过的序列：旧缓存里每个点的日期都不可信（蛋卷 PE 曾按 UTC 解析 ts，
+# 整条序列比真实估值日早一天），截断救不回来，只能整段丢弃后重抓。
+# 之后 PE 一律以远端 10 年窗口为准，不再与旧缓存合并。
+_HISTORY_FULL_RESET = {"pe_ndx", "pe_sp500", "pe_hs300", "pe_kc50", "pe_hstech"}
+
+
+def _fetch_sina_macro_history(kind, symbol, convert_factor=1.0, start_date=MACRO_HISTORY_START):
+    """新浪兜底：东财 kline 被服务端掐断时，用新浪外汇/国际期货日线补历史。"""
+    convert_factor = float(convert_factor)
+    if kind == "fx":
+        url = ("https://vip.stock.finance.sina.com.cn/forex/api/jsonp.php/"
+               f"var%20_{symbol}/NewForexService.getDayKLine?symbol={symbol}")
+    else:
+        url = ("https://stock2.finance.sina.com.cn/futures/api/jsonp.php/"
+               f"var%20_{symbol.lower()}/GlobalFuturesService.getGlobalFuturesDailyKLine?symbol={symbol}")
+
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Referer": "https://finance.sina.com.cn/",
+    })
+    with get_thread_opener().open(req, timeout=15) as resp:
+        text = resp.read().decode("gbk", errors="replace")
+
+    points = {}
+    if kind == "fx":
+        m = re.search(r'"([^"]*)"', text)
+        if not m:
+            return []
+        for row in m.group(1).split("|"):
+            parts = [p for p in row.split(",") if p]
+            if len(parts) < 5:
+                continue
+            try:
+                date_str = parts[0].strip()
+                close = float(parts[4]) * convert_factor
+            except ValueError:
+                continue
+            if date_str >= start_date and close > 0:
+                points[date_str] = close
+    else:
+        m = re.search(r"\((\[.*?\])\)", text, re.S)
+        if not m:
+            return []
+        try:
+            rows = json.loads(m.group(1))
+        except ValueError:
+            return []
+        for row in rows:
+            try:
+                date_str = str(row.get("date") or "")[:10]
+                close = float(row.get("close") or 0) * convert_factor
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if date_str >= start_date and close > 0:
+                points[date_str] = close
+    return _compact_macro_points(points)
+
+
+_EIA_BRENT_URL = "https://www.eia.gov/dnav/pet/hist/LeafHandler.ashx?n=PET&s=RBRTE&f=D"
+_EIA_WEEK_ROW = re.compile(
+    r"<td class='B6'>&nbsp;&nbsp;(\d{4})\s+([A-Za-z]{3})-\s*(\d{1,2})\s+to\s+[A-Za-z]{3}-\s*\d{1,2}</td>"
+    r"((?:\s*<td class='B3'>[^<]*</td>){5})"
+)
+_MONTH_ABBR = {m: i + 1 for i, m in enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+)}
+
+
+def _fetch_eia_brent_history(start_date=MACRO_HISTORY_START):
+    """EIA 欧洲布伦特现货（RBRTE，1987 年起，日频）解析。
+
+    新浪的 Brent 连续只回吐 2016-11 之后的约 10 年，2000-2016 段完全缺失；
+    EIA 这套现货序列可覆盖到 1987 年，且无需 API key（页面是「周-周 + 周一至周五」
+    的表格，按周一日期 + 列偏移还原成日频）。代价是发布有约 2 周滞后，
+    所以只用来补历史，最新值仍以新浪/实时报价为准。
+    """
+    req = urllib.request.Request(_EIA_BRENT_URL, headers={
+        **DEFAULT_HEADERS,
+        "Referer": "https://www.eia.gov/",
+        "Accept": "text/html,*/*",
+    })
+    with get_thread_opener().open(req, timeout=30) as resp:
+        page = resp.read().decode("utf-8", errors="replace")
+
+    points = {}
+    for year, mon, day, cells in _EIA_WEEK_ROW.findall(page):
+        mon_i = _MONTH_ABBR.get(mon)
+        if not mon_i:
+            continue
+        try:
+            week_start = datetime(int(year), mon_i, int(day))
+        except ValueError:
+            continue
+        values = re.findall(r"<td class='B3'>([^<]*)</td>", cells)
+        for offset, raw in enumerate(values):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                close = float(raw.replace(",", ""))
+            except ValueError:
+                continue
+            date_str = (week_start + timedelta(days=offset)).strftime("%Y-%m-%d")
+            if date_str >= start_date and close > 0:
+                points[date_str] = close
+    return _compact_macro_points(points)
+
+
+def _fetch_brent_macro_history():
+    """布伦特原油历史：新浪 Brent 连续（近 10 年）+ EIA 现货（补齐 2000 年起）。
+
+    两段口径不同（期货连续 vs 现货 FOB），直接拼接会在 2016 年接缝处出现台阶，
+    因此用接缝处重叠区间（最早 60 个共同交易日）的比值中位数把老数据校正到期货口径，
+    保证曲线连续；接缝之后一律用新浪期货序列。
+    """
+    recent = _fetch_sina_macro_history("global", "OIL")
+    try:
+        older = _fetch_eia_brent_history()
+    except Exception as exc:
+        print(f"    [warn] EIA 布伦特历史获取失败，仅保留新浪近 10 年: {_brief_error(exc)}")
+        older = []
+    if not older:
+        return recent
+    if not recent:
+        return older
+
+    recent_map = {str(row[0]): float(row[1]) for row in recent}
+    older_map = {str(row[0]): float(row[1]) for row in older}
+    # 用「紧挨接缝」的重叠段估基差：现货与期货的升贴水会随期限结构翻转
+    # （2016 年是贴水、2026 年是升水），取最近 60 日反而会把接缝放大。
+    overlap = sorted(set(recent_map) & set(older_map))[:60]
+    ratios = sorted(recent_map[d] / older_map[d] for d in overlap if older_map.get(d))
+    factor = ratios[len(ratios) // 2] if ratios else 1.0
+    seam = str(recent[0][0])
+
+    merged = {}
+    for date_str, value in older:
+        date_str = str(date_str)
+        if date_str < seam:
+            merged[date_str] = float(value) * factor
+    for date_str, value in recent_map.items():
+        merged[date_str] = value
+    return _compact_macro_points(merged)
+
+
+def _fetch_danjuan_pe_history(code):
+    """读取蛋卷指数的全量 PE 历史。"""
+    url = f"https://danjuanfunds.com/djapi/index_eva/pe_history/{code}?day=all"
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Referer": "https://danjuanfunds.com/screw/valuation-table",
+        "Accept": "application/json,text/plain,*/*",
+    })
+    with get_thread_opener().open(req, timeout=25) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    rows = ((payload.get("data") or {}).get("index_eva_pe_growths") or [])
+    points = {}
+    for row in rows:
+        try:
+            ts = float(row["ts"]) / 1000.0
+            pe = float(row["pe"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if pe <= 0:
+            continue
+        # 蛋卷的 ts 标的是「该估值日北京时间 00:00」（如 2026-11-19 的 A 股 PE
+        # 记作 1795017600 = 2026-11-18 16:00 UTC）。按 UTC 解析会让整条序列
+        # 日期早一天，与页面其它序列错位，所以必须用北京时间换算。
+        date_str = datetime.fromtimestamp(ts, BEIJING_TZ).strftime("%Y-%m-%d")
+        if date_str >= MACRO_HISTORY_START:
+            points[date_str] = pe
+    return _compact_macro_points(points)
+
+
+# ===== PE 长历史补丁 =====
+# 蛋卷 pe_history 只回吐近 10 年（实测 515 个交易日），2016 年之前的 PE 段是空的。
+# 标普500 用 Multpl 的月度滚动 PE（1871 年起，与蛋卷 TTM 口径的中位数比值 1.002），
+# 沪深300 用中证指数官网的滚动 PE（2011-06 起，比值 0.96）。
+# 两段都按重叠期比值中位数缩放后再拼到蛋卷序列之前，接缝不跳台阶。
+PE_LONG_HISTORY_CACHE = os.path.join("data", "pe_long_history.json")
+PE_LONG_HISTORY_REFRESH_DAYS = 7
+
+
+def _fetch_multpl_sp500_pe():
+    """Multpl 标普500 滚动市盈率，月度（每月 1 日的读数），1871 年起。"""
+    url = "https://www.multpl.com/s-p-500-pe-ratio/table/by-month"
+    req = urllib.request.Request(url, headers={
+        **DEFAULT_HEADERS,
+        "Accept": "text/html,application/xhtml+xml",
+        "Referer": "https://www.multpl.com/",
+    })
+    with get_thread_opener().open(req, timeout=30) as resp:
+        raw = resp.read().decode("utf-8", "ignore")
+    # 表格单元里混着 &#x2002; 这类实体和 <abbr>Estimate</abbr> 标记，
+    # 必须先剥标签、反转义再取数字，否则会把 &#x2002; 里的 "2002" 当成 PE。
+    rows = re.findall(
+        r"<tr[^>]*>\s*<td>([A-Z][a-z]{2} \d{1,2}, \d{4})</td>\s*<td>(.*?)</td>",
+        raw, re.S,
+    )
+    points = {}
+    for date_raw, cell in rows:
+        text = html.unescape(re.sub(r"<[^>]+>", " ", cell))
+        match = re.search(r"\d+\.\d+", text)
+        if not match:
+            continue
+        try:
+            date_str = datetime.strptime(date_raw, "%b %d, %Y").strftime("%Y-%m-%d")
+            pe = float(match.group(0))
+        except ValueError:
+            continue
+        if pe > 0 and date_str >= MACRO_HISTORY_START:
+            points[date_str] = pe
+    return points
+
+
+def _fetch_csindex_pe(index_code="000300"):
+    """中证指数官网的滚动市盈率，日频；返回字段名是 peg，实际是滚动 PE（TTM）。"""
+    params = urllib.parse.urlencode({
+        "indexCode": index_code,
+        "startDate": "20100101",
+        "endDate": now_beijing().strftime("%Y%m%d"),
+    })
+    req = urllib.request.Request(
+        "https://www.csindex.com.cn/csindex-home/perf/index-perf?" + params,
+        headers={
+            **DEFAULT_HEADERS,
+            "Accept": "application/json",
+            "Referer": "https://www.csindex.com.cn/",
+        },
+    )
+    with get_thread_opener().open(req, timeout=60) as resp:
+        payload = json.loads(resp.read().decode("utf-8", "ignore"))
+    points = {}
+    for row in payload.get("data") or []:
+        raw_date = str(row.get("tradeDate") or "")
+        try:
+            pe = float(row.get("peg"))
+        except (TypeError, ValueError):
+            continue
+        if len(raw_date) == 8 and pe > 0:
+            points[f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"] = pe
+    return points
+
+
+def _extend_pe_with_long_source(points, long_points):
+    """把长历史 PE 拼到蛋卷序列之前，接缝按重叠期比值中位数缩放。"""
+    base = {}
+    for row in points or []:
+        try:
+            base[str(row[0])] = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+    if not base or not long_points:
+        return points
+    start = min(base)
+    ratios = sorted(
+        base[date_str] / long_points[date_str]
+        for date_str in base
+        if date_str in long_points and long_points[date_str] > 0
+    )
+    ratio = ratios[len(ratios) // 2] if len(ratios) >= 12 else 1.0
+    merged = {
+        date_str: value * ratio
+        for date_str, value in long_points.items()
+        if date_str < start
+    }
+    if not merged:
+        return points
+    merged.update(base)
+    return _compact_macro_points(merged)
+
+
+def _read_pe_long_cache():
+    try:
+        with open(PE_LONG_HISTORY_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_pe_long_cache(data):
+    try:
+        os.makedirs(os.path.dirname(PE_LONG_HISTORY_CACHE), exist_ok=True)
+        tmp = PE_LONG_HISTORY_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, PE_LONG_HISTORY_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ PE 长历史缓存写入失败: {e}")
+
+
+def fetch_pe_long_history():
+    """抓取并缓存「蛋卷之外的」长历史 PE；7 天内复用，避免每天重下 1.6MB。"""
+    cached = _read_pe_long_cache()
+    fetched = str(cached.get("fetched") or "")[:10]
+    if fetched and cached.get("items"):
+        try:
+            age = (now_beijing().date()
+                   - datetime.strptime(fetched, "%Y-%m-%d").date()).days
+        except ValueError:
+            age = PE_LONG_HISTORY_REFRESH_DAYS
+        if 0 <= age < PE_LONG_HISTORY_REFRESH_DAYS:
+            return cached
+
+    jobs = {
+        "pe_sp500": ("Multpl 标普500 月度 PE", _fetch_multpl_sp500_pe),
+        "pe_hs300": ("中证指数 沪深300 滚动 PE", lambda: _fetch_csindex_pe("000300")),
+    }
+    items = dict(cached.get("items") or {})
+    for key, (label, fetcher) in jobs.items():
+        try:
+            points = fetcher()
+        except Exception as e:
+            print(f"    [warn] {key} 长历史 PE 抓取失败: {_brief_error(e)}")
+            continue
+        if points:
+            items[key] = {
+                "label": label,
+                "points": [[d, round(v, 2)] for d, v in sorted(points.items())],
+            }
+            print(f"    ✓ PE 长历史 {key}: {len(points)} 点（{min(points)} 起）")
+    data = {"fetched": now_beijing().strftime("%Y-%m-%d"), "items": items}
+    if items:
+        _write_pe_long_cache(data)
+    return data
+
+
+def _fetch_binance_macro_history(symbol="BTCUSDT"):
+    """分页读取 Binance 日线，供 BTC 卡片展开使用。"""
+    endpoint = "https://data-api.binance.vision/api/v3/klines"
+    start_dt = datetime.strptime("2017-01-01", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    cursor = int(start_dt.timestamp() * 1000)
+    end_ms = int(now_beijing().timestamp() * 1000)
+    points = {}
+    while cursor < end_ms:
+        query = urllib.parse.urlencode({
+            "symbol": symbol,
+            "interval": "1d",
+            "startTime": cursor,
+            "endTime": end_ms,
+            "limit": 1000,
+        })
+        req = urllib.request.Request(f"{endpoint}?{query}", headers=DEFAULT_HEADERS)
+        with get_thread_opener().open(req, timeout=25) as resp:
+            rows = json.loads(resp.read().decode("utf-8"))
+        if not rows:
+            break
+        for row in rows:
+            try:
+                date_str = datetime.fromtimestamp(
+                    float(row[0]) / 1000.0, timezone.utc
+                ).strftime("%Y-%m-%d")
+                close = float(row[4])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if close > 0:
+                points[date_str] = close
+        next_cursor = int(rows[-1][0]) + 86400000
+        if next_cursor <= cursor:
+            break
+        cursor = next_cursor
+        if len(rows) < 1000:
+            break
+    return _compact_macro_points(points)
+
+
+def _fetch_akshare_hist(symbol, symbol_type="foreign", start_date=MACRO_HISTORY_START):
+    """读取 AkShare 商品历史；调用前临时关闭代理环境变量。"""
+    old_proxy = {
+        key: os.environ.get(key)
+        for key in (
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+            "http_proxy", "https_proxy", "all_proxy",
+        )
+    }
+    for key in old_proxy:
+        os.environ.pop(key, None)
+    try:
+        if symbol_type == "domestic":
+            df = ak.futures_main_sina(symbol=symbol)
+        else:
+            df = ak.futures_foreign_hist(symbol=symbol)
+    finally:
+        for key, value in old_proxy.items():
+            if value is not None:
+                os.environ[key] = value
+    if df is None or df.empty:
+        return []
+    date_col = "日期" if "日期" in df.columns else ("date" if "date" in df.columns else df.columns[0])
+    close_col = "收盘价" if "收盘价" in df.columns else ("close" if "close" in df.columns else df.columns[-1])
+    points = {}
+    for _, row in df.iterrows():
+        try:
+            date_str = pd.to_datetime(row[date_col]).strftime("%Y-%m-%d")
+            close = float(row[close_col])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if date_str >= start_date and close > 0:
+            points[date_str] = close
+    return _compact_macro_points(points)
+
+
+def _merge_macro_series(cached, remote, key, title, unit, source):
+    """合并远端与本地缓存；远端失败时保留完整本地历史。"""
+    old_points = (cached.get(key) or {}).get("points") or []
+    # 拼接类序列（"蛋卷 + Multpl 月度"、"新浪 + EIA"）的 source 文案比单源更具体，
+    # 增量补点时不能退回单源文案，否则图注会把多源拼接说成单一数据源。
+    old_source = (cached.get(key) or {}).get("source") or ""
+    if source and old_source.startswith(source) and len(old_source) > len(source):
+        source = old_source
+    merged = {}
+    for row in old_points:
+        try:
+            merged[str(row[0])] = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+    for row in remote or []:
+        try:
+            merged[str(row[0])] = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+    if not merged:
+        return None
+    return {
+        "title": title,
+        "unit": unit,
+        "source": source,
+        "points": _compact_macro_points(merged),
+    }
+
+
+def append_macro_history_points(history, key, points, title, unit, source):
+    """把当前指标值并入历史缓存，供下一次生成和后续历史图使用。"""
+    merged = _merge_macro_series(history, points, key, title, unit, source)
+    if merged:
+        history[key] = merged
+    return history
+
+
+def write_macro_history_cache(history):
+    """写入本轮最终历史数据；调用方负责保证至少有一个可用序列。"""
+    if history and any(
+        isinstance(item, dict) and item.get("points")
+        for item in history.values()
+    ):
+        history["generated_at"] = now_beijing().strftime("%Y-%m-%d %H:%M:%S")
+        _write_macro_history_cache(history)
+
+
+def fetch_macro_history():
+    """并行获取首页全部可展开卡片的历史序列，网络失败时回退本地缓存。
+
+    ★ 历史序列（2000 年起）已随 data/macro_history.json 入库，同一自然日内
+      重复构建直接复用，不再重复发请求；跨天才增量刷新一次。
+    """
+    cached = _read_macro_history_cache()
+    cached_day = str(cached.get("generated_at") or "")[:10]
+    if (not REFRESH_HISTORY and cached_day == now_beijing().strftime("%Y-%m-%d")
+            and any(isinstance(item, dict) and item.get("points") for item in cached.values())):
+        print("📈 宏观历史序列: 命中当日快照，跳过网络请求")
+        return cached
+    remote = {}
+    jobs = {
+        "vix": lambda: fetch_cboe_macro_history("VIX"),
+        "vxn": lambda: fetch_cboe_macro_history("VXN"),
+        "vxsmh": lambda: fetch_cboe_macro_history("VXSMH"),
+        "skew": lambda: fetch_cboe_macro_history("SKEW"),
+        "cnn": fetch_cnn_macro_history,
+        "usdcny": lambda: _fetch_eastmoney_macro_history("133.USDCNH"),
+        "gold_london": lambda: _fetch_eastmoney_macro_history("101.GC00Y"),
+        "gold_shfe": lambda: _fetch_akshare_hist("AU0", "domestic"),
+        # 这张卡片和主数值都按美元/盎司展示，历史也必须使用美元报价。
+        "silver_london": lambda: _fetch_eastmoney_macro_history("101.SI00Y"),
+        # COMEX 铜实时值和历史值都按美元/磅保存，避免混用 LME 美元/吨口径。
+        "copper_lme": lambda: _fetch_eastmoney_macro_history("101.HG00Y"),
+        # 布伦特原油：卡片实时值取 Brent(BZ=F)，历史也必须用 Brent。
+        # 东财 102.CL00Y 是 WTI 连续（长期比 Brent 低 5~7 美元），已弃用；
+        # 新浪 OIL（Brent 连续）只覆盖 2016-11 之后约 10 年，前段用 EIA 布伦特
+        # 现货（RBRTE，1987 年起）按重叠期基差校正后拼接，整体回溯到 2000 年。
+        "brent": _fetch_brent_macro_history,
+        "btc": _fetch_binance_macro_history,
+        "pe_ndx": lambda: _fetch_danjuan_pe_history("NDX"),
+        "pe_sp500": lambda: _fetch_danjuan_pe_history("SP500"),
+        "pe_hs300": lambda: _fetch_danjuan_pe_history("SH000300"),
+        "pe_kc50": lambda: _fetch_danjuan_pe_history("SH000688"),
+        "pe_hstech": lambda: _fetch_danjuan_pe_history("HKHSTECH"),
+    }
+
+    # 东财 kline 在部分网络下会被服务端直接掐断，所以每条序列都配了新浪兜底；
+    # 这里改成小并发（东财并发过高会限流），失败项最后汇总成一行，不再逐条刷屏。
+    # 指数点位单独走独立缓存，不放进这里：本任务一旦超时会整体回退旧缓存。
+    eastmoney_keys = (
+        "usdcny", "gold_london", "silver_london", "copper_lme",
+    )
+    remote_via = {}
+    failed_history = {}
+
+    def _fetch_with_fallback(key):
+        """东财优先，失败则切新浪同口径品种，返回 (points, 数据源标记)。"""
+        try:
+            points = jobs[key]()
+            if points:
+                return points, "eastmoney"
+        except Exception:
+            pass
+        fallback = _MACRO_HISTORY_FALLBACK.get(key)
+        if not fallback:
+            return [], None
+        points = _fetch_sina_macro_history(*fallback)
+        return points, ("sina" if points else None)
+
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        future_map = {ex.submit(_fetch_with_fallback, key): key for key in eastmoney_keys}
+        for future in as_completed(future_map):
+            key = future_map[future]
+            try:
+                points, via = future.result(timeout=60)
+            except Exception as e:
+                failed_history[key] = _brief_error(e)
+                continue
+            if points:
+                remote[key] = points
+                remote_via[key] = via
+            else:
+                failed_history[key] = "东财/新浪均无数据"
+
+    parallel_jobs = {k: v for k, v in jobs.items() if k not in eastmoney_keys}
+    with ThreadPoolExecutor(max_workers=min(10, len(parallel_jobs))) as ex:
+        future_map = {ex.submit(job): key for key, job in parallel_jobs.items()}
+        for future in as_completed(future_map):
+            key = future_map[future]
+            try:
+                points = future.result(timeout=70)
+            except Exception as e:
+                failed_history[key] = _brief_error(e)
+                continue
+            if points:
+                remote[key] = points
+
+    result = {"generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S")}
+    if failed_history:
+        summary = "，".join(f"{k}({v})" for k, v in failed_history.items())
+        print(f"    [warn] 宏观历史本轮未更新，沿用缓存: {summary}")
+    sources = {
+        "vix": ("VIX 标普500波动率", "点", "CBOE 官方历史收盘价"),
+        "vxn": ("VXN 纳斯达克100波动率", "点", "CBOE 官方历史收盘价"),
+        "vxsmh": ("VXSMH 半导体 ETF 波动率", "点", "CBOE 官方历史收盘价"),
+        "skew": ("SKEW 黑天鹅偏斜", "点", "CBOE 官方历史收盘价"),
+        "cnn": ("CNN 恐慌贪婪指数", "分", "CNN 官方历史序列"),
+        "usdcny": ("USD/CNY 汇率", "", "东方财富 USDCNH 历史日线"),
+        "gold_london": ("伦敦金 (XAU/USD)", "美元/盎司", "东方财富 COMEX 黄金历史日线"),
+        "gold_shfe": ("沪金主连 (AU0)", "元/克", "新浪 AkShare 沪金历史日线"),
+        "silver_london": ("伦敦银 (XAG/USD)", "美元/盎司", "东方财富 COMEX 白银历史日线"),
+        "copper_lme": ("COMEX 铜", "美元/磅", "东方财富 COMEX 铜历史日线"),
+        "brent": ("布伦特原油 (BZ=F)", "美元/桶", "新浪 Brent 期货 + EIA 布伦特现货（2000 年起，接缝按基差校正）"),
+        "btc": ("比特币 (BTC/USDT)", "USDT", "Binance 日线"),
+        "pe_ndx": ("纳指100历史 PE", "倍", "蛋卷指数估值"),
+        "pe_sp500": ("标普500历史 PE", "倍", "蛋卷指数估值"),
+        "pe_hs300": ("沪深300历史 PE", "倍", "蛋卷指数估值"),
+        "pe_kc50": ("科创50历史 PE", "倍", "蛋卷指数估值"),
+        "pe_hstech": ("恒生科技历史 PE", "倍", "蛋卷指数估值"),
+    }
+    for key, (title, unit, source) in sources.items():
+        # 本轮实际走的是新浪兜底时，把图上的数据源标注改成新浪，避免口径说明对不上。
+        if remote_via.get(key) == "sina":
+            source = _SINA_SOURCE_LABEL.get(key, source)
+        cached_for_key = cached
+        remote_points = remote.get(key)
+        if key in _HISTORY_FULL_RESET and remote_points:
+            # 日期口径整体修正过，旧点全部作废，避免新旧点逐日交错成双倍序列。
+            cached_for_key = dict(cached)
+            cached_for_key.pop(key, None)
+        if key in _HISTORY_EPOCH_RESET and remote_points:
+            # 口径切换：只保留切换后（即新源最早一天起）的旧点，避免两类标的拼接。
+            epoch = str(remote_points[0][0])
+            old_series = cached.get(key) or {}
+            cached_for_key = dict(cached)
+            cached_for_key[key] = dict(
+                old_series,
+                points=[p for p in (old_series.get("points") or []) if str(p[0]) >= epoch],
+            )
+        merged = _merge_macro_series(cached_for_key, remote_points, key, title, unit, source)
+        if merged:
+            result[key] = merged
+
+    # ===== PE 长历史补丁：蛋卷只给近 10 年，标普500/沪深300 用公开长历史源补前面 =====
+    if result.get("pe_sp500") or result.get("pe_hs300"):
+        pe_long = fetch_pe_long_history()
+        for key, patch in (pe_long.get("items") or {}).items():
+            item = result.get(key)
+            if not isinstance(item, dict) or not item.get("points"):
+                continue
+            long_points = {}
+            for row in patch.get("points") or []:
+                try:
+                    long_points[str(row[0])] = float(row[1])
+                except (IndexError, TypeError, ValueError):
+                    continue
+            extended = _extend_pe_with_long_source(item["points"], long_points)
+            if len(extended) > len(item["points"]):
+                item["points"] = extended
+                label = patch.get("label") or "公开长历史源"
+                item["source"] = f"蛋卷指数估值 + {label}"
+
+    if any(key in result for key in sources):
+        _write_macro_history_cache(result)
+    return result
+
+
+def _read_index_point_cache():
+    try:
+        with open(INDEX_POINT_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_index_point_cache(data):
+    try:
+        os.makedirs(os.path.dirname(INDEX_POINT_CACHE), exist_ok=True)
+        tmp = INDEX_POINT_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, INDEX_POINT_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ 指数点位缓存写入失败: {e}")
+
+
+def _http_text(url, referer=None, timeout=12):
+    """轻量 GET，供指数日线多源抓取使用。"""
+    headers = {**DEFAULT_HEADERS, "Accept": "*/*"}
+    if referer:
+        headers["Referer"] = referer
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
+def _fetch_sina_index_daily(kind, symbol):
+    """新浪指数日线：A 股用 CN_MarketData，美股用 US_MinKService。"""
+    points = {}
+    if kind == "sina_a":
+        url = (
+            "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+            f"CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen=3000"
+        )
+        rows = json.loads(_http_text(url, "https://finance.sina.com.cn/")) or []
+        for row in rows:
+            try:
+                points[str(row["day"])] = float(row["close"])
+            except (KeyError, TypeError, ValueError):
+                continue
+    else:
+        url = (
+            "https://stock.finance.sina.com.cn/usstock/api/jsonp.php/IO.XSRF.K/"
+            f"US_MinKService.getDailyK?symbol={urllib.parse.quote(symbol, safe='')}"
+        )
+        raw = _http_text(url, "https://finance.sina.com.cn/")
+        marker = raw.find("IO.XSRF.K(")
+        start = raw.find("(", marker) if marker >= 0 else raw.find("(")
+        end = raw.rfind(")")
+        rows = json.loads(raw[start + 1:end]) if start >= 0 and end > start else []
+        if isinstance(rows, list):
+            for row in rows:
+                try:
+                    points[str(row["d"])] = float(row["c"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+    return _compact_macro_points(points)
+
+
+def _fetch_tencent_index_daily(kind, symbol, start_year=2016):
+    """腾讯指数日线：单段最多 320 根 K 线，按自然年滚动拼接全历史。"""
+    path = {
+        "tx_a": "fqkline/get",
+        "tx_us": "usfqkline/get",
+        "tx_hk": "hkfqkline/get",
+    }.get(kind)
+    if not path:
+        return []
+    points = {}
+    for year in range(start_year, now_beijing().year + 1):
+        url = (
+            f"https://web.ifzq.gtimg.cn/appstock/app/{path}"
+            f"?param={symbol},day,{year}-01-01,{year}-12-31,320,qfq"
+        )
+        try:
+            raw = _http_text(url, "https://gu.qq.com/", timeout=10)
+            if raw.lstrip().startswith("kline_dayqfq="):
+                raw = raw.split("=", 1)[1]
+            payload = json.loads(raw)
+            node_map = payload.get("data") or {}
+            if not isinstance(node_map, dict):
+                continue
+            node = node_map.get(symbol) or next(iter(node_map.values()), {}) or {}
+            rows = node.get("day") or node.get("qfqday") or []
+            for row in rows:
+                if len(row) >= 3:
+                    try:
+                        points[str(row[0])] = float(row[2])
+                    except (TypeError, ValueError):
+                        continue
+        except Exception:
+            continue
+    return _compact_macro_points(points)
+
+
+def _fetch_eastmoney_index_daily(secid, beg="20160101", timeout=8):
+    """东方财富日线：只做一次快速尝试，失败立即交给下一个源。
+
+    beg 可覆盖起点（年内回撤要回溯到 2000 年）；东财一次请求就返回全历史，
+    比腾讯按年滚动拼接（每只 20+ 请求、易被限流）快得多。
+    """
+    query = urllib.parse.urlencode({
+        "secid": secid,
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f53",
+        "klt": "101",
+        "fqt": "1",
+        "beg": beg,
+        "end": now_beijing().strftime("%Y%m%d"),
+        "lmt": "1000000",
+    })
+    url = f"https://push2his.eastmoney.com/api/qt/stock/kline/get?{query}"
+    payload = json.loads(_http_text(url, "https://quote.eastmoney.com/", timeout=timeout))
+    rows = (payload.get("data") or {}).get("klines") or []
+    points = {}
+    for row in rows:
+        parts = str(row).split(",")
+        if len(parts) >= 2:
+            try:
+                points[parts[0]] = float(parts[1])
+            except (TypeError, ValueError):
+                continue
+    return _compact_macro_points(points)
+
+
+def _fetch_index_point_daily(key):
+    """按配置顺序尝试多个数据源，返回 (日线点位, 实际来源)。"""
+    for kind, symbol in INDEX_POINT_SOURCES.get(key, []):
+        try:
+            if kind.startswith("sina"):
+                points = _fetch_sina_index_daily(kind, symbol)
+            elif kind.startswith("tx"):
+                points = _fetch_tencent_index_daily(kind, symbol)
+            else:
+                points = _fetch_eastmoney_index_daily(symbol)
+        except Exception as exc:
+            print(f"    [warn] 指数点位 {key} {kind} 获取失败: {exc}")
+            points = []
+        if len(points) >= 60:
+            return points, INDEX_POINT_SOURCE_LABELS.get(kind, kind)
+    return [], None
+
+
+def fetch_index_point_history(pe_dates_by_key):
+    """抓取宽基指数收盘点位，按对应 PE 的观测日对齐后写入独立缓存。
+
+    与 fetch_macro_history 解耦：宏观历史任务超时/回退旧缓存时，点位数据依然可用，
+    也不会被宏观缓存的整体覆盖写丢掉。某条抓取失败时沿用上一次缓存点位。
+    """
+    cached = _read_index_point_cache()
+    cached_day = str(cached.get("generated_at") or "")[:10]
+    if (not REFRESH_HISTORY and cached_day == now_beijing().strftime("%Y-%m-%d")
+            and any(isinstance(item, dict) and item.get("points") for item in cached.values())):
+        print("📈 宽基指数点位: 命中当日快照，跳过网络请求")
+        return cached
+    result = {"generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S")}
+    updated = 0
+    for key, spec in INDEX_POINT_TARGETS.items():
+        title, unit, source, _secid, pe_key, _label = spec
+        pe_dates = pe_dates_by_key.get(pe_key) or []
+        if not pe_dates:
+            continue
+        merged = {}
+        old_item = cached.get(key) or {}
+        for row in (old_item.get("points") or []):
+            try:
+                merged[str(row[0])] = float(row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+        daily, used_source = _fetch_index_point_daily(key)
+        if daily:
+            aligned = _align_points_to_dates(pe_dates, daily)
+            for date_str, value in zip(pe_dates, aligned):
+                if value is not None:
+                    merged[str(date_str)] = value
+            # 多留一个最新交易日：PE 当天追加观测点时可以前向填充到最新收盘
+            merged[str(daily[-1][0])] = float(daily[-1][1])
+            updated += 1
+        else:
+            print(f"    [warn] 指数点位 {key} 全部数据源失败，沿用缓存")
+        points = _compact_macro_points(merged)
+        if points:
+            result[key] = {
+                "title": title,
+                "unit": unit,
+                "source": used_source or old_item.get("source") or source,
+                "points": points,
+            }
+    if updated:
+        _write_index_point_cache(result)
+        print(f"📈 宽基指数点位: 更新 {updated}/{len(INDEX_POINT_TARGETS)} 条")
+    else:
+        print("📈 宽基指数点位: 本轮未取到新数据，使用本地缓存")
+    return result
+
+
+def _annual_mdd_from_points(points):
+    """按自然年切分日线收盘价，算每年内的最大收盘价回撤。
+
+    年内口径：高点只能取当年内的收盘价（不跨年回溯），低点必须紧跟其后，
+    因此「2020 年从 3 月高点跌到 6 月低点」才算，跨年的跌幅不计入任何一年。
+    返回 {year: {mdd, peak_date, trough_date, first, last, n}}，mdd 为负百分比。
+    """
+    by_year = {}
+    for row in points or []:
+        try:
+            date_str = str(row[0])
+            value = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if len(date_str) < 10 or value <= 0:
+            continue
+        try:
+            year = int(date_str[:4])
+        except ValueError:
+            continue
+        # 与首页「2000 年起」口径一致：早于 2000 年的年份不计入
+        if year < ANNUAL_DD_START_YEAR:
+            continue
+        by_year.setdefault(year, []).append((date_str, value))
+
+    out = {}
+    for year, rows in by_year.items():
+        rows.sort(key=lambda item: item[0])
+        if len(rows) < ANNUAL_DD_MIN_BARS:
+            continue
+        peak_value = None
+        peak_date = None
+        worst = 0.0
+        worst_peak = None
+        worst_trough = None
+        for date_str, value in rows:
+            if peak_value is None or value > peak_value:
+                peak_value = value
+                peak_date = date_str
+            if peak_value:
+                drawdown = value / peak_value - 1.0
+                if drawdown < worst:
+                    worst = drawdown
+                    worst_peak = peak_date
+                    worst_trough = date_str
+        out[year] = {
+            "mdd": round(worst * 100.0, 2),
+            "peak_date": worst_peak or rows[0][0],
+            "trough_date": worst_trough or rows[0][0],
+            "first": rows[0][0],
+            "last": rows[-1][0],
+            "n": len(rows),
+        }
+    return out
+
+
+def _read_annual_dd_cache():
+    try:
+        with open(ANNUAL_DD_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_annual_dd_cache(payload):
+    try:
+        os.makedirs(os.path.dirname(ANNUAL_DD_CACHE) or ".", exist_ok=True)
+        tmp = ANNUAL_DD_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, ANNUAL_DD_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ 年内回撤缓存写入失败: {e}")
+
+
+def _sample_weekly_points(points):
+    """把日线序列压成「每周最后一个交易日」，[日期, 值] 升序返回。
+
+    26 年日线约 6800 点，直接塞进页面会让估值图多出几百 KB；估值图本身
+    和 PE（蛋卷也是周频）同粒度即可，周采样后约 1350 点，画面上看不出差别。
+    """
+    weekly = {}
+    for row in points or []:
+        try:
+            date_str = str(row[0])[:10]
+            value = float(row[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if len(date_str) < 10 or value <= 0:
+            continue
+        try:
+            iso_year, iso_week, _ = datetime.strptime(date_str, "%Y-%m-%d").isocalendar()
+        except ValueError:
+            continue
+        weekly[(iso_year, iso_week)] = (date_str, value)
+    return [[d, v] for _key, (d, v) in sorted(weekly.items())]
+
+
+def _read_index_daily_weekly():
+    try:
+        with open(INDEX_DAILY_WEEKLY_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        items = (data or {}).get("items") or {}
+        return items if isinstance(items, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_index_daily_weekly(items):
+    if not items:
+        return
+    try:
+        os.makedirs(os.path.dirname(INDEX_DAILY_WEEKLY_CACHE) or ".", exist_ok=True)
+        payload = {
+            "generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
+            "items": items,
+        }
+        tmp = INDEX_DAILY_WEEKLY_CACHE + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, INDEX_DAILY_WEEKLY_CACHE)
+    except Exception as e:
+        print(f"    ⚠️ 指数周线缓存写入失败: {e}")
+
+
+def _fetch_annual_dd_daily(sources):
+    """按配置顺序抓指数日线，拿到足够长的序列就返回 (points, 来源)。"""
+    beg = f"{ANNUAL_DD_START_YEAR}0101"
+    for kind, symbol in sources:
+        try:
+            if kind == "eastmoney":
+                points = _fetch_eastmoney_index_daily(symbol, beg=beg, timeout=15)
+            elif kind.startswith("tx"):
+                points = _fetch_tencent_index_daily(kind, symbol, start_year=ANNUAL_DD_START_YEAR)
+            elif kind.startswith("sina"):
+                points = _fetch_sina_index_daily(kind, symbol)
+            else:
+                points = []
+        except Exception as exc:
+            print(f"    [warn] 年内回撤 {symbol} {kind} 获取失败: {exc}")
+            points = []
+        if len(points) >= ANNUAL_DD_MIN_BARS:
+            return points, INDEX_POINT_SOURCE_LABELS.get(kind, kind)
+    return [], None
+
+
+def fetch_index_annual_drawdown():
+    """抓取/更新各指数「年内最大收盘价回撤」，结果落独立缓存。
+
+    东财一次请求就返回全历史（约 1s/只），所以每次跑都整段重算，逻辑简单；
+    新数据比缓存短（降级到新浪 3000 根）时按年份合并，历史年份不会丢。
+    """
+    cached = _read_annual_dd_cache()
+    cached_items = cached.get("items") or {}
+    version_ok = cached.get("version") == ANNUAL_DD_CACHE_VERSION
+    # 历史年份已定型，只有当年那一列每天在动：同一自然日已算过就不再发请求。
+    # 例外：周线快照缺失时（首次升级/文件被清）必须重跑一轮，否则估值图拿不到
+    # 2000 年起的点位，横轴又会退回 2016 年。
+    cached_day = str(cached.get("generated_at") or "")[:10]
+    if (not REFRESH_HISTORY and version_ok and cached_items
+            and cached_day == now_beijing().strftime("%Y-%m-%d")
+            and _read_index_daily_weekly()):
+        print("📉 年内最大回撤: 命中当日缓存，跳过网络请求")
+        return cached
+
+    result = {
+        "generated_at": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
+        "version": ANNUAL_DD_CACHE_VERSION,
+        "items": {},
+    }
+    weekly_items = dict(_read_index_daily_weekly())
+    refreshed = 0
+    for name, sources in ANNUAL_DD_TARGETS.items():
+        old = cached_items.get(name) or {}
+        old_years = (old.get("years") or {}) if version_ok else {}
+
+        daily, used_source = _fetch_annual_dd_daily(sources)
+        if not daily:
+            if old_years:
+                result["items"][name] = old
+                print(f"    [warn] 年内回撤 {name} 数据源全失败，沿用缓存")
+            continue
+
+        fresh_years = _annual_mdd_from_points(daily)
+        if not fresh_years:
+            continue
+        # 历史周线已定型：本次拿到的覆盖到的日期整段替换，取不到的沿用旧快照，
+        # 避免某次降级到新浪（只有 3000 根）时把 2000-2015 的周线抹掉。
+        old_weekly = (weekly_items.get(name) or {}).get("points") or []
+        weekly_points = _sample_weekly_points(daily)
+        if old_weekly and weekly_points:
+            first_new = weekly_points[0][0]
+            merged_weekly = [row for row in old_weekly if str(row[0]) < first_new] + weekly_points
+        else:
+            merged_weekly = weekly_points or old_weekly
+        if merged_weekly:
+            weekly_items[name] = {
+                "source": used_source or (weekly_items.get(name) or {}).get("source") or "",
+                "points": merged_weekly,
+            }
+        # 历史年份已定型：本次能算到的年份用新值，算不到的保留旧值
+        years = dict(old_years)
+        for year, record in fresh_years.items():
+            years[str(year)] = record
+
+        sorted_years = sorted(years.keys(), key=lambda y: int(y))
+        result["items"][name] = {
+            "source": used_source or old.get("source") or "",
+            "start": years[sorted_years[0]]["first"],
+            "end": years[sorted_years[-1]]["last"],
+            "years": years,
+        }
+        refreshed += 1
+
+    if refreshed:
+        _write_annual_dd_cache(result)
+        print(f"📉 年内最大回撤: 更新 {refreshed}/{len(ANNUAL_DD_TARGETS)} 条")
+    else:
+        print("📉 年内最大回撤: 本轮未取到新数据，使用本地缓存")
+    _write_index_daily_weekly(weekly_items)
+    return result
+
+
+
+# ==============================================================================
+# 国家（地区）分布：公告表格解析工具
+# 说明：年报/中报正文开头有目录，目录条目与正文章节标题完全同名，
+#       因此不能简单 find() 首个命中位置，必须跳过目录条目再定位正文表格。
+# ==============================================================================
+COUNTRY_CACHE_VERSION = 5          # v5：抓取深度提到 8 期（详情浮窗季度条要展示 8 列）
+HOLDER_CACHE_VERSION = 4           # v4：期数上限 8 -> 40（接口一次返回全部历年节点，不额外花请求）
+COUNTRY_PERIODS_KEEP = 4           # QDII 对比页的季度列数
+COUNTRY_FETCH_PERIODS = 8          # 国家/地区抓取深度（逐份公告抓取，成本高，只取近 8 期）
+HOLDER_PERIODS_KEEP = 40           # 持有人结构保留期数（半年报/年报节点，40 期约 20 年）
+HOLDINGS_PERIODS_KEEP = 8          # 详情浮窗顶部季度条展示的季度数（容器放不下时横向滚动）
+HOLDINGS_MAX_PERIODS = 120         # 缓存保留的季度上限（回溯全历史，仅作防爆保护）
+HOLDINGS_MIN_YEAR = 2004           # 历史回溯最早年份（境内基金最早 2001 年前后成立）
+HOLDINGS_CACHE_SCHEMA = 2          # v2：dict 结构（probed_min_year + 全量持仓 periods）
+HOLDINGS_POSITION_LIMIT = 400      # 单季度最多保存的持仓条数（半年报全量，防异常数据）
+HOLDINGS_BACKFILL_EMPTY_STREAK = 2 # 连续 N 个年份无数据即认定已到基金成立前，停止回溯
+
+_QUARTER_END_DAYS = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+
+# 部分基金（如富国）公告标题用中文数字年份：「二0二六年第3季度报告」
+_CN_DIGIT_MAP = {
+    "〇": "0", "○": "0", "零": "0", "０": "0",
+    "一": "1", "二": "2", "三": "3", "四": "4",
+    "五": "5", "六": "6", "七": "7", "八": "8", "九": "9",
+}
+_CN_NUM_CLASS = "0-9〇○零一二三四五六七八九０"
+
+
+def _cn_digits_to_ascii(text):
+    return "".join(_CN_DIGIT_MAP.get(ch, ch) for ch in str(text or ""))
+
+
+def _report_period_key(title):
+    """从公告标题解析报告期 (year, quarter)。
+
+    中期报告与第 2 季度报告同为 Q2，年度报告与第 4 季度报告同为 Q4，
+    因此可以用同一个 (年, 季度) 键对不同公告去重。
+    """
+    text = title or ""
+    matched = re.search(rf"([{_CN_NUM_CLASS}]{{4}})\s*年", text)
+    if not matched:
+        return None
+    year_text = _cn_digits_to_ascii(matched.group(1))
+    if not re.fullmatch(r"\d{4}", year_text):
+        return None
+    year = int(year_text)
+    # 注意顺序：半年度/中期报告优先判断，否则会被「年度报告」误吞成 Q4
+    if "中期报告" in text or "半年度" in text:
+        return (year, 2)
+    if "年度报告" in text:
+        return (year, 4)
+    mq = re.search(rf"第?\s*([{_CN_NUM_CLASS}])\s*季度", text)
+    if mq:
+        quarter_text = _cn_digits_to_ascii(mq.group(1))
+        if quarter_text.isdigit() and 1 <= int(quarter_text) <= 4:
+            return (year, int(quarter_text))
+    return None
+
+
+def _period_end_date(period_key):
+    """(2026, 3) -> '2026-09-30'。"""
+    year, quarter = period_key
+    return f"{year}-{_QUARTER_END_DAYS[quarter]}"
+
+
+def _period_label(date_str):
+    """把任意披露日期/期次标签折算成季度标签。
+
+    支持三种来源：
+      - 报告期末日期：2026-09-30   -> 2026Q3
+      - 季报期次标签：2026年3季度股票投资明细 -> 2026Q3（中文数字年份也支持）
+      - 已经是季度标签：2026Q3     -> 2026Q3
+    """
+    text = str(date_str or "")
+    matched = re.match(r"(\d{4})-(\d{2})", text)
+    if matched:
+        return f"{matched.group(1)}Q{(int(matched.group(2)) - 1) // 3 + 1}"
+    matched = re.match(
+        rf"([{_CN_NUM_CLASS}]{{4}})\s*年\s*第?\s*([{_CN_NUM_CLASS}])\s*季度", text
+    )
+    if matched:
+        year = _cn_digits_to_ascii(matched.group(1))
+        quarter = _cn_digits_to_ascii(matched.group(2))
+        if year.isdigit() and quarter.isdigit() and 1 <= int(quarter) <= 4:
+            return f"{year}Q{quarter}"
+    matched = re.match(r"(\d{4})\s*[Qq]\s*([1-4])", text)
+    if matched:
+        return f"{matched.group(1)}Q{matched.group(2)}"
+    return text or "--"
+
+
+def _ratio_value(text):
+    """把 '23.66%' / '23.66' 之类文本转成 float，失败返回 0.0。"""
+    cleaned = str(text or "").replace("%", "").replace(",", "").strip()
+    try:
+        return round(float(cleaned), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _minify_frag(html_text):
+    """压掉 HTML 片段里「标签之间」的纯空白文本节点。
+
+    详情浮窗的季度条 HTML 有 45% 是模板的缩进和换行；季度列从 4 增到 8 后
+    这些空白会把 fund_dashboard_details.js 顶到 5.8MB。合并后体积降约 42%，
+    比 4 列时的产物还小。
+
+    安全性：片段内所有相邻元素都由 flex / grid + gap 布局（.chart-controls、
+    .quarter-label、.stock-item、.fund-annual-stats 等），不依赖标签间的空白
+    来产生间距，因此压缩不影响渲染。注意只处理「纯空白」文本节点，
+    像「暂无持仓披露数据」这类真实文本不会被改动。
+    """
+    return re.sub(r">\s+<", "><", str(html_text or "")).strip()
+
+
+def _with_country_periods(result):
+    """把单期结果补成多期结构，保证渲染层总能读到 periods 列表。"""
+    if not isinstance(result, dict):
+        return {"date": "--", "countries": [], "periods": []}
+    if result.get("periods"):
+        return result
+    countries = result.get("countries") or []
+    result["periods"] = (
+        [{"date": result.get("date", "--"), "countries": countries, "total": result.get("total")}]
+        if countries else []
+    )
+    return result
+
+
+_COUNTRY_TABLE_HEADER_RE = re.compile(r"国家\s*[（(]\s*地区\s*[）)]")
+# 目录条目特征：标题后紧跟点线/省略号（可带页码）
+_COUNTRY_TOC_LEADER_RE = re.compile(r"[\s]*(?:[.．·…]{2,}|[·…])")
+# 数据行：金额（两位小数） + 占净值比例
+_COUNTRY_ROW_RE = re.compile(r"([\d,]+\.\d{2})\s+(\d+(?:\.\d+)?)\s*%?")
+# 数据行前的国家/地区名（取紧邻金额之前的连续中文）
+_COUNTRY_NAME_RE = re.compile(r"([\u4e00-\u9fa5]{2,10})\s*$")
+
+_COUNTRY_ALIAS = {
+    "香港": "中国香港", "台湾": "中国台湾", "澳门": "中国澳门",
+    "内地": "中国内地", "大陆": "中国大陆",
+}
+_COUNTRY_NAME_BLACKLIST = {
+    "合计", "小计", "其中", "金额单位", "公允价值", "占基金资产净值比例",
+    "国家", "地区", "人民币元", "期末", "报告期末",
+}
+_COUNTRY_MEMO = {}          # query_code -> 国家分布结果（单次运行内复用）
+
+# 公告中「期末在各个国家（地区）证券市场…投资分布」章节标题的各种写法
+_COUNTRY_SECTION_TITLES = [
+    "期末在各个国家（地区）证券市场的权益投资分布",
+    "期末在各个国家（地区）证券市场的股票及存托凭证投资分布",
+    "报告期末在各个国家（地区）证券市场的股票及存托凭证投资分布",
+    "期末在各个国家(地区)证券市场的权益投资分布",
+    "期末在各个国家(地区)证券市场的股票及存托凭证投资分布",
+    "报告期末在各个国家(地区)证券市场的股票及存托凭证投资分布",
+]
+
+
+def _install_ipv4_first():
+    """让 DNS 解析结果优先返回 IPv4。
+
+    背景：部分网络环境下域名会同时解析出 IPv6/IPv4，且 IPv6 链路不通。
+    socket.create_connection 只要有一条地址 TCP 连上就不再尝试后续地址，
+    而公告接口（np-cnotice-fund.eastmoney.com）恰恰是"连上后 TLS 被重置"，
+    于是永远拿不到数据。这里只做排序（IPv4 提前），不丢弃 IPv6 结果。
+    """
+    if getattr(socket, "_wb_ipv4_first", False):
+        return
+    _orig = socket.getaddrinfo
+
+    def _gai(host, port, family=0, type=0, proto=0, flags=0):
+        res = _orig(host, port, family, type, proto, flags)
+        if family in (0, socket.AF_UNSPEC) and len(res) > 1:
+            res = sorted(res, key=lambda x: 0 if x[0] == socket.AF_INET else 1)
+        return res
+
+    socket.getaddrinfo = _gai
+    socket._wb_ipv4_first = True
+
+
+try:
+    _install_ipv4_first()
+except Exception:
+    pass
+
+
+def _html_to_plain(s):
+    """HTML 片段转纯文本（保留换行，压缩空格）"""
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    s = (s.replace("&nbsp;", " ").replace("&amp;", "&")
+          .replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"'))
+    return re.sub(r"[ \t\r\u3000]+", " ", s)
+
+
+def _locate_country_section(content, patterns):
+    """定位正文中『期末在各个国家（地区）证券市场…投资分布』表格的起点，跳过目录条目。
+
+    判定正文：标题之后必须同时出现表头「国家（地区）」与「公允价值」
+              （目录里紧邻的「7.4 期末按公允价值…」条目只含后者，可据此排除）；
+    判定目录：标题之后紧跟点线/省略号（如 ……45 / ......45）。
+    """
+    for p in patterns:
+        for m in re.finditer(re.escape(p), content):
+            tail = _html_to_plain(content[m.end(): m.end() + 2000])[:400]
+            if _COUNTRY_TOC_LEADER_RE.match(tail):
+                continue          # 目录条目（标题后跟点线+页码）
+            if "公允价值" not in tail:
+                continue          # 不是带表格的正文段落
+            if not _COUNTRY_TABLE_HEADER_RE.search(tail):
+                continue          # 缺少表头「国家（地区）」，说明是目录或引用
+            return m.start()
+    return -1
+
+
+def _parse_country_table(sec_text):
+    """从章节纯文本中解析国家（地区）分布表，返回 (rows, total_ratio)。
+
+    兼容两种排版：
+      1) 每个单元格独立成行：美国\\n6,447,592,935.14\\n71.95
+      2) 单元格以空格分隔：美国 6,447,592,935.14 71.95
+    以「金额+比例」数字对为锚点，向左回溯最近的中文名，避免误抓其它表格。
+    """
+    hdr = _COUNTRY_TABLE_HEADER_RE.search(sec_text)
+    body = sec_text[hdr.end():] if hdr else sec_text
+
+    total_ratio = None
+    mt = re.search(r"合计\s*([\d,]+\.\d{2})\s+(\d+(?:\.\d+)?)", body)
+    if mt:
+        total_ratio = float(mt.group(2))
+
+    # 只保留表格区域：到「合计 / 注： / 下一章节」为止
+    cut = len(body)
+    for stop_re in (r"合计", r"注\s*[：:]", r"期末按行业", r"报告期末按行业"):
+        m_stop = re.search(stop_re, body)
+        if m_stop:
+            cut = min(cut, m_stop.start())
+    body = body[:cut]
+
+    rows = []
+    seen = set()
+    for m in _COUNTRY_ROW_RE.finditer(body):
+        prefix = body[max(0, m.start() - 30): m.start()]
+        nm = _COUNTRY_NAME_RE.search(prefix)
+        if not nm:
+            continue
+        name = nm.group(1).strip()
+        if name in _COUNTRY_NAME_BLACKLIST:
+            continue
+        name = _COUNTRY_ALIAS.get(name, name)
+        ratio = float(m.group(2))
+        if not (0 < ratio <= 100) or name in seen:
+            continue
+        seen.add(name)
+        rows.append({"country": name, "ratio": round(ratio, 2)})
+
+    rows.sort(key=lambda x: x["ratio"], reverse=True)
+    return rows, total_ratio
+
+
+def _curl_text(url, headers=None, timeout=20):
+    """用 curl 子进程取文本（绕过 Python 的 TLS 指纹）。
+
+    东方财富部分接口（np-cnotice-fund 公告正文、pdf.dfcfw 附件）对 Python/OpenSSL
+    客户端会直接重置连接，而系统自带 curl（Windows 下走 schannel）可正常返回，
+    因此这里作为 Python 通道全失败后的兜底。
+    """
+    try:
+        import shutil
+        import subprocess
+        if not shutil.which("curl"):
+            return None
+        cmd = [
+            "curl", "-s", "-L", "--noproxy", "*", "-m", str(timeout),
+            "-A", DEFAULT_HEADERS["User-Agent"],
+        ]
+        for key, value in (headers or {}).items():
+            if key.lower() in ("connection", "accept-encoding", "host"):
+                continue
+            cmd += ["-H", f"{key}: {value}"]
+        cmd.append(url)
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0:
+            return None
+        text = (proc.stdout or b"").decode("utf-8", errors="replace")
+        return text or None
+    except Exception:
+        return None
+
+
+_CURL_ONLY_HOSTS = set()      # 已被判定「Python 通道必被重置」的域名，后续直接走 curl
+
+
+def _url_host(url):
+    try:
+        return urllib.parse.urlsplit(url).hostname or ""
+    except Exception:
+        return ""
+
+
+def _fetch_text_with_retry(opener, req, timeout=10, attempts=3, backoff=0.6):
+    """带重试的请求。
+
+    公告接口偶发 ConnectionReset（限流/反爬），单次失败不代表没有数据，
+    这里重试若干次；仍失败则改用 curl 通道，最后才抛异常由调用方决定降级。
+    一旦某域名被确认只能走 curl，后续请求直接走 curl，避免每次都白等重试。
+    """
+    url = getattr(req, "full_url", "")
+    host = _url_host(url)
+    headers = dict(getattr(req, "headers", {}) or {})
+
+    if host and host in _CURL_ONLY_HOSTS:
+        text = _curl_text(url, headers, timeout=max(timeout, 20))
+        if text:
+            return text
+
+    last_err = None
+    for i in range(max(1, attempts)):
+        try:
+            with opener.open(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="ignore")
+        except Exception as e:
+            last_err = e
+            if i < attempts - 1:
+                time.sleep(backoff * (i + 1))
+    fallback = _curl_text(url, headers, timeout=max(timeout, 20))
+    if fallback:
+        if host:
+            _CURL_ONLY_HOSTS.add(host)
+        return fallback
+    raise last_err
+
+
+def _download_bytes(opener, url, timeout=30):
+    """下载二进制内容（优先用 curl：pdf.dfcfw.com 对 Python 客户端有 TLS 指纹挑战）"""
+    try:
+        import shutil
+        import subprocess
+        if shutil.which("curl"):
+            proc = subprocess.run(
+                ["curl", "-s", "-L", "-m", str(timeout), "-A", DEFAULT_HEADERS["User-Agent"], url],
+                capture_output=True,
+            )
+            data = proc.stdout or b""
+            if proc.returncode == 0 and bytes(data[:4]) == b"%PDF":
+                return data
+    except Exception:
+        pass
+
+    try:
+        req = urllib.request.Request(url, headers={
+            **DEFAULT_HEADERS,
+            "Referer": "https://fund.eastmoney.com/",
+        })
+        with opener.open(req, timeout=timeout) as resp:
+            data = resp.read() or b""
+        return data if bytes(data[:4]) == b"%PDF" else None
+    except Exception:
+        return None
+
+
+def _fetch_country_from_pdf(opener, art_id):
+    """兜底：公告正文接口不可用时，直接下载公告 PDF 抽取文本解析（需要 pypdf）。
+
+    pdf.dfcfw.com 的可用性通常好于正文接口，用于覆盖接口被限流的基金。
+    """
+    try:
+        import pypdf
+    except Exception:
+        return None
+
+    data = _download_bytes(opener, f"https://pdf.dfcfw.com/pdf/H2_{art_id}_1.pdf")
+    if not data:
+        return None
+
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        texts = []
+        for page in reader.pages:
+            try:
+                texts.append(page.extract_text() or "")
+            except Exception:
+                texts.append("")
+        for i, txt in enumerate(texts):
+            if "国家" not in txt:
+                continue
+            # 表格可能跨页断开，拼上后一页再解析
+            merged = txt + "\n" + (texts[i + 1] if i + 1 < len(texts) else "")
+            pos = _locate_country_section(merged, _COUNTRY_SECTION_TITLES)
+            if pos < 0:
+                continue
+            rows, total = _parse_country_table(merged[pos: pos + 4000])
+            if rows:
+                return rows, total
+    except Exception:
+        return None
+    return None
+
+
+def fetch_fund_country_distribution(opener, code, is_qdii=False):
+    cache_file = os.path.join(COUNTRY_CACHE_DIR, f"{code}_country.json")
+    stale_cache = None          # 旧版缓存：新数据抓取失败时兜底，避免看板直接空掉
+
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            # 版本校验：旧版解析逻辑（目录误命中/漏「中国」）写入的缓存自动失效重抓
+            if (isinstance(data, dict) and data.get("_v") == COUNTRY_CACHE_VERSION
+                    and data.get("countries") and data.get("date") not in ["--", "", None]):
+                return data
+            if isinstance(data, dict) and data.get("countries"):
+                stale_cache = data
+        except Exception:
+            pass
+
+    query_code = MAIN_CODE_MAP.get(code, code)
+
+    if is_qdii:
+        # 同一主代码的分级份额（如 019449/019454/019455）公告完全一致，本次运行内复用，减少接口压力
+        if code != query_code and query_code in _COUNTRY_MEMO:
+            result = dict(_COUNTRY_MEMO[query_code])
+            try:
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+            return result
+        try:
+            rep_url = f"https://api.fund.eastmoney.com/f10/JJGG?fundcode={query_code}&pageIndex=1&pageSize=60&type=3"
+            req_rep = urllib.request.Request(rep_url, headers={
+                **DEFAULT_HEADERS,
+                "Referer": f"https://fund.eastmoney.com/{query_code}.html"
+            })
+            data_rep = json.loads(_fetch_text_with_retry(opener, req_rep, timeout=12, attempts=3))
+
+            report_items = data_rep.get("Data") or []
+            candidates = []
+
+            for it in report_items:
+                title = it.get("TITLE", "")
+                pub_date = it.get("PUBLISHDATEDESC", "") or it.get("PUBLISHDATEDesc", "")
+                r_id = it.get("ID", "")
+                if ("中期报告" in title or "年度报告" in title or "季度报告" in title) and ("摘要" not in title):
+                    candidates.append({"title": title, "date": pub_date, "id": r_id})
+
+            if candidates:
+                candidates.sort(key=lambda x: x["date"], reverse=True)
+
+                # 收集最近 N 个「不同报告期」的国家分布（详情浮窗季度条需要 8 期）。
+                # 同一报告期可能同时存在季报与中报/年报（如 2026Q2 有中报和第 2 季度报告），
+                # 按 (年, 季度) 去重，且按发布日期倒序，因此优先取内容更全的中报/年报。
+                periods, seen_periods = [], set()
+                # PDF 兜底成本高（下载整份报告 + pypdf 解析），每只基金最多用 3 次
+                pdf_budget = 3
+                # 多取几个候选：候选里有同一报告期的季报/中报，去重后会少，
+                # 想凑够 COUNTRY_FETCH_PERIODS 个不同报告期得留出冗余。
+                for cand in candidates[:COUNTRY_FETCH_PERIODS + 4]:
+                    period_key = _report_period_key(cand["title"])
+                    if period_key and period_key in seen_periods:
+                        continue
+
+                    # ① 优先取公告正文接口；② 接口失败/无内容时用公告 PDF 兜底
+                    content = ""
+                    try:
+                        ann_url = f"https://np-cnotice-fund.eastmoney.com/api/content/ann?client_source=web_fund&show_all=1&art_code={cand['id']}"
+                        req_ann = urllib.request.Request(ann_url, headers={
+                            **DEFAULT_HEADERS,
+                            "Referer": "https://fund.eastmoney.com/"
+                        })
+                        data_ann = json.loads(_fetch_text_with_retry(opener, req_ann, timeout=15, attempts=3))
+                        content = (data_ann.get("data") or {}).get("notice_content", "")
+                    except Exception:
+                        content = ""
+
+                    c_list, total_ratio = [], None
+                    if content:
+                        # ★ 修复：跳过目录条目，定位正文表格起点（原 find() 会命中目录）
+                        start_pos = _locate_country_section(content, _COUNTRY_SECTION_TITLES)
+                        if start_pos >= 0:
+                            # 取章节标题后的纯文本（覆盖表格足够，且不会串到后续章节）
+                            sec = _html_to_plain(content[start_pos: start_pos + 12000])[:4000]
+                            c_list, total_ratio = _parse_country_table(sec)
+
+                    if not c_list and pdf_budget > 0:
+                        pdf_budget -= 1
+                        pdf_res = _fetch_country_from_pdf(opener, cand["id"])
+                        if pdf_res:
+                            c_list, total_ratio = pdf_res
+
+                    if c_list:
+                        # 报告期末日期优先由 (年, 季度) 推算，保证季度标签准确；
+                        # 解析不出报告期时退回发布日期。
+                        if period_key:
+                            report_date_label = _period_end_date(period_key)
+                            seen_periods.add(period_key)
+                        else:
+                            report_date_label = cand["date"][:10] if cand.get("date") else "--"
+
+                        # 一致性校验：各国家占比之和应接近「合计」占比
+                        sum_ratio = round(sum(it["ratio"] for it in c_list), 2)
+                        if total_ratio is not None and abs(sum_ratio - total_ratio) > 1.0:
+                            print(f"  [WARN] {code} 国家分布解析可能不完整：明细合计 {sum_ratio}% vs 公告合计 {total_ratio}%")
+
+                        periods.append({
+                            "date": report_date_label,
+                            "countries": c_list,
+                            "total": total_ratio,
+                        })
+                        if len(periods) >= COUNTRY_FETCH_PERIODS:
+                            break
+
+                # ★ 与旧缓存合并：本次只抓到少数几期（接口抽风 / PDF 解析失败）时，
+                #   用旧缓存补上缺失的更早期次，避免把已有数据越抓越少。
+                if periods and stale_cache and stale_cache.get("periods"):
+                    have = {str(p.get("date")) for p in periods}
+                    for old in stale_cache["periods"]:
+                        if str(old.get("date")) not in have:
+                            periods.append(old)
+                    periods = periods[:COUNTRY_FETCH_PERIODS]
+
+                if periods:
+                    latest = periods[0]
+                    result = {
+                        "date": latest["date"],
+                        "countries": latest["countries"],
+                        "total": latest["total"],
+                        "periods": periods,
+                        "_v": COUNTRY_CACHE_VERSION,
+                    }
+                    _COUNTRY_MEMO[query_code] = result
+                    with open(cache_file, 'w', encoding='utf-8') as f:
+                        json.dump(result, f, ensure_ascii=False, indent=2)
+                    return result
+        except Exception:
+            pass
+
+    url_fts = f"https://www.ftsfund.com/qxjj/jjxq/{query_code}"
+    try:
+        req = urllib.request.Request(url_fts, headers={
+            "User-Agent": DEFAULT_HEADERS["User-Agent"],
+            "Referer": "https://www.ftsfund.com/",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        })
+        with opener.open(req, timeout=5) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+
+        if "国家（地区）" in html or "国家(地区)" in html:
+            date_m = re.search(r'截止日期[：:]\s*(\d{4}-\d{2}-\d{2})', html)
+            pub_date = date_m.group(1) if date_m else "--"
+
+            block_match = re.search(r'各国家[（\(]地区[）\)].*?<table[^>]*>(.*?)</table>', html, re.S)
+            if block_match:
+                table_html = block_match.group(1)
+                rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_html, re.S)
+                c_list = []
+                for row in rows:
+                    cols = re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)
+                    if len(cols) >= 3:
+                        c_name = re.sub(r'<[^>]+>', '', cols[0]).strip()
+                        c_ratio_str = re.sub(r'<[^>]+>', '', cols[2]).replace('%', '').strip()
+                        if "国家" in c_name or "地区" in c_name:
+                            continue
+                        if c_name and c_ratio_str.replace('.', '', 1).isdigit():
+                            val = float(c_ratio_str)
+                            if val > 0:
+                                c_list.append({"country": c_name, "ratio": round(val, 2)})
+
+                if c_list:
+                    result = {"date": pub_date, "countries": c_list, "_v": COUNTRY_CACHE_VERSION}
+                    with open(cache_file, 'w', encoding='utf-8') as f:
+                        json.dump(result, f, ensure_ascii=False, indent=2)
+                    return _with_country_periods(result)
+    except Exception:
+        pass
+
+    url_em = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=gwzb&code={query_code}&rt={int(time.time()*1000)}"
+    try:
+        req = urllib.request.Request(url_em, headers={
+            "User-Agent": DEFAULT_HEADERS["User-Agent"],
+            "Referer": f"https://fundf10.eastmoney.com/gwzb_{query_code}.html",
+            "Accept": "*/*"
+        })
+        with opener.open(req, timeout=4) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+
+        date_m = re.search(r'报告期[：:]\s*(\d{4}-\d{2}-\d{2})', html)
+        pub_date = date_m.group(1) if date_m else "--"
+
+        tbody_match = re.search(r'<tbody[^>]*>(.*?)</tbody>', html, re.S)
+        if tbody_match:
+            rows = re.findall(r'<tr[^>]*>(.*?)</tr>', tbody_match.group(1), re.S)
+            c_list = []
+            for row in rows:
+                cols = re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)
+                if len(cols) >= 3:
+                    c_name = re.sub(r'<[^>]+>', '', cols[0]).strip()
+                    c_ratio_str = re.sub(r'<[^>]+>', '', cols[2]).replace('%', '').strip()
+                    if c_name and c_ratio_str.replace('.', '', 1).isdigit():
+                        val = float(c_ratio_str)
+                        if val > 0:
+                            c_list.append({"country": c_name, "ratio": round(val, 2)})
+            if c_list:
+                result = {"date": pub_date, "countries": c_list, "_v": COUNTRY_CACHE_VERSION}
+                with open(cache_file, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, ensure_ascii=False, indent=2)
+                return _with_country_periods(result)
+    except Exception:
+        pass
+
+    if not is_qdii:
+        return _with_country_periods(
+            {"date": "长期基准", "countries": [{"country": "中国大陆", "ratio": 100.0}]}
+        )
+    else:
+        if code in SPX_PASSIVE_CODES or code in NDX_PASSIVE_CODES:
+            fallback = {
+                "date": "指数成份分布",
+                "countries": [{"country": "美国", "ratio": 95.0}, {"country": "现金及其他", "ratio": 5.0}],
+                "_v": COUNTRY_CACHE_VERSION,
+            }
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(fallback, f, ensure_ascii=False, indent=2)
+            return _with_country_periods(fallback)
+
+    # 全部来源失败：保留上次成功抓取的数据，避免看板直接变成"暂无配置数据"
+    if stale_cache:
+        return _with_country_periods(stale_cache)
+
+    return {"date": "--", "countries": [], "periods": []}
+
+
+def _fetch_holder_periods_cyrjg(opener, query_code):
+    """从天天基金「持有人结构」表格页读取全部披露期。
+
+    表格列：报告期 / 机构持有比例 / 个人持有比例 / 内部持有比例 / 净资产(亿)。
+    该页一次返回历年全部披露节点（半年报 6-30、年报 12-31），正好用于多期展示。
+    """
+    url = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=cyrjg&code={query_code}"
+    req = urllib.request.Request(url, headers={
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": f"https://fundf10.eastmoney.com/cyrjg_{query_code}.html",
+        "Accept": "*/*",
+    })
+    with opener.open(req, timeout=8) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+
+    periods, seen = [], set()
+    for row in re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.S):
+        cols = re.findall(r'<td[^>]*>(.*?)</td>', row, re.S)
+        if len(cols) < 3:
+            continue
+        texts = [re.sub(r'<[^>]+>', '', c).strip() for c in cols]
+        date_m = re.search(r'\d{4}-\d{2}-\d{2}', texts[0])
+        if not date_m:
+            continue
+        date_str = date_m.group(0)
+        if date_str in seen:
+            continue
+        inst_val = _ratio_value(texts[1])
+        indiv_val = _ratio_value(texts[2])
+        if inst_val <= 0 and indiv_val <= 0:
+            continue
+        seen.add(date_str)
+        periods.append({"date": date_str, "inst": inst_val, "indiv": indiv_val})
+    return periods
+
+
+def _fetch_holder_periods_mobile(opener, query_code):
+    """移动端接口兜底（通常只返回最近一期，接口已不稳定的情况下仍保留）。"""
+    url = (f"https://fundmobapi.eastmoney.com/FundMapi/FundHolderRatio.ashx"
+           f"?FCODE={query_code}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6")
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)",
+    })
+    with opener.open(req, timeout=6) as resp:
+        payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+    periods = []
+    for item in payload.get("Datas") or []:
+        date_str = str(item.get("FSRQ", ""))[:10]
+        if not re.match(r'\d{4}-\d{2}-\d{2}', date_str):
+            continue
+        inst_val = _ratio_value(item.get("JGHBL"))
+        indiv_val = _ratio_value(item.get("GRHBL"))
+        if inst_val <= 0 and indiv_val <= 0:
+            continue
+        periods.append({"date": date_str, "inst": inst_val, "indiv": indiv_val})
+    return periods
+
+
+def fetch_fund_holder_structure(opener, code):
+    """读取持有人结构，返回最近 3 个披露期。
+
+    返回结构（顶层字段保持与旧版兼容，等于 periods[0]）：
+        {"date": "2026-06-30", "inst": 23.66, "indiv": 76.34,
+         "periods": [{"date", "inst", "indiv"}, ...], "_v": 2}
+    """
+    cache_file = os.path.join(HOLDER_CACHE_DIR, f"{code}_holder.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if (isinstance(data, dict) and data.get("_v") == HOLDER_CACHE_VERSION
+                    and data.get("periods")):
+                return data
+        except Exception:
+            pass
+
+    query_code = MAIN_CODE_MAP.get(code, code)
+
+    periods = []
+    for fetcher in (_fetch_holder_periods_cyrjg, _fetch_holder_periods_mobile):
+        try:
+            periods = fetcher(opener, query_code)
+        except Exception:
+            periods = []
+        if periods:
+            break
+
+    if not periods:
+        return None
+
+    periods.sort(key=lambda x: x["date"], reverse=True)
+    periods = periods[:HOLDER_PERIODS_KEEP]
+    latest = periods[0]
+    result = {
+        "date": latest["date"],
+        "inst": latest["inst"],
+        "indiv": latest["indiv"],
+        "periods": periods,
+        "_v": HOLDER_CACHE_VERSION,
+    }
+    try:
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return result
+
+
+ASSET_ALLOC_CACHE_VERSION = 1
+ASSET_ALLOC_REFRESH_DAYS = 7       # 资产配置只有季报节点才变，7 天回源一次足够
+
+
+def _alloc_num(raw):
+    """'78.79' / '--' / '' / None → float 或 None。"""
+    s = str(raw if raw is not None else "").strip()
+    if not s or s.lower() in ("none", "null", "nan", "--", "-"):
+        return None
+    m = re.search(r'-?\d+(?:\.\d+)?', s)
+    if not m:
+        return None
+    try:
+        return round(float(m.group(0)), 2)
+    except ValueError:
+        return None
+
+
+def fetch_fund_asset_alloc(opener, code):
+    """读取基金资产配置：股票 / 债券 / 现金 / 其他 占基金净值比。
+
+    数据源：天天基金移动端 FundMNAssetAllocation（一次返回全部披露期）。
+    F10 的 FundArchivesDatas.aspx?type=zcpz 对此项目已返回空串，故不走该通道。
+
+    返回结构（顶层字段 = 最近一期）：
+        {"date": "2026-09-30", "stock": 78.79, "bond": 0.0, "cash": 12.9,
+         "other": 8.31, "fund": None, "net": 47.15,
+         "periods": [{"date", "stock", "bond", "cash", "other"}, ...], "_v": 1}
+    """
+    cache_file = os.path.join(ASSET_ALLOC_CACHE_DIR, f"{code}_alloc.json")
+    cached = None
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data.get("_v") == ASSET_ALLOC_CACHE_VERSION and data.get("periods"):
+                cached = data
+                fetched = str(data.get("fetched") or "")
+                try:
+                    age = (now_beijing().date() - datetime.strptime(fetched, "%Y-%m-%d").date()).days
+                except Exception:
+                    age = 9999
+                if age < ASSET_ALLOC_REFRESH_DAYS:
+                    return data
+        except Exception:
+            cached = None
+
+    query_code = MAIN_CODE_MAP.get(code, code)
+    payload = None
+    try:
+        url = ("https://fundmobapi.eastmoney.com/FundMNewApi/FundMNAssetAllocation"
+               f"?FCODE={query_code}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6")
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)",
+        })
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="ignore"))
+    except Exception:
+        payload = None
+
+    periods, seen = [], set()
+    for item in (payload or {}).get("Datas") or []:
+        date_str = str(item.get("FSRQ") or "")[:10]
+        if not re.match(r'\d{4}-\d{2}-\d{2}', date_str) or date_str in seen:
+            continue
+        stock = _alloc_num(item.get("GP"))
+        bond = _alloc_num(item.get("ZQ"))
+        cash = _alloc_num(item.get("HB"))
+        other = _alloc_num(item.get("QT"))
+        if stock is None and bond is None and cash is None and other is None:
+            continue
+        seen.add(date_str)
+        periods.append({
+            "date": date_str,
+            "stock": stock,
+            "bond": bond,
+            "cash": cash,
+            "other": other,
+        })
+
+    if not periods:
+        # 接口挂了就沿用上次成功抓取的结果，别让看板整块变 --
+        return cached
+
+    periods.sort(key=lambda x: x["date"], reverse=True)
+    latest = periods[0]
+    result = {
+        "date": latest["date"],
+        "stock": latest["stock"],
+        "bond": latest["bond"],
+        "cash": latest["cash"],
+        "other": latest["other"],
+        "fund": _alloc_num(((payload or {}).get("Datas") or [{}])[0].get("JJ")),
+        "net": _alloc_num(((payload or {}).get("Datas") or [{}])[0].get("JZC")),
+        "periods": periods[:24],
+        "fetched": now_beijing().strftime("%Y-%m-%d"),
+        "_v": ASSET_ALLOC_CACHE_VERSION,
+    }
+    try:
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return result
+
+
+def build_cmp_meta(r):
+    """组装对比弹窗用的深度资料（只进 __FUND_CMP_META__，不参与主表渲染）。
+
+    返回字段：
+      alloc    : {date, stock, bond, cash, other}   资产配置（占净值比）
+      holder   : {date, inst, indiv}                持有人结构（机构 / 个人）
+      top      : [[name, code, ratio], ...]         最新一期前十大重仓
+      top_date : 该期标签（2026Q3）
+      top_sum  : 前十大合计占净值   top3_sum: 前三大合计
+      prev_sum : 上一期前十大合计（用于看集中度变化）
+      top_count: 该期披露的持仓条数（中报/年报是全量）
+      buy_status / buy_limit：申购状态与单日限额
+    """
+    meta = {
+        "buy_status": r.get("buy_status") or "--",
+        "buy_limit": r.get("buy_limit") or "无限额",
+        "alloc": None,
+        "holder": None,
+        "top": [],
+        "top_date": "",
+        "top_sum": None,
+        "top3_sum": None,
+        "prev_sum": None,
+        "top_count": 0,
+    }
+
+    alloc = r.get("asset_alloc")
+    if isinstance(alloc, dict) and alloc.get("date"):
+        meta["alloc"] = {
+            "date": alloc.get("date"),
+            "stock": alloc.get("stock"),
+            "bond": alloc.get("bond"),
+            "cash": alloc.get("cash"),
+            "other": alloc.get("other"),
+        }
+
+    holder = r.get("holder_struct")
+    if isinstance(holder, dict) and (holder.get("inst") is not None or holder.get("indiv") is not None):
+        meta["holder"] = {
+            "date": holder.get("date") or "--",
+            "inst": holder.get("inst"),
+            "indiv": holder.get("indiv"),
+        }
+
+    periods = [p for p in (r.get("holdings") or []) if isinstance(p, dict) and p.get("holdings")]
+    if periods:
+        periods.sort(key=lambda p: _parse_holdings_quarter(p.get("date")) or (0, 0), reverse=True)
+        latest = periods[0]
+        rows = sorted(
+            (h for h in (latest.get("holdings") or []) if (h.get("ratio") or 0) > 0),
+            key=lambda h: h.get("ratio") or 0,
+            reverse=True,
+        )
+        meta["top_date"] = _period_label(latest.get("date"))
+        meta["top_count"] = len(rows)
+        meta["top"] = [[h.get("name") or "", h.get("code") or "", round(float(h.get("ratio") or 0), 2)]
+                       for h in rows[:10]]
+        if meta["top"]:
+            meta["top_sum"] = round(sum(item[2] for item in meta["top"]), 2)
+            meta["top3_sum"] = round(sum(item[2] for item in meta["top"][:3]), 2)
+        if len(periods) > 1:
+            prev = sorted(
+                (h for h in (periods[1].get("holdings") or []) if (h.get("ratio") or 0) > 0),
+                key=lambda h: h.get("ratio") or 0,
+                reverse=True,
+            )[:10]
+            if prev:
+                meta["prev_sum"] = round(sum(float(h.get("ratio") or 0) for h in prev), 2)
+    return meta
+
+
+# 季度持仓披露时间表：(窗口起, 窗口止, 年份偏移, 季度)
+# A 股基金季报法定披露截止日：一季报 4/22、中报 8/31、三季报 10/31、四季报次年 1/22。
+# 实际披露从截止日前 1~2 周陆续开始，个别基金会延迟，因此窗口设为
+# 「截止日前 14 天 ~ 截止日后 14 天」，覆盖提前与延迟披露。窗口之外只读缓存，
+# 不再请求接口（避免每天全量重抓 130+ 只基金的季报接口）。
+_HOLDINGS_DISCLOSURE_WINDOWS = (
+    ((1, 8), (2, 5), -1, 4),      # 四季报（上一报告年度，截止 1/22）
+    ((4, 8), (5, 6), 0, 1),       # 一季报（截止 4/22）
+    ((8, 17), (9, 14), 0, 2),     # 中报（截止 8/31）
+    ((10, 17), (11, 14), 0, 3),   # 三季报（截止 10/31）
+)
+
+
+def holdings_disclosure_quarter(now=None):
+    """当前处于披露窗口的季度 (year, quarter)；不在任何窗口内返回 None。"""
+    now = now or now_beijing()
+    today = (now.month, now.day)
+    for start, end, year_offset, quarter in _HOLDINGS_DISCLOSURE_WINDOWS:
+        if start <= today <= end:
+            return (now.year + year_offset, quarter)
+    return None
+
+
+def holdings_required_quarter(now=None):
+    """
+    按法定披露截止日推算"此刻必然已公开"的最新季度 (year, quarter)。
+
+    用于兜底：若上次窗口内抓取失败、缓存仍停留在旧季度，窗口结束后
+    仍会再补抓一次，而不是一直显示旧季报。
+    """
+    now = now or now_beijing()
+    today = (now.month, now.day)
+    year = now.year
+    if today >= (11, 1):
+        return (year, 3)
+    if today >= (9, 1):
+        return (year, 2)
+    if today >= (4, 23):
+        return (year, 1)
+    if today >= (1, 23):
+        return (year - 1, 4)
+    return (year - 1, 3)
+
+
+def holdings_target_quarter(now=None):
+    """需要保证拿到手的最新季度 = 窗口目标季度 与 法定已到期季度 的较大者。"""
+    now = now or now_beijing()
+    candidates = [q for q in (holdings_disclosure_quarter(now), holdings_required_quarter(now)) if q]
+    return max(candidates) if candidates else None
+
+
+def _parse_holdings_quarter(label):
+    """把 '2026年3季度股票投资明细' / '2026Q3' 统一解析为 (year, quarter)。"""
+    if not isinstance(label, str):
+        return None
+    m = re.search(r'(\d{4})\s*[年\-]?\s*(?:Q([1-4])|([1-4])\s*季度)', label)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2) or m.group(3)))
+
+
+# 抓取尝试日期记录：用于节流（窗口内每天 1 次，窗口外每 7 天 1 次）。
+# 放 cache/ 而非 data/：它只是本机当天去重用的临时状态，不需要提交到仓库。
+_HOLDINGS_ATTEMPT_FILE = os.path.join(CACHE_DIR, "holdings_attempts.json")
+_HOLDINGS_ATTEMPT_LOCK = threading.Lock()
+
+
+def _load_holdings_attempts():
+    try:
+        with open(_HOLDINGS_ATTEMPT_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _should_attempt_holdings(code, days):
+    """距上次尝试不足 days 天则返回 False。"""
+    last = _load_holdings_attempts().get(code)
+    if not last:
+        return True
+    try:
+        last_day = datetime.strptime(last, '%Y-%m-%d').date()
+    except Exception:
+        return True
+    return (now_beijing().date() - last_day).days >= days
+
+
+def _mark_holdings_attempt(code):
+    with _HOLDINGS_ATTEMPT_LOCK:
+        attempts = _load_holdings_attempts()
+        attempts[code] = now_beijing().strftime('%Y-%m-%d')
+        try:
+            with open(_HOLDINGS_ATTEMPT_FILE, 'w', encoding='utf-8') as f:
+                json.dump(attempts, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+
+def _fetch_holdings_year(code, year):
+    """
+    抓取单只基金某个年度的季报持仓。
+
+    季报接口（fundf10 FundArchivesDatas）限频严格，多线程直连会返回 514，
+    因此复用全局令牌桶限速器，并对失败做指数退避重试。
+    """
+    for attempt in range(4):
+        if not _HOLDINGS_LIMITER.acquire(timeout=600):
+            return None
+        try:
+            df = ak.fund_portfolio_hold_em(symbol=code, date=str(year))
+            return df if df is not None and not df.empty else None
+        except Exception:
+            if attempt == 3:
+                return None
+            time.sleep([2, 6, 15][attempt] + random.random() * 2)
+    return None
+
+
+def _load_holdings_cache(cache_file):
+    """读持仓缓存。
+
+    返回 (periods, probed_min_year, needs_rebuild, history_exhausted)：
+      - periods：季度列表（每期含 date + 全量 holdings）
+      - probed_min_year：已探测到的最早年份（含"探测过但无数据"的年份）
+      - needs_rebuild：v1 旧结构（只有 4 期、仅前十大），需要重抓成 v2 全量结构
+      - history_exhausted：是否已回溯到基金成立前，True 时后续不再往前探
+    """
+    if not os.path.exists(cache_file):
+        return None, None, False, False
+    try:
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        try: os.remove(cache_file)
+        except Exception: pass
+        return None, None, False, False
+
+    if isinstance(data, dict) and data.get('_v') == HOLDINGS_CACHE_SCHEMA:
+        periods = data.get('periods') or []
+        probed = data.get('probed_min_year')
+        probed = int(probed) if isinstance(probed, int) else None
+        exhausted = bool(data.get('history_exhausted'))
+        if not periods or not any(len(p.get('holdings') or []) > 0 for p in periods):
+            # 全空持仓缓存没有价值，删掉重抓
+            try: os.remove(cache_file)
+            except Exception: pass
+            return None, probed, True, exhausted
+        return periods, probed, False, exhausted
+
+    if isinstance(data, list) and data and isinstance(data[0], dict) and 'date' in data[0]:
+        # v1：只有最近 4 期、且每期仅前十大 → 结构升级，需要重抓全量
+        if not any(len(p.get('holdings') or []) > 0 for p in data):
+            return None, None, True, False
+        return data, None, True, False
+
+    return None, None, True, False
+
+
+def _save_holdings_cache(cache_file, periods, probed_min_year, history_exhausted=False):
+    payload = {
+        '_v': HOLDINGS_CACHE_SCHEMA,
+        'probed_min_year': probed_min_year,
+        # 已回溯到基金成立前（连续空年），后续构建无需再往前探
+        'history_exhausted': bool(history_exhausted),
+        'periods': periods,
+    }
+    # newline='\n'：Windows 下文本模式会把 \n 写成 \r\n，导致持仓缓存
+    # 每次本地构建都整体变 CRLF，与 CI 提交的 LF 版本产生无意义冲突。
+    with open(cache_file, 'w', encoding='utf-8', newline='\n') as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _build_holdings_periods(all_dfs):
+    """把若干年份的季报 DataFrame 合并成「季度 → 全量持仓」列表（按季度倒序）。"""
+    combined = pd.concat(all_dfs, ignore_index=True)
+    combined.drop_duplicates(inplace=True)
+    if '季度' not in combined.columns:
+        if '报告期' in combined.columns:
+            combined['季度'] = combined['报告期'].apply(
+                lambda x: f"{x[:4]}Q{(int(x[5:7])-1)//3 + 1}" if isinstance(x, str) and len(x) >= 7 else None
+            )
+        else:
+            date_col = next((c for c in combined.columns if '日期' in c or '时间' in c), None)
+            if date_col:
+                combined['季度'] = combined[date_col].apply(
+                    lambda x: f"{x[:4]}Q{(int(x[5:7])-1)//3 + 1}" if isinstance(x, str) and len(x) >= 7 else None
+                )
+            else:
+                raise ValueError("缺少季度信息")
+
+    quarters = sorted(combined['季度'].dropna().unique(), reverse=True)[:HOLDINGS_MAX_PERIODS]
+    result = []
+    for q in quarters:
+        df_q = combined[combined['季度'] == q]
+        ratio_col = '占净值比例' if '占净值比例' in df_q.columns else None
+        name_col = '股票名称' if '股票名称' in df_q.columns else ('名称' if '名称' in df_q.columns else None)
+        if name_col is None or ratio_col is None:
+            for col in df_q.columns:
+                if '名称' in col and name_col is None: name_col = col
+                if '比例' in col and ratio_col is None: ratio_col = col
+        if name_col is None or ratio_col is None:
+            continue
+        code_col = '股票代码' if '股票代码' in df_q.columns else None
+        # 按占净值比例降序，保留全量（半年报/年报披露全部持仓，季报只有前十大）
+        df_q = df_q.sort_values(ratio_col, ascending=False)
+        holdings = []
+        for _, row in df_q.head(HOLDINGS_POSITION_LIMIT).iterrows():
+            name = str(row[name_col])
+            if pd.isna(name) or name in ('nan', 'None', ''):
+                continue
+            try:
+                ratio = float(row[ratio_col])
+            except (TypeError, ValueError):
+                continue
+            if ratio <= 0:
+                continue
+            item = {'name': name, 'ratio': round(ratio, 2)}
+            if code_col:
+                sc = str(row[code_col])
+                if not pd.isna(sc) and sc not in ('nan', 'None', ''):
+                    item['code'] = sc
+            holdings.append(item)
+        result.append({'date': q, 'holdings': holdings})
+    return result
+
+
+def fetch_holdings(opener, code):
+    cache_file = os.path.join(HOLDINGS_CACHE_DIR, f"{code}_holdings.json")
+    (cached_data, probed_min_year,
+     needs_rebuild, history_exhausted) = _load_holdings_cache(cache_file)
+
+    target_quarter = holdings_target_quarter()
+    newest_cached = None
+    oldest_cached_year = None
+    if cached_data:
+        for period in cached_data:
+            key = _parse_holdings_quarter(period.get('date'))
+            if not key:
+                continue
+            if newest_cached is None or key > newest_cached:
+                newest_cached = key
+            if oldest_cached_year is None or key[0] < oldest_cached_year:
+                oldest_cached_year = key[0]
+
+    current_year = datetime.now().year
+    latest_stale = (newest_cached is None
+                    or (target_quarter is not None and newest_cached < target_quarter))
+
+    need_years = []
+    doing_backfill = False
+    if needs_rebuild or not cached_data:
+        # 首次 / 结构升级：从当前年一路回溯到下限，靠「连续空年」提前收手
+        need_years = list(range(current_year, HOLDINGS_MIN_YEAR - 1, -1))
+        doing_backfill = True
+    else:
+        if latest_stale:
+            need_years.append(current_year)
+        if not history_exhausted:
+            # 增量回溯：从「已探测过的最早年份」再往前推一年开始
+            start_year = (probed_min_year - 1) if probed_min_year else (
+                (oldest_cached_year - 1) if oldest_cached_year else current_year)
+            if start_year >= HOLDINGS_MIN_YEAR:
+                need_years.extend(range(start_year, HOLDINGS_MIN_YEAR - 1, -1))
+                doing_backfill = True
+
+    if not need_years:
+        return cached_data or []
+
+    # 抓取节流只作用于「刷新最新季度」；补历史是一次性任务，不该被节流挡住。
+    if latest_stale:
+        throttle_days = 1 if holdings_disclosure_quarter() else 7
+        allowed = (_should_attempt_holdings(code, 1) if needs_rebuild
+                   else _should_attempt_holdings(code, throttle_days))
+        if not allowed:
+            need_years = [y for y in need_years if y != current_year]
+    if not need_years:
+        return cached_data or []
+
+    _mark_holdings_attempt(code)
+
+    try:
+        all_dfs = []
+        probed_floor = probed_min_year
+        empty_streak = 0
+        broke_on_empty = False
+        for year in need_years:
+            df = _fetch_holdings_year(code, year)
+            if df is None or df.empty:
+                # 当前年没数据不算"探测过"：新季报随时可能发布，下次还要试
+                if year < current_year:
+                    probed_floor = year if probed_floor is None else min(probed_floor, year)
+                    empty_streak += 1
+            else:
+                all_dfs.append(df)
+                probed_floor = year if probed_floor is None else min(probed_floor, year)
+                empty_streak = 0
+            if empty_streak >= HOLDINGS_BACKFILL_EMPTY_STREAK:
+                broke_on_empty = True
+                break
+
+        # 判定是否已经探到基金成立前：要么因连续空年中断，要么一路走到年份下限
+        exhausted_now = history_exhausted
+        if doing_backfill:
+            if broke_on_empty or min(need_years) <= HOLDINGS_MIN_YEAR:
+                exhausted_now = True
+
+        if all_dfs:
+            fresh = _build_holdings_periods(all_dfs)
+            if fresh:
+                # 与旧缓存按季度合并：旧缓存里本次没抓到的更早季度要保留
+                merged = {_period_label(p['date']): p for p in (cached_data or [])}
+                for period in fresh:
+                    merged[_period_label(period['date'])] = period
+                ordered = sorted(
+                    merged.values(),
+                    key=lambda p: (_parse_holdings_quarter(p.get('date')) or (0, 0)),
+                    reverse=True,
+                )[:HOLDINGS_MAX_PERIODS]
+                _save_holdings_cache(cache_file, ordered, probed_floor, exhausted_now)
+                return ordered
+        elif exhausted_now != history_exhausted and cached_data:
+            # 本次只探到了空年份，但确认了边界：仍要落盘，避免下次重复探测
+            _save_holdings_cache(cache_file, cached_data, probed_floor, exhausted_now)
+    except Exception:
+        pass
+    # 刷新失败时保留旧缓存，避免披露窗口内一次网络异常把已有持仓清空。
+    return cached_data or []
+
+
+# ==============================================================================
+# 费率提取辅助函数（识别 --- / -- / 不适用 等"无此项费用"占位符）
+# ==============================================================================
+_FEE_LABELS = ['管理费率', '托管费率', '销售服务费率', '申购费率', '赎回费率', '认购费率']
+
+# ==============================================================================
+# 运作费兜底：蛋卷基金（覆盖天天基金 F10 缺失的次新基金）
+# ==============================================================================
+def _fetch_operation_fees_danjuan(opener, code):
+    """从蛋卷基金详情接口抓管理费/托管费/销售服务费。
+    返回 dict，例如 {'fee_manage': '1.20', 'fee_custody': '0.20'}
+    """
+    result = {}
+    url = f"https://danjuanfunds.com/djapi/fund/detail/{code}"
+    headers = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": f"https://danjuanfunds.com/detail/{code}",
+        "Accept": "application/json, text/plain, */*",
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with opener.open(req, timeout=10) as resp:
+            raw = resp.read().decode('utf-8', errors='ignore')
+        data = json.loads(raw)
+    except Exception:
+        return result
+
+    # 递归查找 other_rate_table（应对不同 JSON 层级）
+    rate_table = None
+    def _walk(obj):
+        nonlocal rate_table
+        if rate_table is not None:
+            return
+        if isinstance(obj, dict):
+            if "other_rate_table" in obj and isinstance(obj["other_rate_table"], list):
+                rate_table = obj["other_rate_table"]
+                return
+            for v in obj.values():
+                _walk(v)
+        elif isinstance(obj, list):
+            for it in obj:
+                _walk(it)
+    _walk(data)
+
+    if not rate_table:
+        return result
+
+    name_map = {
+        "基金管理费": "fee_manage",
+        "基金托管费": "fee_custody",
+        "销售服务费": "fee_sales",
+        "销售服务费率": "fee_sales",
+    }
+    for item in rate_table:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        value = item.get("value")
+        if name in name_map and value is not None:
+            m = re.search(r'([\d.]+)', str(value))
+            if m:
+                result[name_map[name]] = m.group(1)
+
+    return result
+# ==============================================================================
+
+def _extract_fee_rate(html_text, label, max_chars=400):
+    """从 HTML/JS 文本中提取某个费率标签后的数字（%）。
+
+    返回值语义：
+      - 字符串 "0.00"  → 该费用明确不存在（--- / -- / 不适用 / 无 等占位符）
+      - 字符串 "x.xx"  → 抓到了具体费率数字
+      - None          → 未找到该标签或无法解析
+    """
+    if not html_text or label not in html_text:
+        return None
+
+    pos = html_text.find(label)
+    if pos < 0:
+        return None
+
+    window = html_text[pos + len(label): pos + len(label) + max_chars]
+
+    # 1) 截断到下一个费率标签之前
+    for stop in _FEE_LABELS:
+        if stop == label:
+            continue
+        stop_pos = window.find(stop)
+        if stop_pos >= 0:
+            window = window[:stop_pos]
+
+    # 2) 截断到明显分隔符之前
+    for stop in ['</td>', '</tr>', '</p>', '</table>', '基金费率', '费率结构', '申购费率', '赎回费率']:
+        stop_pos = window.find(stop)
+        if stop_pos >= 0:
+            window = window[:stop_pos]
+
+    # 3) ★ 先剥离 HTML 标签和实体，再做判断
+    clean = re.sub(r'<[^>]+>', ' ', window)
+    clean = clean.replace('&nbsp;', ' ').replace('&amp;', '&')
+    clean = re.sub(r'\s+', ' ', clean).strip()
+
+    # 4) ★ 关键修复：先抓数字，抓不到再判占位符
+    num = re.search(r'([\d.]+)\s*%', clean)
+    if num:
+        return num.group(1)
+
+    # 5) 无数字时，才判断"无此项费用"占位符
+    if re.match(r'^[\s\-–—/]*$', clean) or re.match(r'^(?:不适用|无|None)\s*$', clean):
+        return "0.00"
+
+    return None
+
+def _extract_redemption_tiers(html_text):
+    """从天天基金 HTML/片段中提取赎回费率阶梯（全面兼容普通基金、QDII、LOF与C类）"""
+    if not html_text:
+        return None
+
+    # ★ 修复A：先做 JS / HTML 反转义，兼容 FundArchivesDatas.aspx 的 JS 包装
+    #   —— 004320 / 160213 / 001438 等基金的 <table> 会被转义成 &lt;table&gt; 或 \u003ctable\u003e
+    text = html_text
+    if '\\u003c' in text or '\\u003e' in text or '\\u0026' in text:
+        text = (text.replace('\\u003c', '<')
+                    .replace('\\u003e', '>')
+                    .replace('\\u0026', '&')
+                    .replace('\\u0022', '"'))
+    if '&lt;' in text or '&gt;' in text or '&amp;' in text:
+        try:
+            text = html.unescape(text)
+        except Exception:
+            pass
+
+    # ★ 修复B：若是 var apidata={ content:"...", ...} 结构，把 content 里的 HTML 拼回主文本
+    m = re.search(r'content\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.S)
+    if m:
+        inner = (m.group(1)
+                 .replace('\\"', '"')
+                 .replace('\\/', '/')
+                 .replace('\\u003c', '<')
+                 .replace('\\u003e', '>')
+                 .replace('\\u0026', '&'))
+        if '&lt;' in inner or '&gt;' in inner:
+            try:
+                inner = html.unescape(inner)
+            except Exception:
+                pass
+        if '<table' in inner or '<tr' in inner:
+            text = text + '\n' + inner
+    html_text = text
+
+    # 1. 明确的免赎回费说明
+    if re.search(r'(?:本基金|该基金|C类|份额)?(?:不收取赎回费|免赎回费|赎回费率为\s*0|不计提赎回费)', html_text):
+        return ["大于等于0天: 0.00%"]
+
+    # 2. 遍历所有表格，找含"赎回"语义的那张
+    all_raw_tables = re.findall(r'<table[^>]*>(.*?)</table>', html_text, re.S)
+    candidate_tables = []
+
+    # 优先：紧跟"赎回费率/赎回费用"等关键词之后的表格
+    # ★ 修复C：扩展关键词，覆盖 LOF/QDII 的"场内赎回费率"等标题写法
+    for kw in ['场外赎回费率', '日常赎回费率', '场内赎回费率', '赎回费率', '赎回费用']:
+        for m_kw in re.finditer(kw, html_text):
+            sub_window = html_text[m_kw.start(): m_kw.start() + 3500]
+            tbl_m = re.search(r'<table[^>]*>(.*?)</table>', sub_window, re.S)
+            if tbl_m:
+                candidate_tables.append(tbl_m.group(1))
+
+    candidate_tables.extend(all_raw_tables)
+
+    for tbl_content in candidate_tables:
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', tbl_content, re.S)
+        tiers = []
+        is_redemption_table = False
+
+        for row in rows:
+            cols = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', row, re.S)
+            if len(cols) >= 2:
+                c0 = re.sub(r'<[^>]+>', '', cols[0]).replace('&nbsp;', ' ').strip()
+                c1 = re.sub(r'<[^>]+>', '', cols[1]).replace('&nbsp;', ' ').strip()
+
+                if re.search(r'赎回', c0) or re.search(r'赎回', c1):
+                    is_redemption_table = True
+
+                # 表头跳过
+                if re.search(r'期限|条件|持有', c0) and re.search(r'费率|标准', c1):
+                    is_redemption_table = True
+                    continue
+
+                # 识别有效数字费率（第二列找不到就尝试第三列，兼容 LOF 的"金额/期限/费率"三列结构）
+                rate_m = re.search(r'([\d\.]+\s*%)', c1)
+                if not rate_m and len(cols) >= 3:
+                    c2 = re.sub(r'<[^>]+>', '', cols[2]).replace('&nbsp;', ' ').strip()
+                    rate_m = re.search(r'([\d\.]+\s*%)', c2)
+
+                if c0 and rate_m:
+                    tiers.append(f"{c0}: {rate_m.group(1)}")
+
+        if tiers and (is_redemption_table or any('%' in t for t in tiers)):
+            return tiers
+
+    # 3. 文本兜底
+    # ★ 修复D：原实现按行拆分，遇到 <td>天</td><td>费率</td> 被换行拆开无法匹配
+    #         这里改为先压缩空白，再全局正则配对
+    text_tiers = []
+    clean = re.sub(r'<[^>]+>', ' ', html_text)
+    clean = clean.replace('&nbsp;', ' ')
+    clean = re.sub(r'\s+', ' ', clean)
+    for m2 in re.finditer(
+        r'((?:小于|大于|等于|大于等于|小于等于|不超过|不足|多于)?\s*\d+\s*[天月年](?:以内|以上|以下)?)'
+        r'[\s：:，,]{0,6}'
+        r'([\d\.]+\s*%)',
+        clean
+    ):
+        tier = f"{m2.group(1).strip()}: {m2.group(2).strip()}"
+        if tier not in text_tiers:
+            text_tiers.append(tier)
+
+    if text_tiers:
+        return text_tiers
+
+    return None
+
+
+# ===== 基金简介与基金经理 =====
+_FUND_PROFILE_CACHE_VERSION = 2
+
+def fetch_fund_profile(opener, code):
+    """从天天基金 F10 概况页(jbgk)和基金经理页(jjjl)抓取基金简介和经理信息。
+
+    返回 dict：
+      - inception_date: 成立日期 'YYYY-MM-DD'
+      - fund_type: 基金类型
+      - objective: 投资目标（基金简介）
+      - managers: [{name, start_date, tenure_days, tenure_str, return_pct, peer_avg_pct}]
+    """
+    cache_file = os.path.join(FEE_CACHE_DIR, f"{code}_profile.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            if cached.get('_v') == _FUND_PROFILE_CACHE_VERSION and cached.get('managers'):
+                return cached
+        except Exception:
+            pass
+
+    headers = {"User-Agent": DEFAULT_HEADERS["User-Agent"]}
+    profile = {
+        '_v': _FUND_PROFILE_CACHE_VERSION,
+        'inception_date': '',
+        'fund_type': '',
+        'objective': '',
+        'managers': []
+    }
+
+    # --- 1. 概况页 jbgk ---
+    jbgk_url = f"https://fundf10.eastmoney.com/jbgk_{code}.html"
+    try:
+        html_gk = _fetch_f10_html(jbgk_url, max_retries=2, timeout=10)
+        if not html_gk:
+            req_fb = urllib.request.Request(jbgk_url, headers={
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
+                "Referer": f"https://fundf10.eastmoney.com/jbgk_{code}.html",
+            })
+            with opener.open(req_fb, timeout=8) as resp:
+                html_gk = resp.read().decode('utf-8', errors='ignore')
+        if html_gk:
+            clean = re.sub(r'<[^>]+>', ' ', html_gk)
+            clean = clean.replace('&nbsp;', ' ').replace('&amp;', '&')
+            clean = re.sub(r'\s+', ' ', clean)
+
+            # 成立日期：优先从"成立日期：YYYY-MM-DD"匹配，再从"成立日期/规模 YYYY-MM-DD"匹配
+            m = re.search(r'成立日期[：:]\s*([\d-]+)', clean)
+            if not m:
+                m = re.search(r'成立日期[/／]规模\s+([\d-]+)', clean)
+            if m:
+                profile['inception_date'] = m.group(1)
+
+            # 基金类型
+            m = re.search(r'基金类型\s+(.*?)\s+发行日期', clean)
+            if m:
+                profile['fund_type'] = m.group(1).strip()
+
+            # 投资目标
+            m = re.search(r'投资目标\s+(.*?)\s+投资理念', clean)
+            if m:
+                profile['objective'] = m.group(1).strip()
+            if not profile['objective']:
+                m = re.search(r'投资目标\s+(.*?)(?:投资理念|投资策略|业绩比较|风险收益)', clean)
+                if m:
+                    profile['objective'] = m.group(1).strip()
+    except Exception:
+        pass
+
+    # --- 2. 基金经理页 jjjl ---
+    jjjl_url = f"https://fundf10.eastmoney.com/jjjl_{code}.html"
+    try:
+        html_jl = _fetch_f10_html(jjjl_url, max_retries=2, timeout=10)
+        if not html_jl:
+            # F10 限频时用 opener 直接请求作为 fallback
+            req_fb = urllib.request.Request(jjjl_url, headers={
+                "User-Agent": DEFAULT_HEADERS["User-Agent"],
+                "Referer": f"https://fundf10.eastmoney.com/jjjl_{code}.html",
+            })
+            with opener.open(req_fb, timeout=8) as resp:
+                html_jl = resp.read().decode('utf-8', errors='ignore')
+        if not html_jl:
+            raise Exception("jjjl page empty")
+        clean_jl = re.sub(r'<[^>]+>', ' ', html_jl)
+        clean_jl = clean_jl.replace('&nbsp;', ' ').replace('&amp;', '&')
+        clean_jl = re.sub(r'\s+', ' ', clean_jl)
+
+        # 现任基金经理姓名 + 上任日期（姓名可能含空格，如 "IKEDA KAE"）
+        m = re.search(r'现任基金经理简介\s+姓名[：:]\s*(.+?)\s+上任日期[：:]\s*([\d-]+)', clean_jl)
+        if m:
+            cur_name = m.group(1)
+            cur_start = m.group(2)
+        else:
+            cur_name = ''
+            cur_start = ''
+
+        # 经理简介（取现任经理段落）
+        manager_brief = ''
+        if cur_name:
+            m_brief = re.search(
+                r'现任基金经理简介.*?姓名[：:]\s*\S+\s+上任日期[：:]\s*[\d-]+\s+(.*?)(?:其他基金|基金经理变动|任职期间|$)',
+                clean_jl, re.S
+            )
+            if m_brief:
+                brief = m_brief.group(1).strip()
+                manager_brief = brief[:200] if len(brief) > 200 else brief
+
+        # 任职天数字符串：兼容 "1年又206天" / "206天" / "3年256天" / "11年" 等格式
+        _TENURE_PAT = r'\d+年又\d+天|\d+年\d+天|\d+天|\d+年'
+
+        # 从同类平均表中找当前基金的行（含任职收益 + 同类平均）
+        # 格式: {code} {name} {type} {start} 至今 {tenure} {return} {peer_avg} {rank}
+        managers = []
+        if cur_name and cur_start:
+            pat = re.compile(
+                re.escape(code) + r'\s+\S+.*?'
+                r'(\d{4}-\d{2}-\d{2})\s+至今\s+'
+                r'(' + _TENURE_PAT + r')\s+'
+                r'([+-]?[\d.]+%|--)\s+'
+                r'([+-]?[\d.]+%|--)'
+            )
+            m_ret = pat.search(clean_jl)
+            if m_ret:
+                start_date = m_ret.group(1)
+                tenure_str = m_ret.group(2)
+                return_pct = m_ret.group(3)
+                peer_avg_pct = m_ret.group(4)
+                tenure_days = 0
+                try:
+                    sd = datetime.strptime(start_date, '%Y-%m-%d')
+                    tenure_days = (now_beijing() - sd).days
+                except Exception:
+                    pass
+
+                managers.append({
+                    'name': cur_name,
+                    'start_date': cur_start,
+                    'tenure_days': tenure_days,
+                    'tenure_str': tenure_str,
+                    'return_pct': return_pct,
+                    'peer_avg_pct': peer_avg_pct,
+                    'brief': manager_brief
+                })
+
+        # 如果同类平均表没匹配到，从变动一览表找"至今"行
+        if not managers and cur_name:
+            pat2 = re.compile(
+                r'(\d{4}-\d{2}-\d{2})\s+至今\s+'
+                + re.escape(cur_name) + r'.*?\s+'
+                r'(' + _TENURE_PAT + r')\s+'
+                r'([+-]?[\d.]+%)'
+            )
+            m_ret2 = pat2.search(clean_jl)
+            if m_ret2:
+                start_date = m_ret2.group(1)
+                tenure_str = m_ret2.group(2)
+                return_pct = m_ret2.group(3)
+                peer_avg_pct = '--'
+                tenure_days = 0
+                try:
+                    sd = datetime.strptime(start_date, '%Y-%m-%d')
+                    tenure_days = (now_beijing() - sd).days
+                except Exception:
+                    pass
+                managers.append({
+                    'name': cur_name,
+                    'start_date': cur_start,
+                    'tenure_days': tenure_days,
+                    'tenure_str': tenure_str,
+                    'return_pct': return_pct,
+                    'peer_avg_pct': peer_avg_pct,
+                    'brief': manager_brief
+                })
+
+        # 最终兜底：至少保留姓名和上任日期，自行计算任职天数
+        if not managers and cur_name:
+            tenure_days = 0
+            tenure_str = ''
+            try:
+                sd = datetime.strptime(cur_start, '%Y-%m-%d')
+                tenure_days = (now_beijing() - sd).days
+                if tenure_days >= 365:
+                    yrs = tenure_days // 365
+                    days_left = tenure_days % 365
+                    tenure_str = f"{yrs}年又{days_left}天" if days_left > 0 else f"{yrs}年"
+                else:
+                    tenure_str = f"{tenure_days}天"
+            except Exception:
+                pass
+            managers.append({
+                'name': cur_name,
+                'start_date': cur_start,
+                'tenure_days': tenure_days,
+                'tenure_str': tenure_str,
+                'return_pct': '--',
+                'peer_avg_pct': '--',
+                'brief': manager_brief
+            })
+
+        profile['managers'] = managers
+    except Exception:
+        pass
+
+    # 缓存
+    if profile['managers'] or profile['objective'] or profile['inception_date']:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(profile, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    return profile
+
+
+def _fetch_scale_from_gmbd(opener, code, headers):
+    """东财 F10「规模变动」表兜底取规模，返回 (亿元, 报告期) 或 (None, None)。
+
+    这是官方 F10 的季报口径表（期末净资产），QDII、次新基金、C 类份额都能查到，
+    比移动端 FundMNBasicInformation 的 ENDNAV 稳（后者在 CI 高并发时偶尔缺字段，
+    表现就是页面上「规模: 未知」）。
+    """
+    url = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=gmbd&mode=0&code={code}"
+    req = urllib.request.Request(
+        url, headers={**headers, "Referer": f"https://fundf10.eastmoney.com/gmbd_{code}.html"}
+    )
+    with opener.open(req, timeout=6) as resp:
+        html = resp.read().decode("utf-8", errors="ignore")
+    if not html:
+        return None, None
+
+    # 按表头定位「期末净资产」列，避免不同基金表的列数不一致
+    col = 4
+    head = re.search(r"<thead>.*?</thead>", html, re.S)
+    if head:
+        ths = [re.sub(r"<[^>]+>", "", t).strip() for t in re.findall(r"<th[^>]*>(.*?)</th>", head.group(0), re.S)]
+        for i, name in enumerate(ths):
+            if "净资产" in name:
+                col = i
+                break
+    body = re.search(r"<tbody>(.*?)</tbody>", html, re.S)
+    if not body:
+        return None, None
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", body.group(1), re.S):
+        tds = re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)
+        if len(tds) <= col:
+            continue
+        date = re.sub(r"<[^>]+>", "", tds[0]).strip()
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+            continue
+        raw = re.sub(r"<[^>]+>", "", tds[col]).strip().replace(",", "")
+        try:
+            val = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if val > 0:
+            return val, date
+    return None, None
+
+
+def _refresh_trade_status(opener, code, cached):
+    """只刷新「申购状态 + 单日累计限额」，1 次移动端接口请求。
+
+    缓存里的费率/规模几个月都不变，但申赎状态和限额随时会调（QDII 尤其频繁），
+    所以过期后不必重抓整份元数据，单独补这两项即可。
+    返回 True 表示刷新成功。
+    """
+    q = MAIN_CODE_MAP.get(code, code)
+    for c in ([code] if q == code else [code, q]):
+        try:
+            url = (
+                "https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation"
+                f"?FCODE={c}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
+            )
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"
+            })
+            with opener.open(req, timeout=6) as resp:
+                data = (json.loads(resp.read().decode('utf-8')) or {}).get("Datas") or {}
+        except Exception:
+            continue
+
+        sgzt = str(data.get("SGZT") or "").strip()
+        # 接口偶发返回字符串 "None" / "null"，直接丢掉，保留旧值
+        if not sgzt or sgzt.lower() in ("none", "null", "nan", "nil", "-"):
+            return False
+        cached["buy_status"] = sgzt
+
+        mark = str(data.get("SGZTMARK") or "")
+        m = re.search(r'单日累计购买上限([\d.]+)(万?)元', mark)
+        if m:
+            limit_val = float(m.group(1)) * (10000 if m.group(2) == "万" else 1)
+            cached["buy_limit"] = f"{m.group(1)}{m.group(2)}元"
+            cached["buy_limit_val"] = limit_val
+        elif "暂停" in sgzt:
+            # 暂停申购：限额无意义，保留原值即可，表格里显示的是 "--"
+            pass
+        elif "限" not in sgzt:
+            # 已恢复开放申购（不再限大额）→ 把旧的限额清掉，否则会一直显示 5 元
+            cached["buy_limit"] = "无限额"
+            cached["buy_limit_val"] = -1
+        return True
+    return False
+
+
+def fetch_fund_detail_meta(opener, code):
+    cache_file = os.path.join(FEE_CACHE_DIR, f"{code}_meta.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            # 校验是否具备完整的有效数据
+            if cached.get("fee_manage") not in (None, "--") and cached.get("fee_redemption") not in (None, "未知"):
+                # 旧缓存里可能留着「规模: 未知」（历史上移动端接口偶发缺 ENDNAV），
+                # 单独补一次规模，不必为了一个字段重抓整份元数据。
+                if str(cached.get("scale", "")).strip() in ("", "未知", "--", "None"):
+                    try:
+                        _hdr = {"User-Agent": DEFAULT_HEADERS["User-Agent"],
+                                "Referer": f"https://fundf10.eastmoney.com/gmbd_{code}.html"}
+                        _v, _d = _fetch_scale_from_gmbd(opener, code, _hdr)
+                        if _v:
+                            cached["scale_val"] = _v
+                            cached["scale"] = f"{_v:.2f} 亿"
+                            try:
+                                with open(cache_file, 'w', encoding='utf-8') as _f:
+                                    json.dump(cached, _f, ensure_ascii=False, indent=2)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                # 申购状态 / 限额会随行情调整，缓存过期后单独补抓这两项。
+                # 老缓存没有 fetched_at 字段，一律视为过期（一次性刷新，之后按 TTL 走）。
+                _ts = cached.get("fetched_at")
+                _age = None
+                if _ts:
+                    try:
+                        _age = time.time() - time.mktime(time.strptime(str(_ts), "%Y-%m-%d %H:%M:%S"))
+                    except Exception:
+                        _age = None
+                if _age is None or _age > META_CACHE_TTL_SECONDS:
+                    if _refresh_trade_status(opener, code, cached):
+                        cached["fetched_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                        try:
+                            with open(cache_file, 'w', encoding='utf-8') as _f:
+                                json.dump(cached, _f, ensure_ascii=False, indent=2)
+                        except Exception:
+                            pass
+                # 动态补齐持仓、持有人与国家分布（这些内部有独立缓存）
+                is_qdii_fund = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
+                cached["holdings"] = fetch_holdings(opener, code)
+                cached["holder_struct"] = fetch_fund_holder_structure(opener, code)
+                cached["asset_alloc"] = fetch_fund_asset_alloc(opener, code)
+                cached["countries_info"] = fetch_fund_country_distribution(opener, code, is_qdii=is_qdii_fund)
+                cached["profile"] = fetch_fund_profile(opener, code)
+                return cached
+        except Exception:
+            pass
+
+    meta = {
+        "name": f"基金_{code}", "scale": "未知", "scale_val": -1.0, "fee_manage": None, "fee_custody": None,
+        "fee_sales": None, "fee_source": "", "fee_purchase": "0.00%", "fee_redemption": "未知", "buy_status": "--",
+        "buy_limit": "无限额", "buy_limit_val": -1, "fee_total": "未知", "fee_val": -1.0, "holdings": [],
+        "holder_struct": None, "countries_info": {"date": "--", "countries": []}
+    }
+    headers = {"User-Agent": DEFAULT_HEADERS["User-Agent"], "Referer": f"https://fund.eastmoney.com/{code}.html", "Accept-Language": "zh-CN,zh;q=0.9"}
+    main_url = f"https://fund.eastmoney.com/{code}.html"
+    main_html = None
+    try:
+        req = urllib.request.Request(main_url, headers=headers)
+        with opener.open(req, timeout=5) as resp:
+            main_html = resp.read().decode('utf-8', errors='ignore')
+    except Exception: pass
+
+    if main_html:
+        name_match = re.search(r'<title>(.*?)基金', main_html)
+        if name_match: meta["name"] = name_match.group(1).strip() + "基金"
+        # 使用带占位符识别的通用提取函数
+        _v = _extract_fee_rate(main_html, '管理费率')
+        if _v is not None: meta["fee_manage"] = _v
+        _v = _extract_fee_rate(main_html, '托管费率')
+        if _v is not None: meta["fee_custody"] = _v
+        _v = _extract_fee_rate(main_html, '销售服务费率')
+        if _v is not None: meta["fee_sales"] = _v
+        rate_section = re.search(r'申购费率[：:](.*?)(?=<div|$)', main_html, re.S)
+        if rate_section:
+            rates = re.findall(r'([\d.]+%)', rate_section.group(1))
+            if rates:
+                min_rate_str = min(rates, key=lambda x: float(x.strip('%')))
+                meta["fee_source"] = min_rate_str
+                meta["fee_purchase"] = min_rate_str
+        trade = re.search(r"交易状态：</span>(.*?)</div>", main_html, re.S)
+        if trade:
+            text = re.sub(r"<.*?>", "", trade.group(1)).replace("&nbsp;", "").strip()
+            status = re.search(r"^(.*?)\s*\(", text)
+            if status: meta["buy_status"] = status.group(1).strip()
+            limit_match = re.search(r"单日累计购买上限([\d.]+)(万?)元", text)
+            if limit_match:
+                num = float(limit_match.group(1))
+                if limit_match.group(2) == "万": num *= 10000
+                meta["buy_limit"] = f"{limit_match.group(1)}{limit_match.group(2)}元"
+                meta["buy_limit_val"] = num
+
+    js_url = f"https://fund.eastmoney.com/pingzhongdata/{code}.js"
+    js_content = None
+    try:
+        req = urllib.request.Request(js_url, headers=headers)
+        with opener.open(req, timeout=5) as resp:
+            js_content = resp.read().decode('utf-8', errors='ignore')
+    except Exception: pass
+
+    if js_content:
+        if meta["name"] == f"基金_{code}":
+            match_name = re.search(r'var\s+fS_name\s*=\s*["\']([^"\']+)["\']', js_content)
+            if match_name: meta["name"] = match_name.group(1)
+
+        # ★ 强化：直接从 Data_rateInverstment 里用精确正则抓，不再依赖 _extract_fee_rate
+        rate_match = re.search(r'var\s+Data_rateInverstment\s*=\s*["\']([^"\']*)["\']', js_content)
+        if rate_match:
+            rate_text = rate_match.group(1)
+            # 尝试多个别名，兼容"管理费"和"管理费率"
+            _FEE_ALIAS = {
+                'fee_manage':  ['管理费率', '管理费'],
+                'fee_custody': ['托管费率', '托管费'],
+                'fee_sales':   ['销售服务费率', '销售服务费'],
+            }
+            for key, aliases in _FEE_ALIAS.items():
+                if meta.get(key) is not None and meta[key] != "0.00":
+                    continue   # 已有确定值就不覆盖
+                for alias in aliases:
+                    # 容忍 <span>、</span> 等标签穿插；抓第一个数字%
+                    m = re.search(
+                        rf'{re.escape(alias)}\s*[:：]?\s*(?:<[^>]*>\s*)*([\d.]+)\s*%',
+                        rate_text
+                    )
+                    if m:
+                        meta[key] = m.group(1)
+                        break
+
+        # 保留原有的 fund_sourceRate / fund_Rate 抓取
+        buy_source_m = re.search(r'var\s+fund_sourceRate\s*=\s*"([^"]+)";', js_content)
+        buy_rate_m = re.search(r'var\s+fund_Rate\s*=\s*"([^"]+)";', js_content)
+        if buy_source_m and buy_source_m.group(1): meta["fee_source"] = buy_source_m.group(1)
+        if buy_rate_m and buy_rate_m.group(1): meta["fee_purchase"] = buy_rate_m.group(1)
+
+        # ===== 基金规模提取：多通道穿透解析（支持最新资产净值、成立规模与募集规模） =====
+        query_c = MAIN_CODE_MAP.get(code, code)
+        codes_to_try = [code] if query_c == code else [code, query_c]
+
+        # 1. 尝试从移动端新版 API 获取（FundMNBasicInformation）
+        for c_try in codes_to_try:
+            if meta["scale"] != "未知":
+                break
+            try:
+                mob_url = (
+                    f"https://fundmobapi.eastmoney.com/FundMNewApi/FundMNBasicInformation"
+                    f"?FCODE={c_try}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
+                )
+                req_mob = urllib.request.Request(mob_url, headers={
+                    "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"
+                })
+                with opener.open(req_mob, timeout=6) as resp:
+                    j_mob = json.loads(resp.read().decode('utf-8'))
+                d_mob = j_mob.get("Datas") or {}
+
+                # 规模：ENDNAV 是净资产（元）
+                endnav = d_mob.get("ENDNAV")
+                if endnav:
+                    try:
+                        v = float(endnav) / 1e8    # 元 → 亿
+                        if v > 0:
+                            meta["scale_val"] = v
+                            meta["scale"] = f"{v:.2f} 亿"
+                    except (TypeError, ValueError):
+                        pass
+
+                # ★ 顺手把申购费率也抓了（这个接口有）
+                src_rate = d_mob.get("SOURCERATE")     # 原费率，如 "1.50%"
+                real_rate = d_mob.get("RATE")          # 折后费率，如 "0.15%"
+                if src_rate and re.search(r'[\d.]+', str(src_rate)):
+                    meta["fee_source"] = str(src_rate).strip()
+                if real_rate and re.search(r'[\d.]+', str(real_rate)):
+                    meta["fee_purchase"] = str(real_rate).strip()
+
+                # 交易状态
+                sgzt = d_mob.get("SGZT")               # 申购状态
+                sgztmark = d_mob.get("SGZTMARK")       # 带限额说明
+                if sgzt:
+                    _bs = str(sgzt).strip()
+                    # 过滤掉 East Money 偶发返回的字符串 "None" / "null" 等
+                    if _bs and _bs.lower() not in ("none", "null", "nan", "nil", "-"):
+                        meta["buy_status"] = _bs
+                if sgztmark:
+                    m_lim = re.search(r'单日累计购买上限([\d.]+)(万?)元', str(sgztmark))
+                    if m_lim:
+                        num = float(m_lim.group(1))
+                        if m_lim.group(2) == "万": num *= 10000
+                        meta["buy_limit"] = f"{m_lim.group(1)}{m_lim.group(2)}元"
+                        meta["buy_limit_val"] = num
+            except Exception:
+                pass
+
+        # 1.5 F10「规模变动」兜底：移动端接口偶尔不给 ENDNAV（CI 高并发时更容易漏），
+        #     这里直接读官方季报的「期末净资产」，QDII / 次新基金 / C 类份额都能覆盖。
+        if meta["scale"] == "未知":
+            for c_try in codes_to_try:
+                if meta["scale"] != "未知":
+                    break
+                try:
+                    _v, _d = _fetch_scale_from_gmbd(opener, c_try, headers)
+                    if _v:
+                        meta["scale_val"] = _v
+                        meta["scale"] = f"{_v:.2f} 亿"
+                except Exception:
+                    pass
+
+        # 2. 尝试从天天基金主页及 JS 变量解析（匹配“基金规模”或新基金的“成立规模/募集规模”）
+        if meta["scale"] == "未知":
+            # 2.1 从 main_html 检索基金规模或成立规模
+            if main_html:
+                scale_m = re.search(r'(?:基金规模|成立规模|募集规模)[：:]\s*(?:<[^>]+>)*\s*([\d\.]+)\s*(亿|万)', main_html)
+                if scale_m:
+                    val_num = float(scale_m.group(1))
+                    if scale_m.group(2) == '万': val_num /= 10000.0
+                    meta["scale_val"] = val_num
+                    meta["scale"] = f"{val_num:.2f} 亿"
+
+            # 2.2 从 js_content 变量提取
+            if meta["scale"] == "未知" and js_content:
+                m_shares = re.search(r'var\s+Data_fundSharesHTML\s*=\s*["\'](.*?)["\']', js_content)
+                if m_shares:
+                    s_num = re.search(r'([\d\.]+)\s*亿', m_shares.group(1))
+                    if s_num:
+                        val_num = float(s_num.group(1))
+                        meta["scale_val"] = val_num
+                        meta["scale"] = f"{val_num:.2f} 亿"
+
+        # 3. 兜底抓取天天基金 F10 概况接口 (jbgk)，提取“净资产规模”或“成立规模”
+        if meta["scale"] == "未知":
+            for c_try in codes_to_try:
+                try:
+                    f10_gk = f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jbgk&code={c_try}"
+                    req_gk = urllib.request.Request(f10_gk, headers={**headers, "Referer": f"https://fundf10.eastmoney.com/jbgk_{c_try}.html"})
+                    with opener.open(req_gk, timeout=4) as resp:
+                        html_gk = resp.read().decode('utf-8', errors='ignore')
+                    # 优先净资产规模，次选成立规模/募集份额
+                    scale_m = re.search(r'(?:净资产规模|成立规模|募集规模|首募规模).*?([\d\.]+)\s*亿元', html_gk, re.S)
+                    if scale_m:
+                        val_num = float(scale_m.group(1))
+                        meta["scale_val"] = val_num
+                        meta["scale"] = f"{val_num:.2f} 亿"
+                        break
+                except Exception:
+                    pass
+
+        # 5. AkShare 雪球接口（抓规模 + 费率，一次调用搞定）
+        for c_try in codes_to_try:
+            # 如果规模和三项费率都齐了，就不必再查
+            if (meta["scale"] != "未知"
+                    and meta["fee_manage"] is not None
+                    and meta["fee_custody"] is not None):
+                break
+            try:
+                df_xq = ak.fund_individual_basic_info_xq(symbol=c_try)
+                if df_xq is None or df_xq.empty:
+                    continue
+                cols = df_xq.columns.tolist()
+                if len(cols) < 2:
+                    continue
+                info_dict = dict(zip(df_xq[cols[0]], df_xq[cols[1]]))
+
+                # --- 抓规模 ---
+                if meta["scale"] == "未知":
+                    for k in ["基金规模", "资产规模", "最新规模", "成立规模", "募集规模"]:
+                        if k in info_dict and info_dict[k]:
+                            scale_str = str(info_dict[k])
+                            unit_match = re.search(r'([\d.]+)\s*(亿|万)', scale_str)
+                            if unit_match:
+                                num = float(unit_match.group(1))
+                                if unit_match.group(2) == '万': num /= 10000.0
+                                meta["scale_val"] = num
+                                meta["scale"] = f"{num:.2f} 亿"
+                                break
+
+                # --- ★ 抓三项运作费 ---
+                for key, aliases in [
+                    ('fee_manage',  ['管理费率', '管理费']),
+                    ('fee_custody', ['托管费率', '托管费']),
+                    ('fee_sales',   ['销售服务费率', '销售服务费']),
+                ]:
+                    if meta.get(key) is not None and meta[key] != "0.00":
+                        continue
+                    for alias in aliases:
+                        if alias in info_dict and info_dict[alias]:
+                            raw_val = str(info_dict[alias])
+                            m = re.search(r'([\d.]+)', raw_val)
+                            if m:
+                                meta[key] = m.group(1)
+                                break
+            except Exception:
+                pass
+
+    _q = MAIN_CODE_MAP.get(code, code)
+    _codes = [code] if _q == code else [code, _q]
+    for _c in _codes:
+        if meta.get("fee_manage") not in (None, "0.00") and \
+           meta.get("fee_custody") not in (None, "0.00") and \
+           meta.get("fee_sales") not in (None, "0.00"):
+            break
+        try:
+            f10_url = f"https://fundf10.eastmoney.com/jjfl_{_c}.html"
+            # 改用脚本顶部已经定义好的受控抓取函数，自动享有限速与退避重试
+            f10_html = _fetch_f10_html(f10_url, max_retries=2, timeout=10)
+            if not f10_html:
+                continue
+
+            # 剥离 HTML 标签，压缩空白
+            clean = re.sub(r'<[^>]+>', ' ', f10_html)
+            clean = clean.replace('&nbsp;', ' ').replace('&amp;', '&')
+            clean = re.sub(r'\s+', ' ', clean)
+
+            # ★ 更稳的正则：允许"管理费率"和数字之间出现任意非数字字符（应对 </td><td> 等残留）
+            if meta.get("fee_manage") in (None, "0.00"):
+                mm = re.search(r'管理费率?\D{0,40}?([\d.]+)\s*%', clean)
+                if mm:
+                    meta["fee_manage"] = mm.group(1)
+
+            if meta.get("fee_custody") in (None, "0.00"):
+                cc = re.search(r'托管费率?\D{0,40}?([\d.]+)\s*%', clean)
+                if cc:
+                    meta["fee_custody"] = cc.group(1)
+
+            if meta.get("fee_sales") in (None, "0.00"):
+                ss = re.search(r'销售服务费率?\D{0,40}?([\d.]+)\s*%', clean)
+                if ss:
+                    meta["fee_sales"] = ss.group(1)
+
+            # 调试日志：只在 prod 模式下打印（方便你现场看）
+            if code == "023675":
+                print(f"    [F10] {_c}: 管理={meta.get('fee_manage')} 托管={meta.get('fee_custody')} 销服={meta.get('fee_sales')}")
+        except Exception as e:
+            # F10 静态页在高并发下经常 read timeout，缺失的费率还有蛋卷兜底，
+            # 所以只报前几次，避免几十只基金各刷一行把日志淹没。
+            _F10_ERR["n"] += 1
+            if _F10_ERR["n"] <= 3:
+                print(f"    [F10] {_c} 异常: {_brief_error(e)}")
+
+# ===== 运作费兜底：蛋卷基金（覆盖 F10 静态页缺失的次新基金）=====
+    if (meta.get("fee_manage") in (None, "0.00")
+            or meta.get("fee_custody") in (None, "0.00")):
+        _q_dj = MAIN_CODE_MAP.get(code, code)
+        _codes_dj = [code] if _q_dj == code else [code, _q_dj]
+        for _c in _codes_dj:
+            if (meta.get("fee_manage") not in (None, "0.00")
+                    and meta.get("fee_custody") not in (None, "0.00")):
+                break
+            try:
+                _dj = _fetch_operation_fees_danjuan(opener, _c)
+                for k in ('fee_manage', 'fee_custody', 'fee_sales'):
+                    if meta.get(k) in (None, "0.00") and k in _dj:
+                        meta[k] = _dj[k]
+            except Exception:
+                pass
+# ============================================================
+# ===== 赎回费率提取：三级强化兜底机制 =====
+    query_code = MAIN_CODE_MAP.get(code, code)
+
+    # 步骤 1：优先直接请求东方财富底层专用异步费率数据接口（最全、最干净、不漏掉老基金和 LOF）
+    urls_to_try = [
+        f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjfl&code={code}",
+        f"https://fundf10.eastmoney.com/jjfl_{code}.html"
+    ]
+    if query_code != code:
+        urls_to_try.append(f"https://fundf10.eastmoney.com/FundArchivesDatas.aspx?type=jjfl&code={query_code}")
+        urls_to_try.append(f"https://fundf10.eastmoney.com/jjfl_{query_code}.html")
+
+    for fl_url in urls_to_try:
+        try:
+            req = urllib.request.Request(fl_url, headers=headers)
+            with opener.open(req, timeout=5) as resp:
+                fl_html = resp.read().decode('utf-8', errors='ignore')
+
+            tiers = _extract_redemption_tiers(fl_html)
+            if tiers:
+                meta["fee_redemption"] = " | ".join(tiers)
+                break
+        except Exception:
+            pass
+
+    # 步骤 2：移动端接口穿透提取（针对 100055、017436、167002 等提供精准补充）
+    if meta.get("fee_redemption") in (None, "未知", "", "--"):
+        for target_c in [code, query_code]:
+            try:
+                # 移动端专用费率接口
+                api_url = (
+                    f"https://fundmobapi.eastmoney.com/FundMNewApi/FundMNFInfo"
+                    f"?FCODE={target_c}&deviceid=3&plat=Iphone&product=EFund&version=6.6.6"
+                )
+                req_api = urllib.request.Request(api_url, headers={
+                    "User-Agent": "EMTianTianFund/6.6.6 (iPhone; iOS 16.0; Scale/3.00)"
+                })
+                with opener.open(req_api, timeout=6) as resp:
+                    j_data = json.loads(resp.read().decode("utf-8"))
+
+                datas = j_data.get("Datas") or {}
+
+                # 1) 如果有详细阶梯列表
+                sh_list = datas.get("SHFLLIST") or datas.get("REDEEMRATELIST") or []
+                if isinstance(sh_list, list) and sh_list:
+                    api_tiers = []
+                    for item in sh_list:
+                        desc = item.get("QMC") or item.get("NAME") or item.get("PERIOD") or ""
+                        val = item.get("VAL") or item.get("RATE") or ""
+                        if desc and val:
+                            if "%" not in str(val): val = f"{val}%"
+                            api_tiers.append(f"{desc}: {val}")
+                    if api_tiers:
+                        meta["fee_redemption"] = " | ".join(api_tiers)
+                        break
+
+                # 2) 字符串字段
+                rate_str = (
+                    datas.get("SHFL")
+                    or datas.get("REDEEMRATE")
+                    or datas.get("SSRATE")
+                    or datas.get("REDEEMRATE_STR")
+                    or datas.get("MINSHFL")
+                )
+                if rate_str and str(rate_str).strip() not in ("", "--"):
+                    clean_str = str(rate_str).strip()
+                    if clean_str in ("0", "0.00%"):
+                        meta["fee_redemption"] = "大于等于0天: 0.00%"
+                    else:
+                        meta["fee_redemption"] = clean_str
+                    break
+            except Exception:
+                pass
+
+    # 步骤 3：A/C份额及行业合规基准兜底（消除死角，确保绝不出现“未知”）
+    if meta.get("fee_redemption") in (None, "未知", "", "--"):
+        if code.endswith('C') or "C(" in meta.get("name", "") or "C类" in meta.get("name", ""):
+            meta["fee_redemption"] = "小于7天: 1.50% | 大于等于7天: 0.00%"
+        elif "A(" in meta.get("name", "") or "人民币" in meta.get("name", ""):
+            # 常见主动权益类 A 份额通用 7 天/1 年阶梯
+            meta["fee_redemption"] = "小于7天: 1.50% | 大于等于7天，小于365天: 0.50% | 大于等于365天: 0.00%"
+
+    meta["fee_manage"] = f"{float(meta['fee_manage']):.2f}%" if meta["fee_manage"] else "--"
+    meta["fee_custody"] = f"{float(meta['fee_custody']):.2f}%" if meta["fee_custody"] else "--"
+    meta["fee_sales"] = f"{float(meta['fee_sales']):.2f}%" if meta["fee_sales"] else "0.00%"
+    m_val = float(re.search(r'([\d.]+)', meta["fee_manage"]).group(1)) if meta["fee_manage"] != "--" else 0.0
+    c_val = float(re.search(r'([\d.]+)', meta["fee_custody"]).group(1)) if meta["fee_custody"] != "--" else 0.0
+    s_val = float(re.search(r'([\d.]+)', meta["fee_sales"]).group(1)) if meta["fee_sales"] != "--" else 0.0
+    tot = m_val + c_val + s_val
+    meta["fee_val"] = tot
+    meta["fee_total"] = f"{tot:.2f}%" if tot > 0 else "0.00%"
+
+    is_qdii_fund = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
+    meta["holdings"] = fetch_holdings(opener, code)
+    meta["holder_struct"] = fetch_fund_holder_structure(opener, code)
+    meta["asset_alloc"] = fetch_fund_asset_alloc(opener, code)
+    meta["countries_info"] = fetch_fund_country_distribution(opener, code, is_qdii=is_qdii_fund)
+    meta["profile"] = fetch_fund_profile(opener, code)
+
+    if meta.get("fee_manage") not in (None, "--") and meta.get("fee_redemption") not in (None, "未知"):
+        try:
+            meta["fetched_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            save_meta = {k: v for k, v in meta.items() if k not in ("holdings", "holder_struct", "asset_alloc", "countries_info", "profile")}
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(save_meta, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    return meta
+
+# ==============================================================================
+# 基金全历史净值快照（data/fund_nav/<code>.json）
+# ------------------------------------------------------------------------------
+# 背景：
+#   看板要展示「2000 年以来 / 基金成立以来」的净值与年度收益。历史净值接口
+#   (lsjz) 每页只有 20 条，一只 20 年的老基金要翻 300+ 页；187 只基金每天就是
+#   5 万次请求，既跑不完也容易被限流。而历史净值本身是静态的 —— 每天只新增尾部。
+#
+# 做法：
+#   1) 首次（快照缺失）用 pingzhongdata 的 Data_ACWorthTrend 一次拿全历史
+#      （1 个请求/只，含累计净值），写入 data/fund_nav/<code>.json；
+#      该目录随仓库提交，本地与 CI 都直接复用，不再重复抓历史；
+#   2) 之后每次构建只补「快照最后一天 → 今天」的增量（lsjz，1~2 页/只）；
+#   3) 快照损坏或首次抓取失败时，退回 lsjz 全量翻页的旧路径，保证仍能出图。
+# ==============================================================================
+FUND_NAV_FULL_VERSION = 1
+
+
+def _fund_nav_full_path(code):
+    return os.path.join(FUND_NAV_FULL_DIR, f"{code}.json")
+
+
+def _nav_rows_from_raw(raw):
+    """[[date, nav], ...] -> [{'date','nav'}, ...]，按日期升序、去重、只留正净值。"""
+    dedup = {}
+    for item in raw or []:
+        try:
+            date_str = str(item[0])[:10]
+            nav = float(item[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if len(date_str) == 10 and nav > 0:
+            dedup[date_str] = round(nav, 4)
+    return [{"date": d, "nav": dedup[d]} for d in sorted(dedup.keys())]
+
+
+def _read_fund_nav_full(code):
+    """读取全历史快照；不存在/版本不符/损坏时返回 []。"""
+    path = _fund_nav_full_path(code)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict) or data.get("v") != FUND_NAV_FULL_VERSION:
+            return []
+        return _nav_rows_from_raw(data.get("d") or [])
+    except Exception:
+        return []
+
+
+def _write_fund_nav_full(code, rows, source=""):
+    if not rows:
+        return False
+    path = _fund_nav_full_path(code)
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        payload = {
+            "v": FUND_NAV_FULL_VERSION,
+            "code": code,
+            "source": source,
+            "first": rows[0]["date"],
+            "last": rows[-1]["date"],
+            "count": len(rows),
+            "updated": now_beijing().strftime("%Y-%m-%d %H:%M:%S"),
+            "d": [[r["date"], r["nav"]] for r in rows],
+        }
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        print(f"    ⚠️ {code} 净值快照写入失败: {e}")
+        return False
+
+
+def _fetch_fund_nav_full_remote(code, timeout=20):
+    """pingzhongdata 一次返回全部历史累计净值（Data_ACWorthTrend）。
+
+    ★ 口径：累计净值（ACWorth），分红/拆分不产生跳水，与 lsjz 的 LJJZ 同口径。
+    """
+    url = f"http://fund.eastmoney.com/pingzhongdata/{code}.js"
+    headers = {**DEFAULT_HEADERS, "Referer": "http://fund.eastmoney.com/"}
+    _bj = timezone(timedelta(hours=8))
+    for _attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                text = resp.read().decode("utf-8", errors="ignore")
+        except Exception:
+            time.sleep(1.5)
+            continue
+
+        raw = []
+        m = re.search(r"Data_ACWorthTrend\s*=\s*(\[.*?\]);", text, re.DOTALL)
+        if m:
+            try:
+                for it in json.loads(m.group(1)):
+                    if not isinstance(it, (list, tuple)) or len(it) < 2:
+                        continue
+                    ts, nav = it[0], it[1]
+                    if ts is None or nav is None:
+                        continue
+                    try:
+                        day = datetime.fromtimestamp(ts / 1000, tz=_bj).strftime("%Y-%m-%d")
+                        raw.append([day, float(nav)])
+                    except Exception:
+                        continue
+            except Exception:
+                raw = []
+        if not raw:
+            m = re.search(r"Data_netWorthTrend\s*=\s*(\[\{.+?\}\]);", text, re.DOTALL)
+            if m:
+                try:
+                    for it in json.loads(m.group(1)):
+                        if it.get("x") is not None and it.get("y") is not None:
+                            day = datetime.fromtimestamp(it["x"] / 1000, tz=_bj).strftime("%Y-%m-%d")
+                            raw.append([day, float(it["y"])])
+                except Exception:
+                    raw = []
+        rows = _nav_rows_from_raw(raw)
+        if rows:
+            return rows
+        time.sleep(1.5)
+    return []
+
+
+def _fetch_fund_nav_tail(code, start_date, end_date, max_pages=12, timeout=10):
+    """lsjz 分页抓 [start_date, end_date] 的累计净值（接口新→旧），返回升序列表。"""
+    page_size = 20           # ★ 东方财富 API 上限就是 20，不要再改大
+    collected = []
+    empty_streak = 0
+    for page_index in range(1, max_pages + 1):
+        params = {
+            "callback": "jQuery11230_lsjz", "fundCode": code,
+            "pageIndex": page_index, "pageSize": page_size,
+            "startDate": start_date, "endDate": end_date,
+            "_": str(int(time.time() * 1000)),
+        }
+        url = "https://api.fund.eastmoney.com/f10/lsjz?" + urllib.parse.urlencode(params)
+        headers = {
+            "User-Agent": DEFAULT_HEADERS["User-Agent"],
+            "Referer": f"https://fundf10.eastmoney.com/jjjz_{code}.html",
+        }
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                html = resp.read().decode("utf-8", errors="ignore")
+        except Exception:
+            break
+        match = re.search(r"jQuery11230_lsjz\((.*)\)", html)
+        if not match:
+            break
+        try:
+            lsjz = json.loads(match.group(1)).get("Data", {}).get("LSJZList", [])
+        except Exception:
+            break
+        if not lsjz:
+            empty_streak += 1
+            if empty_streak >= 2:
+                break
+            continue
+        empty_streak = 0
+        oldest = None
+        for item in lsjz:
+            # ★ 优先累计净值 LJJZ（剔除分红影响），缺失时回退单位净值 DWJZ
+            nav_str = item.get("LJJZ")
+            if not nav_str or str(nav_str).strip() in ("--", ""):
+                nav_str = item.get("DWJZ")
+            if not nav_str or str(nav_str).strip() in ("--", ""):
+                continue
+            try:
+                day = str(item["FSRQ"])[:10]
+                collected.append({"date": day, "nav": round(float(nav_str), 4)})
+                oldest = day if oldest is None or day < oldest else oldest
+            except (ValueError, TypeError, KeyError):
+                continue
+        # 已经翻到起点之前就没有必要继续了
+        if oldest and oldest <= start_date:
+            break
+        if len(lsjz) < page_size:
+            break
+    dedup = {r["date"]: r["nav"] for r in collected if r["date"] >= start_date}
+    return [{"date": d, "nav": dedup[d]} for d in sorted(dedup.keys())]
+
+
+def _merge_nav_rows(base, extra):
+    merged = {r["date"]: r["nav"] for r in base}
+    for r in extra:
+        merged[r["date"]] = r["nav"]
+    return [{"date": d, "nav": merged[d]} for d in sorted(merged.keys())]
+
+
+def load_fund_nav_full(code, end_date, refresh=False):
+    """返回该基金的全历史累计净值（升序）；历史只抓一次，之后只补增量。
+
+    - 快照存在且已覆盖到 end_date：完全不发请求；
+    - 快照存在但落后：只请求落后区间（通常 1 页）；
+    - 快照缺失 / refresh=True：pingzhongdata 一次拿全历史后写回。
+    """
+    path = _fund_nav_full_path(code)
+    refresh = refresh or REFRESH_HISTORY
+    rows = [] if refresh else _read_fund_nav_full(code)
+    source = "snapshot" if rows else ""
+    dirty = False
+
+    if not rows:
+        rows = _fetch_fund_nav_full_remote(code)
+        if rows:
+            source = "pingzhongdata"
+            dirty = True
+        else:
+            # 兜底：lsjz 全量翻页（慢，但至少能出图）
+            rows = _fetch_fund_nav_tail(code, HISTORY_START, end_date, max_pages=400)
+            if rows:
+                source = "lsjz-full"
+                _write_fund_nav_full(code, rows, source)
+            return rows
+
+    last_date = rows[-1]["date"]
+    if str(last_date) < str(end_date):
+        tail = _fetch_fund_nav_tail(code, last_date, end_date)
+        if tail:
+            merged = _merge_nav_rows(rows, tail)
+            if len(merged) != len(rows) or merged[-1]["nav"] != rows[-1]["nav"]:
+                rows = merged
+                dirty = True
+
+    if dirty or not os.path.exists(path):
+        _write_fund_nav_full(code, rows, source or "snapshot")
+    return rows
+
+
+def fetch_from_eastmoney(opener, code, start_date, end_date):
+    """返回 [start_date, end_date] 区间内的累计净值序列。
+
+    ★ 数据来自 data/fund_nav 全历史快照 + 每日增量，不再是每次从头翻页；
+      start_date 只做区间裁剪（默认 2000-01-01，即成立以来的全部历史）。
+    """
+    rows = load_fund_nav_full(code, end_date)
+    if not rows:
+        return None
+    out = [r for r in rows if start_date <= r["date"] <= end_date]
+    return out or None
+
+# ==============================================================================
+# 基金年度收益抓取模块（合并自 get_lishi_shouyi.py）
+# 数据源：天天基金 pingzhongdata 接口的 Data_netWorthTrend 变量
+# ==============================================================================
+ANNUAL_RETURNS_CACHE_DIR = os.path.join(CACHE_DIR, "annual_returns")
+os.makedirs(ANNUAL_RETURNS_CACHE_DIR, exist_ok=True)
+
+
+def fetch_fund_annual_returns(fund_code: str) -> dict:
+    """从天天基金 pingzhongdata 接口获取基金累计净值，计算每个自然年的年度收益率。
+
+    ★ 口径说明（重要）：
+      使用 Data_ACWorthTrend（**累计净值**），而不是 Data_netWorthTrend（单位净值）。
+      单位净值在分红/拆分除权当天会跳水，直接用它算年度收益会把分红误算成亏损。
+      例如 160213（国泰纳斯达克100）2025 年分红 4 次：
+        单位净值口径 = -55.16%（错，把分红当亏损）
+        累计净值口径 = +9.77%（对）
+      详情页折线图取的是 lsjz 接口的 LJJZ（累计净值），两者必须同口径才能对得上。
+
+    返回值示例：{"2020": 45.67, "2021": -12.34, ...}
+    失败时返回空字典 {}。
+    """
+    cache_file = os.path.join(ANNUAL_RETURNS_CACHE_DIR, f"{fund_code}.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            if isinstance(cached, dict) and cached:
+                # 当年收益每天都在变：缓存含当年数据时只留 1 天，历史年份 30 天足够。
+                # 否则会出现「热力图还是半个月前的年内收益、折线图已是实时」的错位。
+                ttl = 86400 if str(now_beijing().year) in cached else 30 * 86400
+                if time.time() - os.path.getmtime(cache_file) < ttl:
+                    return cached
+        except Exception:
+            pass
+
+    url = f"http://fund.eastmoney.com/pingzhongdata/{fund_code}.js"
+    headers = {
+        **DEFAULT_HEADERS,
+        "Referer": "http://fund.eastmoney.com/",
+    }
+
+    # [(timestamp_ms, nav), ...]，优先累计净值，缺失时回退单位净值
+    trend = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                text = resp.read().decode("utf-8", errors="ignore")
+
+            # --- 1. 累计净值（首选）---
+            m = re.search(r"Data_ACWorthTrend\s*=\s*(\[.*?\]);", text, re.DOTALL)
+            if m:
+                try:
+                    ac = json.loads(m.group(1))
+                    trend = [
+                        (it[0], it[1])
+                        for it in ac
+                        if isinstance(it, (list, tuple)) and len(it) >= 2
+                        and it[0] is not None and it[1] is not None
+                    ]
+                except Exception:
+                    trend = None
+            # --- 2. 单位净值（兜底，老基金偶有累计净值为空）---
+            if not trend:
+                m = re.search(r"Data_netWorthTrend\s*=\s*(\[\{.+?\}\]);", text, re.DOTALL)
+                if m:
+                    net = json.loads(m.group(1))
+                    trend = [
+                        (it["x"], it["y"])
+                        for it in net
+                        if it.get("x") is not None and it.get("y") is not None
+                    ]
+            if trend:
+                break
+        except Exception:
+            time.sleep(2)
+            continue
+
+    if not trend:
+        return {}
+
+    # 按年份分组。时间戳按北京时间换算，避免机器时区非东八区时跨年错位。
+    _bj = timezone(timedelta(hours=8))
+    year_data: dict = {}
+    for ts, nav in trend:
+        try:
+            year = datetime.fromtimestamp(ts / 1000, tz=_bj).year
+            nav_f = float(nav)
+        except Exception:
+            continue
+        if nav_f > 0:
+            year_data.setdefault(year, []).append((ts, nav_f))
+
+    sorted_years = sorted(year_data.keys())
+    returns = {}
+    for i, year in enumerate(sorted_years):
+        records = sorted(year_data[year], key=lambda x: x[0])
+        end_nav = records[-1][1]
+        if i == 0:
+            start_nav = records[0][1]            # 首个年份：用该年第一个交易日
+        else:
+            prev_records = sorted(year_data[sorted_years[i - 1]], key=lambda x: x[0])
+            start_nav = prev_records[-1][1]      # 其余年份：用上一年最后一个交易日
+        if start_nav and start_nav != 0:
+            ret = (end_nav / start_nav - 1) * 100
+            returns[str(year)] = round(ret, 2)
+
+    try:
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(returns, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    return returns
+
+# ==============================================================================
+# 基金年化跟踪误差 & 同类平均抓取模块（合并自 tracking_error.py）
+# 数据源：天天基金 tsdata 页面 https://fundf10.eastmoney.com/tsdata_{code}.html
+# ==============================================================================
+TRACKING_ERROR_CACHE_DIR = os.path.join(CACHE_DIR, "tracking_error")
+os.makedirs(TRACKING_ERROR_CACHE_DIR, exist_ok=True)
+
+
+def _te_clean(s):
+    if s is None:
+        return ""
+    return re.sub(r"[\s\u3000]+", "", s)
+
+
+def _te_parse_page(html_text):
+    result = {
+        "tracking_index": "", "tracking_error": "", "peer_avg": "",
+        "deadline": "", "sharp_1y": "", "sharp_2y": "", "sharp_3y": "",
+        "std_1y": "", "std_2y": "", "std_3y": "",
+    }
+    if not html_text:
+        return result
+
+    # ===== 1. 反转义 =====
+    text = html_text
+    if '\\u003c' in text or '\\u003e' in text or '\\u0026' in text:
+        text = (text.replace('\\u003c', '<').replace('\\u003e', '>')
+                    .replace('\\u0026', '&').replace('\\u0022', '"'))
+    if ('&lt;td' in text) or ('&lt;tr' in text) or ('&lt;table' in text):
+        try:
+            text = html.unescape(text)
+        except Exception:
+            pass
+
+    def _clean_cell(s):
+        s = re.sub(r'<[^>]+>', '', s)
+        s = s.replace('&nbsp;', ' ').replace('&amp;', '&')
+        return re.sub(r'[\s\u3000]+', '', s)
+
+    def _row_cells(tr_inner):
+        tds = re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr_inner, re.S)
+        return [_clean_cell(td) for td in tds]
+
+    def _is_num(v):
+        return bool(re.match(r'^-?\d+(?:\.\d+)?$', v or ''))
+
+    def _is_pct(v):
+        return bool(re.match(r'^-?\d+(?:\.\d+)?%$', v or ''))
+
+    # ===== 2. 夏普比率 / 标准差（全局首列精确匹配） =====
+    for tr_inner in re.findall(r'<tr[^>]*>(.*?)</tr>', text, re.S):
+        cells = _row_cells(tr_inner)
+        if len(cells) < 2:
+            continue
+        first = cells[0]
+        if ('夏普比率' in first) and not result["sharp_1y"]:
+            vals = cells[1:4]
+            if len(vals) >= 1 and _is_num(vals[0]): result["sharp_1y"] = vals[0]
+            if len(vals) >= 2 and _is_num(vals[1]): result["sharp_2y"] = vals[1]
+            if len(vals) >= 3 and _is_num(vals[2]): result["sharp_3y"] = vals[2]
+        elif ('标准差' in first) and not result["std_1y"]:
+            vals = cells[1:4]
+            if len(vals) >= 1 and _is_num(vals[0]): result["std_1y"] = vals[0]
+            if len(vals) >= 2 and _is_num(vals[1]): result["std_2y"] = vals[1]
+            if len(vals) >= 3 and _is_num(vals[2]): result["std_3y"] = vals[2]
+
+    # ===== 3. 跟踪误差：只在包含"跟踪指数"的同一张 <table> 内解析 =====
+    for tbl_match in re.finditer(r'<table[^>]*>(.*?)</table>', text, re.S):
+        tbl_content = tbl_match.group(1)
+        # 该表必须同时出现"跟踪指数"和"年化跟踪误差"关键词
+        if ('跟踪指数' not in tbl_content) or ('年化跟踪误差' not in tbl_content):
+            continue
+
+        for tr_inner in re.findall(r'<tr[^>]*>(.*?)</tr>', tbl_content, re.S):
+            cells = _row_cells(tr_inner)
+            if len(cells) < 3:
+                continue
+            first = cells[0]
+            # 跳过所有表头 / 标签行
+            if any(k in first for k in ('跟踪指数', '年化跟踪误差', '标准差', '夏普比率', '年化波动率')):
+                continue
+            # 数据行：后两列均为严格百分比
+            if _is_pct(cells[1]) and _is_pct(cells[2]):
+                result["tracking_index"] = first
+                result["tracking_error"] = cells[1]
+                result["peer_avg"] = cells[2]
+                break
+        if result["tracking_error"]:
+            break
+
+    # ===== 4. 截止日期 =====
+    dm = re.search(r'截止至[：:]\s*(\d{4}-\d{2}-\d{2})', text)
+    if dm:
+        result["deadline"] = dm.group(1)
+
+    return result
+
+
+def fetch_fund_tracking_error(fund_code, max_retries=3):
+    """抓取天天基金 tsdata 页面的「年化跟踪误差」「同类平均」「夏普比率」。
+
+    返回值示例：{"tracking_index": "纳斯达克100指数", "tracking_error": "1.43%",
+                "peer_avg": "0.85%", "deadline": "2025-09-30",
+                "sharp_1y": "3.05", "sharp_2y": "2.10", "sharp_3y": "1.85"}
+    失败时返回空字典 {}。
+    """
+    cache_file = os.path.join(TRACKING_ERROR_CACHE_DIR, f"{fund_code}.json")
+    if os.path.exists(cache_file):
+        try:
+            if time.time() - os.path.getmtime(cache_file) < 7 * 86400:   # 7 天有效
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+
+    url = f"https://fundf10.eastmoney.com/tsdata_{fund_code}.html"
+    headers = {
+        "User-Agent": DEFAULT_HEADERS["User-Agent"],
+        "Referer": "https://fundf10.eastmoney.com/",
+    }
+
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                html_text = resp.read().decode("utf-8", errors="ignore")
+            parsed = _te_parse_page(html_text)
+
+            # ★ 只要抓到任意一类有效数据就缓存返回（原逻辑要求必须抓跟踪误差，会丢弃夏普比率）
+            if parsed and (
+                parsed.get("tracking_error")
+                or parsed.get("sharp_1y")
+                or parsed.get("std_1y")
+            ):
+                try:
+                    with open(cache_file, "w", encoding="utf-8") as f:
+                        json.dump(parsed, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+                return parsed
+        except Exception:
+            time.sleep(2)
+
+    return {}
+
+def _cme_html_tables(raw_html: str):
+    """使用标准库提取 CME/QuikStrike 页面中的 HTML 表格。"""
+    from html.parser import HTMLParser
+
+    class TableParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.tables = []
+            self._table = None
+            self._row = None
+            self._cell = None
+            self._buf = []
+
+        def handle_starttag(self, tag, attrs):
+            tag = tag.lower()
+            if tag == 'table':
+                self._table = []
+            elif self._table is not None and tag == 'tr':
+                self._row = []
+            elif self._row is not None and tag in ('th', 'td'):
+                self._cell = []
+            elif self._cell is not None and tag == 'br':
+                self._buf.append(' ')
+
+        def handle_data(self, data):
+            if self._cell is not None:
+                self._buf.append(data)
+
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+            if tag in ('th', 'td') and self._cell is not None:
+                value = re.sub(r'\s+', ' ', ''.join(self._buf)).strip()
+                self._row.append(value)
+                self._cell = None
+                self._buf = []
+            elif tag == 'tr' and self._row is not None and self._table is not None:
+                if any(x.strip() for x in self._row):
+                    self._table.append(self._row)
+                self._row = None
+            elif tag == 'table' and self._table is not None:
+                if self._table:
+                    self.tables.append(self._table)
+                self._table = None
+
+    parser = TableParser()
+    try:
+        parser.feed(raw_html)
+    except Exception:
+        pass
+    return parser.tables
+
+
+def _cme_rate_label(rate_text: str) -> str:
+    """把 CME 的 bps 区间转换成页面现有的百分比区间显示。"""
+    s = re.sub(r'\s+', '', str(rate_text or ''))
+    s = re.sub(r'\(Current\)', '', s, flags=re.I)
+    m = re.match(r'^(\d+(?:\.\d+)?)[-–—](\d+(?:\.\d+)?)$', s)
+    if not m:
+        return re.sub(r'\s+', ' ', str(rate_text or '')).strip()
+    a = float(m.group(1)) / 100.0
+    b = float(m.group(2)) / 100.0
+    return f"{a:.2f} - {b:.2f}"
+
+
+def _cme_parse_date(text: str):
+    """解析 QuikStrike 日期：支持英文(28 Oct 2026)、中文(28 10月 2026 / 2026年10月28日)、ISO 三种。"""
+    months = {
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
+        'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    }
+    s = str(text or '')
+    # ISO / 斜杠：2026-10-28、2026/10/28
+    m = re.search(r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b', s)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except Exception:
+            return None
+    # 中文：2026年10月28日
+    m = re.search(r'(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?', s)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except Exception:
+            return None
+    # 中文倒序（QuikStrike 实际返回）：28 10月 2026
+    m = re.search(r'\b(\d{1,2})\s+(\d{1,2})\s*月\s*(\d{4})\b', s)
+    if m:
+        try:
+            return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except Exception:
+            return None
+    # 英文：28 Oct 2026
+    m = re.search(r'\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})\b', s)
+    if not m:
+        return None
+    mo = months.get(m.group(2).lower()[:3])
+    if not mo:
+        return None
+    try:
+        return datetime(int(m.group(3)), mo, int(m.group(1)))
+    except Exception:
+        return None
+
+
+def _cme_num(text: str):
+    m = re.search(r'[-+]?\d+(?:\.\d+)?', str(text or '').replace(',', ''))
+    return float(m.group(0)) if m else None
+
+
+def fetch_cme_fedwatch(opener) -> dict:
+    """从 CME FedWatch 的官方 QuikStrike 页面读取下一次 FOMC 市场隐含概率"""
+    source_url = "https://www.cmegroup.com/cn-s/markets/interest-rates/cme-fedwatch-tool.html"
+    iframe_urls = [
+        "https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx?viewitemid=IntegratedFedWatchTool",
+        "https://cmegroup-tools.quikstrike.net/User/QuikStrikeView.aspx?viewitemid=IntegratedFedWatchTool&userId=lwolf&jobRole=&company=&companyType=",
+    ]
+    result = {
+        "source_url": source_url,
+        "meeting_text": "--",
+        "meeting_iso": "",
+        "countdown_minutes": None,
+        "countdown_text": "暂无倒计时",
+        "futures_price": "--",
+        "probabilities": [],
+        "table_rows": [],
+        "update_text": "--",
+        "source_name": "CME FedWatch",
+    }
+
+    headers = {
+        **DEFAULT_HEADERS,
+        "Referer": source_url,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+
+    # ============ 并行竞速 2 个 QuikStrike iframe URL ============
+    def _try_iframe(url):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with get_thread_opener().open(req, timeout=4) as resp:   # 5→4
+                return resp.read().decode('utf-8', errors='ignore')
+        except Exception:
+            return ""
+
+    raw_html = ""
+    best_len = 0
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        futures = [ex.submit(_try_iframe, url) for url in iframe_urls]
+        for fut in as_completed(futures, timeout=6):
+            try:
+                candidate = fut.result()
+            except Exception:
+                continue
+            if not candidate:
+                continue
+            # 优先命中"好"页面
+            if len(candidate) > 5000 and (
+                'MEETING INFORMATION' in candidate.upper()
+                or 'TARGET RATE' in candidate.upper()
+                or 'FedWatch' in candidate
+            ):
+                raw_html = candidate
+                # 取消另一个还没回来的请求
+                for f in futures:
+                    f.cancel()
+                break
+            # 否则保留最长的备选
+            if len(candidate) > best_len:
+                best_len = len(candidate)
+                raw_html = candidate
+
+    if not raw_html:
+        return result
+    # ============================================================
+
+    try:
+        tables = _cme_html_tables(raw_html)
+        meeting_dt = None
+        target_table = None
+        meeting_table = None
+
+        for table in tables:
+            joined = ' '.join(' '.join(row) for row in table).upper()
+            if 'MEETING DATE' in joined and 'MID PRICE' in joined:
+                meeting_table = table
+            if 'TARGET RATE' in joined and 'NOW' in joined:
+                target_table = table
+
+        if meeting_table:
+            for row in meeting_table:
+                row_text = ' | '.join(row)
+                if any(k in row_text.upper() for k in ('MEETING DATE', 'MEETING INFORMATION')):
+                    continue
+                if len(row) >= 1:
+                    dt = _cme_parse_date(row[0])
+                    if dt:
+                        meeting_dt = dt
+                        result['meeting_text'] = f"{dt.year}年{dt.month}月{dt.day}日 02:00"
+                        break
+            for row in meeting_table:
+                if not row or not _cme_parse_date(row[0]):
+                    continue
+                if len(row) >= 4:
+                    result['futures_price'] = row[3].replace(',', '').strip() or '--'
+                break
+
+        if target_table:
+            # QuikStrike 数据行为 [利率区间, Now, 1 Day, 1 Week, 1 Month]，
+            # 表头行 "Now/1 Day/..." 相比数据行少一列（缺利率列），
+            # 因此不能再按表头下标偏移，直接取利率列之后的 4 个单元格。
+            for row in target_table:
+                if not row or not re.search(r'\d+\s*[-–—]\s*\d+', row[0] if row else ''):
+                    continue
+                rate_raw = re.sub(r'\s*\(Current\)', '', row[0], flags=re.I).strip()
+                values = row[1:]
+                current = _cme_num(values[0]) if values else None
+                if current is None:
+                    continue
+                rate_label = _cme_rate_label(rate_raw)
+                prev_day = values[1] if len(values) > 1 else '--'
+                prev_week = values[2] if len(values) > 2 else '--'
+                prev_day_num = _cme_num(prev_day)
+                prev_week_num = _cme_num(prev_week)
+                if current <= 0 and (not prev_day_num) and (not prev_week_num):
+                    continue  # 跳过长期为 0 的档位，避免表格被 20 多行空数据撑满
+                result['table_rows'].append({
+                    'rate': rate_label,
+                    'current': f"{current:.1f}",
+                    'prev_day': f"{prev_day_num:.1f}" if prev_day_num is not None else '—',
+                    'prev_week': f"{prev_week_num:.1f}" if prev_week_num is not None else '—',
+                })
+                if current > 0:
+                    result['probabilities'].append({'rate': rate_label, 'pct': current})
+
+            m = re.search(r'Data as of\s+([^*]+?)\s+CT', raw_html, re.I)
+            if m:
+                result['update_text'] = m.group(1).strip() + ' CT'
+            else:
+                m = re.search(r'Data as of\s+([^<\n]+)', raw_html, re.I)
+                if m:
+                    result['update_text'] = re.sub(r'\s+', ' ', m.group(1)).strip()
+
+        if meeting_dt:
+            try:
+                from zoneinfo import ZoneInfo
+                meeting_et = datetime(meeting_dt.year, meeting_dt.month, meeting_dt.day, 14, 0,
+                                      tzinfo=ZoneInfo("America/New_York"))
+                meeting_dt_tz = meeting_et.astimezone(ZoneInfo("Asia/Shanghai"))
+                now_dt = datetime.now(ZoneInfo("Asia/Shanghai"))
+            except Exception:
+                from datetime import timezone
+                meeting_dt_tz = datetime(meeting_dt.year, meeting_dt.month, meeting_dt.day, 2, 0,
+                                         tzinfo=timezone(timedelta(hours=8)))
+                now_dt = datetime.now(timezone(timedelta(hours=8)))
+            result['meeting_text'] = meeting_dt_tz.strftime("%Y年%m月%d日 %H:%M")
+            result['meeting_iso'] = meeting_dt_tz.isoformat()
+            remaining_seconds = max(0, int((meeting_dt_tz - now_dt).total_seconds()))
+            result['countdown_minutes'] = (remaining_seconds + 59) // 60
+            days, rem = divmod(remaining_seconds, 86400)
+            hours, rem = divmod(rem, 3600)
+            minutes = rem // 60
+            result['countdown_text'] = f"{days}天 {hours:02d}小时 {minutes:02d}分钟"
+    except Exception:
+        return result
+
+    return result
+
+
+def fetch_fed_rate_monitor(opener) -> dict:
+    """美联储利率观测器：CME FedWatch(QuikStrike) 为主源，Investing.com 为备用源。
+
+    两个源都取不到时不再回填写死的历史概率，而是返回明确的失败状态，
+    避免页面上出现“时间戳是今天、数据却是几个月前”的假数据。
+    """
+    cme_result = fetch_cme_fedwatch(opener)
+    if cme_result.get('probabilities'):
+        return cme_result
+
+    source_url = "https://cn.investing.com/central-banks/fed-rate-monitor"
+    result = {
+        "source_url": source_url,
+        "meeting_text": "--",
+        "meeting_iso": "",
+        "countdown_minutes": None,
+        "countdown_text": "暂无倒计时",
+        "futures_price": "--",
+        "probabilities": [],
+        "table_rows": [],
+        "update_text": "--",
+        "source_name": "Investing.com",
+    }
+
+    try:
+        req = urllib.request.Request(source_url, headers={
+            **DEFAULT_HEADERS,
+            "Referer": "https://cn.investing.com/"
+        })
+        with opener.open(req, timeout=6) as resp:
+            html_content = resp.read().decode('utf-8', errors='ignore')
+
+        m = re.search(r'(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日\s*(\d{1,2}:\d{2})', html_content)
+        if m:
+            y, mo, d = map(int, m.group(1, 2, 3))
+            hh, mm = map(int, m.group(4).split(':'))
+            result['meeting_text'] = f'{y}年{mo:02d}月{d:02d}日 {hh:02d}:{mm:02d}'
+            result['meeting_iso'] = f"{y:04d}-{mo:02d}-{d:02d}T{hh:02d}:{mm:02d}:00+08:00"
+
+        fm = re.search(r'期货价格\s*[:：]?\s*([0-9]+(?:\.\d+)?)', html_content)
+        if fm:
+            result['futures_price'] = fm.group(1)
+
+        up_m = re.search(r'更新[:：]\s*([^\r\n<]+)', html_content)
+        if up_m:
+            result['update_text'] = f"更新: {up_m.group(1).strip()}"
+
+        tables = _cme_html_tables(html_content)
+        for tbl in tables:
+            rows = []
+            for r in tbl:
+                if len(r) >= 4 and re.search(r'\d+\.\d+\s*-\s*\d+\.\d+', r[0]):
+                    curr_val = r[1].replace('%', '').strip()
+                    prev_d = r[2].replace('%', '').strip()
+                    prev_w = r[3].replace('%', '').strip()
+                    rows.append({
+                        'rate': r[0].strip(),
+                        'current': curr_val if curr_val not in ['', '-'] else '—',
+                        'prev_day': prev_d if prev_d not in ['', '-'] else '—',
+                        'prev_week': prev_w if prev_w not in ['', '-'] else '—',
+                    })
+            if rows:
+                result['table_rows'] = rows
+                for item in rows:
+                    if item['current'] not in ['—', '-', '']:
+                        try:
+                            result['probabilities'].append({
+                                'rate': item['rate'],
+                                'pct': float(item['current'])
+                            })
+                        except Exception:
+                            pass
+                break
+    except Exception:
+        pass
+
+    if not result['table_rows']:
+        # 主源(CME)失败、备用源(Investing.com)也失败：如 CMEFedWatch 至少拿到了会议信息
+        # 就沿用它的会议时间/期货价格，其余如实标记为获取失败。
+        if cme_result.get('meeting_iso'):
+            for key in ('meeting_text', 'meeting_iso', 'futures_price', 'source_url', 'source_name'):
+                if cme_result.get(key):
+                    result[key] = cme_result[key]
+        result['update_text'] = "数据获取失败：无法访问 CME FedWatch / Investing.com"
+
+    try:
+        from datetime import timezone
+        dt_target = datetime.fromisoformat(result['meeting_iso'])
+        now_dt = datetime.now(timezone(timedelta(hours=8)))
+        sec = max(0, int((dt_target - now_dt).total_seconds()))
+        result['countdown_minutes'] = (sec + 59) // 60
+        days, rem = divmod(sec, 86400)
+        hours, rem = divmod(rem, 3600)
+        mins = rem // 60
+        result['countdown_text'] = f"{days}天 {hours:02d}小时 {mins:02d}分钟"
+    except Exception:
+        pass
+
+    return result
+
+def analyze_fund_metrics(valid_data, end_date, cutoff_date, is_qdii=False):
+    data_all = sorted(valid_data, key=lambda x: x["date"])
+    if not data_all: return None
+    data_cutoff = [item for item in data_all if item["date"] >= cutoff_date]
+    if not data_cutoff: data_cutoff = data_all
+
+    latest_nav = data_all[-1]["nav"]
+    latest_date = data_all[-1]["date"]
+
+    now = datetime.now()
+    today_str = now.strftime("%Y-%m-%d")
+    weekday = now.weekday()
+
+    if weekday == 5: target_friday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    elif weekday == 6: target_friday = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+    else: target_friday = today_str
+
+    is_weekend = (weekday >= 5)
+    today_gain = None
+
+    if is_qdii:
+        if len(data_all) >= 2 and data_all[-2]["nav"] > 0:
+            today_gain = ((latest_nav / data_all[-2]["nav"]) - 1) * 100.0
+    else:
+        if is_weekend:
+            if len(data_all) >= 2 and latest_date <= target_friday and data_all[-2]["nav"] > 0:
+                today_gain = ((latest_nav / data_all[-2]["nav"]) - 1) * 100.0
+        else:
+            if len(data_all) >= 2 and data_all[-2]["nav"] > 0:
+                today_gain = ((latest_nav / data_all[-2]["nav"]) - 1) * 100.0
+
+    max_drawdown = 0.0
+    peak_nav = data_cutoff[0]["nav"]
+    trough_nav = data_cutoff[0]["nav"]
+    peak_date = data_cutoff[0]["date"]
+    trough_date = data_cutoff[0]["date"]
+    temp_peak = data_cutoff[0]["nav"]
+    temp_peak_date = data_cutoff[0]["date"]
+
+    for item in data_cutoff:
+        nav = item["nav"]
+        date = item["date"]
+        if nav > temp_peak:
+            temp_peak = nav
+            temp_peak_date = date
+        drawdown = (temp_peak - nav) / temp_peak if temp_peak > 0 else 0
+        if drawdown > max_drawdown:
+            max_drawdown = drawdown
+            peak_nav = temp_peak
+            peak_date = temp_peak_date
+            trough_nav = nav
+            trough_date = date
+
+    if max_drawdown == 0: recovery_rate = 100.0
+    elif peak_nav == trough_nav: recovery_rate = 0.0
+    else: recovery_rate = ((latest_nav - trough_nav) / (peak_nav - trough_nav)) * 100.0
+
+    min_dt = datetime.strptime(trough_date, '%Y-%m-%d')
+    latest_dt = datetime.strptime(latest_date, '%Y-%m-%d')
+    recovery_days = (latest_dt - min_dt).days
+    rebound_gain = ((latest_nav - trough_nav) / trough_nav) * 100.0 if trough_nav > 0 else 0.0
+
+    def add_months(d, months):
+        month = d.month - 1 + months
+        year = d.year + month // 12
+        month = month % 12 + 1
+        day = min(d.day, monthrange(year, month)[1])
+        return d.replace(year=year, month=month, day=day)
+
+    def calc_gain(days=None, months=None, ytd=False, strict=False):
+        latest_dt = datetime.strptime(latest_date, '%Y-%m-%d')
+        if ytd: target_dt = latest_dt.replace(month=1, day=1)
+        elif days: target_dt = latest_dt - timedelta(days=days)
+        elif months: target_dt = add_months(latest_dt, -months)
+        else: return None
+
+        target_date_str = target_dt.strftime('%Y-%m-%d')
+        # strict：要求净值序列真正覆盖到目标日之前。近三年/近五年这种长区间必须严格，
+        # 否则「成立才两年」的基金会被拿成立首日当基准，把「成立以来」当成三年收益。
+        if strict and data_all[0]['date'] > target_date_str:
+            return None
+        base_nav = None
+        for item in data_all:
+            if item['date'] >= target_date_str:
+                base_nav = item['nav']
+                break
+        if base_nav is not None and base_nav > 0:
+            return ((latest_nav / base_nav) - 1) * 100.0
+        return None
+
+    return {
+        "max_nav": peak_nav, "max_nav_date": peak_date, "min_nav": trough_nav, "min_nav_date": trough_date,
+        "latest_nav": latest_nav, "latest_date": latest_date, "max_drawdown": max_drawdown * 100.0,
+        "recovery_rate": recovery_rate, "recovery_days": recovery_days, "rebound_gain": rebound_gain,
+        "today_gain": today_gain, "week_gain": calc_gain(days=7), "month_gain": calc_gain(months=1),
+        "quarter_gain": calc_gain(months=3), "half_year_gain": calc_gain(months=6), "year_gain": calc_gain(months=12),
+        "three_year_gain": calc_gain(months=36, strict=True), "five_year_gain": calc_gain(months=60, strict=True),
+        "ten_year_gain": calc_gain(months=120, strict=True),
+        "ytd_gain": calc_gain(ytd=True)
+    }
+
+# 对比弹窗「深度资料」区的渲染代码。
+# 单独放在普通 Python 字符串里再以 {CMP_META_JS} 注入，是因为它位于一个巨型
+# f-string 内部，直接写进去每个花括号都得写成双花括号，维护成本太高。
+CMP_META_JS = r'''
+            // ---------- 深度资料：资产配置 / 集中度 / 十大重仓 / 持有人 / 申购 ----------
+            const ALLOC_PARTS = [
+                { key: 'stock', name: '股票', color: '#1a73e8' },
+                { key: 'bond',  name: '债券', color: '#188038' },
+                { key: 'cash',  name: '现金', color: '#e8a33d' },
+                { key: 'other', name: '其他', color: '#9334e6' }
+            ];
+            function metaOf(code) {
+                if (typeof cmpMetaData === 'undefined' || !cmpMetaData) return null;
+                return cmpMetaData[code] || null;
+            }
+            function allocWidth(v, total) {
+                return (total > 0 ? (v / total * 100) : 0).toFixed(2) + '%';
+            }
+            function allocBar(items) {
+                let bar = '<div class="fcmp-alloc-bar">';
+                items.forEach(function (it) {
+                    bar += '<span style="width:' + it.w + ';background:' + it.color + ';" title="'
+                        + esc(it.name + ' ' + it.v.toFixed(2) + '%') + '"></span>';
+                });
+                return bar + '</div>';
+            }
+            function allocKeys(items) {
+                return items.map(function (it) {
+                    return '<span class="fcmp-alloc-key"><i style="background:' + it.color + ';"></i>'
+                        + esc(it.name) + ' ' + it.v.toFixed(2) + '%</span>';
+                }).join('');
+            }
+            // 资产配置：堆叠条 + 四项占比文字（占比按合计归一，杠杆/衍生品超 100% 时不溢出）
+            function allocCell(code) {
+                const m = metaOf(code);
+                const a = m && m.alloc;
+                if (!a) return '<td class="fcmp-val fcmp-sub">--</td>';
+                const items = [];
+                ALLOC_PARTS.forEach(function (p) {
+                    const raw = a[p.key];
+                    const v = (raw == null || !isFinite(raw)) ? null : Number(raw);
+                    if (v != null && v > 0) items.push({ name: p.name, color: p.color, v: v });
+                });
+                const total = items.reduce(function (s, it) { return s + it.v; }, 0);
+                if (!total) return '<td class="fcmp-val fcmp-sub">--</td>';
+                items.forEach(function (it) { it.w = allocWidth(it.v, total); });
+                return '<td class="fcmp-val fcmp-alloc-cell">' + allocBar(items)
+                    + '<div class="fcmp-alloc-legend">' + allocKeys(items) + '</div>'
+                    + '<div class="fcmp-sub">' + esc(a.date || '') + ' 报告期</div></td>';
+            }
+            function holderCell(code) {
+                const m = metaOf(code);
+                const h = m && m.holder;
+                if (!h) return '<td class="fcmp-val fcmp-sub">--</td>';
+                const inst = (h.inst == null || !isFinite(h.inst)) ? null : Number(h.inst);
+                const indiv = (h.indiv == null || !isFinite(h.indiv)) ? null : Number(h.indiv);
+                const total = (inst || 0) + (indiv || 0);
+                const items = [];
+                if (inst != null && inst > 0) items.push({ name: '机构', color: '#1a73e8', v: inst, w: allocWidth(inst, total) });
+                if (indiv != null && indiv > 0) items.push({ name: '个人', color: '#9aa0a6', v: indiv, w: allocWidth(indiv, total) });
+                const bar = items.length ? allocBar(items) : '';
+                return '<td class="fcmp-val fcmp-alloc-cell">' + bar
+                    + '<div class="fcmp-alloc-legend">' + allocKeys(items) + '</div>'
+                    + '<div class="fcmp-sub">' + esc(h.date || '') + '</div></td>';
+            }
+            // 十大重仓：● 标记多只基金共同持有的个股
+            function topCell(code, nameCount) {
+                const m = metaOf(code);
+                const list = (m && m.top) || [];
+                if (!list.length) return '<td class="fcmp-val fcmp-sub">--</td>';
+                let rows = '';
+                list.forEach(function (item, i) {
+                    const name = String(item[0] || '');
+                    const ratio = Number(item[2]);
+                    const shared = (nameCount && nameCount[name]) || 0;
+                    const dot = shared > 1
+                        ? '<span class="fcmp-shared" title="' + shared + ' 只基金共同重仓">●</span>'
+                        : '<span class="fcmp-shared fcmp-shared-off">·</span>';
+                    const tip = name + (item[1] ? ' ' + item[1] : '') + ' · ' + (isFinite(ratio) ? ratio.toFixed(2) : '--') + '%';
+                    rows += '<div class="fcmp-top-item">' + dot
+                        + '<span class="fcmp-top-rank">' + (i + 1) + '</span>'
+                        + '<span class="fcmp-top-name" title="' + esc(tip) + '">' + esc(name) + '</span>'
+                        + '<span class="fcmp-top-ratio">' + (isFinite(ratio) ? ratio.toFixed(2) : '--') + '%</span></div>';
+                });
+                return '<td class="fcmp-val fcmp-top-cell">' + rows
+                    + '<div class="fcmp-sub">' + esc(m.top_date || '') + ' · 该期共 ' + (m.top_count || list.length) + ' 只</div></td>';
+            }
+            function buyCell(code) {
+                const m = metaOf(code);
+                if (!m) return '<td class="fcmp-val fcmp-sub">--</td>';
+                const st = String(m.buy_status || '--');
+                const lim = String(m.buy_limit || '');
+                // 非场外基金（加密 / 商品 / 指数点）没有申购状态，不能写成「开放申购」
+                if (!st || st === '--') return '<td class="fcmp-val fcmp-sub">--</td>';
+                const paused = st.indexOf('暂停') >= 0 || st.indexOf('封闭') >= 0;
+                const limited = !paused && lim && lim !== '--' && lim !== '无限额';
+                let cls = 'fcmp-buy-open', tag = '开放申购';
+                if (paused) { cls = 'fcmp-buy-paused'; tag = '暂停申购'; }
+                else if (limited) { cls = 'fcmp-buy-limited'; tag = '限大额'; }
+                const sub = paused ? '当前不可买入'
+                    : (limited ? '单日可买 ' + esc(lim) : '不限额度');
+                const extra = (st && st !== '--' && st !== tag && st !== '开放申购' && st !== '限大额申购')
+                    ? '<div class="fcmp-sub">' + esc(st) + '</div>' : '';
+                return '<td class="fcmp-val fcmp-buy-cell"><span class="fcmp-buy ' + cls + '">' + tag + '</span>'
+                    + '<div class="fcmp-sub">' + sub + '</div>' + extra + '</td>';
+            }
+
+            function renderCmpMetaSections(cols, rowOf, colspan) {
+                // 统计各股在被选基金里出现的次数，用于标记「共同重仓」
+                const nameCount = {};
+                cols.forEach(function (c) {
+                    const m = metaOf(c.series.code);
+                    ((m && m.top) || []).forEach(function (item) {
+                        const n = String(item[0] || '');
+                        if (!n) return;
+                        nameCount[n] = (nameCount[n] || 0) + 1;
+                    });
+                });
+                let html = '';
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🧺 资产配置'
+                    + '<span class="fcmp-group-hint">股票 / 债券 / 现金 / 其他，占基金净值比</span></td></tr>';
+                html += rowOf('资产配置', function (c) { return allocCell(c.series.code); });
+
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🎯 持股集中度'
+                    + '<span class="fcmp-group-hint">前十大合计越高越集中</span></td></tr>';
+                html += rowOf('前十大占净值', function (c) {
+                    const m = metaOf(c.series.code);
+                    if (!m || m.top_sum == null) return '<td class="fcmp-val fcmp-sub">--</td>';
+                    let sub = '';
+                    if (m.prev_sum != null) {
+                        const d = m.top_sum - m.prev_sum;
+                        sub = '<div class="fcmp-sub">上季 ' + m.prev_sum.toFixed(2) + '% · '
+                            + (d > 0 ? '+' : '') + d.toFixed(2) + 'pp</div>';
+                    }
+                    return '<td class="fcmp-val">' + m.top_sum.toFixed(2) + '%' + sub + '</td>';
+                });
+                html += rowOf('前三占净值', function (c) {
+                    const m = metaOf(c.series.code);
+                    if (!m || m.top3_sum == null) return '<td class="fcmp-val fcmp-sub">--</td>';
+                    return '<td class="fcmp-val">' + m.top3_sum.toFixed(2) + '%</td>';
+                });
+                html += rowOf('披露持仓数', function (c) {
+                    const m = metaOf(c.series.code);
+                    if (!m || !m.top_count) return '<td class="fcmp-val fcmp-sub">--</td>';
+                    return '<td class="fcmp-val">' + m.top_count + ' 只</td>';
+                });
+
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🏆 十大重仓股'
+                    + '<span class="fcmp-group-hint">● = 多只基金共同持有</span></td></tr>';
+                html += rowOf('重仓明细', function (c) { return topCell(c.series.code, nameCount); });
+
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">👥 持有人结构</td></tr>';
+                html += rowOf('机构 / 个人', function (c) { return holderCell(c.series.code); });
+
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🛒 申购状态'
+                    + '<span class="fcmp-group-hint">限购基金同时标注单日可买额度</span></td></tr>';
+                html += rowOf('申购 / 限额', function (c) { return buyCell(c.series.code); });
+                return html;
+            }
+
+            // 每行「更优」标注：方向固定写在这里，避免在每处 cell 渲染里重复判断
+            const BEST_DIR = {
+                '区间收益': 'max',
+                '区间最大回撤': 'min',
+                '区间年化波动': 'min',
+                '近一周': 'max', '近一月': 'max', '近三月': 'max',
+                '近半年': 'max', '近一年': 'max', '近三年': 'max', '近五年': 'max',
+                '今年内': 'max', '今日涨跌': 'max',
+                '最大回撤（当前窗口）': 'min',
+                '自低点反弹': 'max', '修复程度': 'max',
+                // 「修复时间」不标注：没修复的基金后端会给 0 天，直接取最小会误判成最快
+                '最新规模': 'max', '运作费（管+托+销）': 'min', '申购费率': 'min',
+                '夏普（近1年）': 'max', '夏普（近3年）': 'max', '年化跟踪误差': 'min'
+            };
+            // 只认「纯数值」单元格：带日期、区间标签或文字的列一律跳过，避免误标
+            function parseCellNum(td) {
+                // 去掉可能已加上的「优」角标，保证重复调用时仍然解析得出数值
+                const t = (td.textContent || '').replace(/\s+/g, '').replace(/^优/, '');
+                if (!t || t === '--') return null;
+                const m = t.match(/^([+\-]?)(\d[\d,]*(?:\.\d+)?)(%|亿|天)?$/);
+                if (!m) return null;
+                const v = parseFloat(m[2].replace(/,/g, ''));
+                if (!isFinite(v)) return null;
+                return m[1] === '-' ? -v : v;
+            }
+            function markBest(wrap) {
+                wrap.querySelectorAll('tbody tr').forEach(function (tr) {
+                    const labelTd = tr.querySelector('td.fcmp-label');
+                    if (!labelTd) return;
+                    const dir = BEST_DIR[(labelTd.textContent || '').trim()];
+                    if (!dir) return;
+                    const cells = Array.prototype.slice.call(tr.querySelectorAll('td.fcmp-val'));
+                    const vals = cells.map(parseCellNum);
+                    const valid = vals.filter(function (v) { return v != null; });
+                    if (valid.length < 2) return;
+                    const best = dir === 'max' ? Math.max.apply(null, valid) : Math.min.apply(null, valid);
+                    let allSame = true;
+                    valid.forEach(function (v) { if (Math.abs(v - best) > 1e-9) allSame = false; });
+                    if (allSame) return;
+                    vals.forEach(function (v, i) {
+                        if (v == null || Math.abs(v - best) > 1e-9) return;
+                        cells[i].classList.add('fcmp-best');
+                        cells[i].setAttribute('title', '本行更优');
+                        // 除了琥珀底色，再补一个「优」角标 —— 底色在深色主题/低亮度屏幕上不够醒目
+                        if (!cells[i].querySelector('.fcmp-best-tag')) {
+                            const tag = document.createElement('i');
+                            tag.className = 'fcmp-best-tag';
+                            tag.textContent = '优';
+                            cells[i].insertBefore(tag, cells[i].firstChild);
+                        }
+                    });
+                });
+            }
+'''
+
+# 年内最大收盘价回撤图：负值柱 + 分档配色 + 平均线，样式对齐「纳指100 每年腰斩时刻」那张图
+ANNUAL_DD_JS = r'''
+        function initAnnualDDChart(idxName) {
+            var canvas = document.getElementById('annual-dd-chart-' + idxName);
+            if (!canvas || typeof Chart === 'undefined') return;
+            if (canvas._chartInstance) {
+                try { canvas._chartInstance.destroy(); } catch (e) {}
+                canvas._chartInstance = null;
+            }
+            var rows = [];
+            try { rows = JSON.parse(canvas.getAttribute('data-dd')) || []; } catch (e) { return; }
+            if (!rows.length) return;
+
+            var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            var textColor = isDark ? '#b9c0c8' : '#5f6368';
+            var labels = rows.map(function (r) { return r.partial ? String(r.year) + '*' : String(r.year); });
+            var values = rows.map(function (r) { return r.mdd == null ? 0 : r.mdd; });
+
+            // 分档配色：≥20% 深红（腰斩级）、10~20% 浅红、不足 10% 绿
+            var fills = values.map(function (v) {
+                if (v <= -20) return isDark ? 'rgba(198, 40, 40, 0.92)' : 'rgba(183, 28, 28, 0.90)';
+                if (v <= -10) return isDark ? 'rgba(239, 154, 154, 0.85)' : 'rgba(230, 124, 115, 0.90)';
+                return 'rgba(76, 175, 80, 0.80)';
+            });
+            var borders = values.map(function (v) {
+                if (v <= -20) return '#9b1c1c';
+                if (v <= -10) return '#d9776e';
+                return '#3d8b40';
+            });
+
+            var valid = values.filter(function (v) { return isFinite(v); });
+            var avg = valid.length ? valid.reduce(function (a, b) { return a + b; }, 0) / valid.length : 0;
+            var deepest = valid.length ? Math.min.apply(null, valid) : -20;
+
+            // 柱底文字：太浅的年份不画，避免和相邻年份挤在一起
+            var valueLabels = {
+                id: 'annualDDLabels_' + idxName,
+                afterDatasetsDraw: function (chart) {
+                    var ctx = chart.ctx;
+                    var meta = chart.getDatasetMeta(0);
+                    var area = chart.chartArea;
+                    ctx.save();
+                    ctx.font = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    // 一年一根柱子，卡片只有半栏宽时单根柱子约 15px，
+                    // 逐年都标数字会糊成一条。这里做两级降噪：
+                    //   1) 柱子窄时只给「回撤较深（≤-12%）」的年份标数字；
+                    //   2) 任何情况下相邻两个标签至少隔 22px，浅的让位给深的。
+                    var lastLabelX = -1e9;
+                    var narrow = false;
+                    if (meta.data.length) narrow = meta.data[0].width < 26;
+                    meta.data.forEach(function (bar, i) {
+                        var v = values[i];
+                        if (!isFinite(v) || v > -1) return;
+                        var barH = Math.abs(bar.y - bar.base);
+                        if (barH < 14) return;
+                        if (narrow && v > -12) return;
+                        if (Math.abs(bar.x - lastLabelX) < 22) return;
+                        var label = v.toFixed(1) + '%';
+                        if (bar.width < 26) label = v.toFixed(0) + '%';
+                        if (bar.width < 12) return;
+                        var y = Math.min(bar.y + 2, area.bottom + 2);
+                        ctx.fillStyle = v <= -20 ? (isDark ? '#ff8a80' : '#b71c1c') : textColor;
+                        ctx.font = (v <= -20 ? '700 ' : '600 ') + '10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
+                        ctx.fillText(label, bar.x, y);
+                        lastLabelX = bar.x;
+                    });
+                    ctx.restore();
+                }
+            };
+
+            var avgLine = {
+                id: 'annualDDAvg_' + idxName,
+                afterDatasetsDraw: function (chart) {
+                    var ctx = chart.ctx;
+                    var area = chart.chartArea;
+                    var y = chart.scales.y.getPixelForValue(avg);
+                    if (y < area.top || y > area.bottom) return;
+                    ctx.save();
+                    ctx.strokeStyle = '#f39c12';
+                    ctx.setLineDash([5, 4]);
+                    ctx.lineWidth = 1.2;
+                    ctx.beginPath();
+                    ctx.moveTo(area.left, y);
+                    ctx.lineTo(area.right, y);
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            };
+
+            var yMin = Math.min(-20, Math.floor(deepest * 1.14 / 5) * 5);
+
+            canvas._chartInstance = new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '年内最大回撤',
+                        data: values,
+                        backgroundColor: fills,
+                        borderColor: borders,
+                        borderWidth: 1,
+                        borderRadius: 2,
+                        barPercentage: 0.82,
+                        categoryPercentage: 0.92,
+                        maxBarThickness: 44
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    layout: { padding: { top: 6, bottom: 4 } },
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(30, 30, 30, 0.92)',
+                            padding: 9,
+                            cornerRadius: 6,
+                            callbacks: {
+                                title: function (items) { return '年份: ' + items[0].label.replace('*', '（进行中）'); },
+                                label: function (c) {
+                                    var row = rows[c.dataIndex] || {};
+                                    var out = ['年内最大回撤: ' + (c.parsed.y || 0).toFixed(2) + '%'];
+                                    if (row.peak) out.push('高点（收盘）: ' + row.peak);
+                                    if (row.trough) out.push('低点（收盘）: ' + row.trough);
+                                    return out;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { font: { size: 9 }, maxRotation: 90, autoSkip: false },
+                            grid: { display: false }
+                        },
+                        y: {
+                            max: 0,
+                            min: yMin,
+                            ticks: { font: { size: 9 }, stepSize: 10, callback: function (v) { return v + '%'; } },
+                            grid: { color: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)' }
+                        }
+                    }
+                },
+                plugins: [avgLine, valueLabels]
+            });
+        }
+'''
+
+def generate_html_report(results, start_date, end_date, today_str, metrics, index_valuations, fed_monitor=None, is_debug_mode=False, filename="fund_drawdown_dashboard.html", index_annual_data=None, macro_history=None, index_valuation_history=None, index_point_history=None, index_annual_drawdown=None):
+    CPO_CODES = {"022365", "540010", "002112", "011892", "021528", "009645", "011370", "011452", "016371", "001956", "016234", "016173", "006616", "018291", "020661", "017462", "001438", "008984", "180031", "004320", "027063"}
+    STORAGE_CODES = {"025500", "025209", "018816", "014320"}
+    SEMICONDUCTOR_CODES = {"024418", "024975", "020640", "019633", "024424", "017811", "013841", "007491", "020629", "017747", "026633", "162214", "007343", "018777"}
+    AI_CODES = {"024663", "024726", "023286", "023408", "025506", "025493", "025653", "005963", "014162", "011840", "024412", "024775", "026613", "023551", "024561"}
+    GRID_CODES = {"025857", "023639", "023675", "019411", "167002", "020425", "002164", "017133", "017042", "026681", "016387", "025833", "011172", "001665", "018919"}
+    ROBOT_CODES = {"016531", "018345", "020482", "018125", "007519", "014243", "018957", "003835", "014939", "008998", "004233", "008182", "017968", "024648"}
+    INDEX_SET_LOCAL = {"NDX", "SPX", "SOX", "COMP"}
+    US_ETF_LOCAL_SET = {
+        "QQQ", "SPY", "IVV", "IVW", "VOO", "SMH",
+        "VGT", "ARKW", "DIA", "XLK", "SOXL", "SOXQ"
+    }
+    COMMODITIES_LOCAL = {"XAU", "AUM", "XAG", "BRENT", "CAD"}
+    CRYPTO_LOCAL = {"BTC", "ETH", "SOL", "BNB"}
+    col_count = 25
+
+    def _te_attr(value):
+        """把 tsdata 抓来的字符串指标清洗成纯数字，供 data-* 属性使用。
+
+        这些字段来自第三方页面解析，可能是 "1.23"、"-0.45"、"1.2%"、"" 或
+        "暂无数据"。直接拼进 HTML 属性会有注入风险，也会让前端 parseFloat 出 NaN，
+        因此这里只放行能转成浮点的值，其余一律返回空串（前端显示 --）。
+        """
+        text = str(value or "").strip().rstrip("%").replace(",", "")
+        try:
+            return f"{float(text):g}"
+        except (TypeError, ValueError):
+            return ""
+
+    # Keep report generation usable by callers that supply only a subset of
+    # metrics (for example the local HTML sync helper).
+    _missing = {"status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""}
+    metrics = dict(metrics or {})
+    for _key in ("vix", "usdcny", "vxn", "skew", "brent"):
+        _metric = dict(_missing, val=0.0)
+        _metric.update(metrics.get(_key) or {})
+        metrics[_key] = _metric
+    _fng = dict(_missing, score=0.0, rating="暂无数据")
+    _fng.update(metrics.get("fng") or {})
+    metrics["fng"] = _fng
+    for _key in ("gold_london", "gold_shfe", "silver_london", "copper_lme", "btc"):
+        _metric = dict(_missing, val=0.0)
+        _metric.update(metrics.get(_key) or {})
+        metrics[_key] = _metric
+
+    # ================= QDII 监控数据分组 =================
+    EMERGING_KWS = ["新兴市场", "新兴", "越南", "印度", "巴西", "东南亚"]
+
+    QDII_GROUP_LABELS = {
+        "us_active":   "美股主动",
+        "ndx_passive": "纳斯达克100",
+        "spx_passive": "标普500",
+        "emerging":    "新兴市场",
+        "other":       "其他",
+    }
+
+    def _qdii_group(code, name):
+        for kw in EMERGING_KWS:
+            if kw in name:
+                return "emerging"
+        if code in US_ACTIVE_CODES:
+            return "us_active"
+        if code in NDX_PASSIVE_CODES:
+            return "ndx_passive"
+        if code in SPX_PASSIVE_CODES:
+            return "spx_passive"
+        return "other"
+
+    def _buy_category(data):
+        bs = (data.get('buy_status', '') or '')
+        lim = (data.get('buy_limit', '') or '')
+        bs = str(bs).strip()
+        lim = str(lim).strip()
+        if bs.lower() in ("none", "null", "nan"):
+            bs = ""
+        if lim.lower() in ("none", "null", "nan"):
+            lim = ""
+        if '暂停' in bs or '封闭' in bs:
+            return 'paused'
+        if lim and lim not in ('--', '无限额', ''):
+            return 'limited'
+        return 'open'
+
+    # ============ 份额类别（A / C / E 等）============
+    # 名称形如「国富全球科技互联混合(QDII)人民币A(012922)基金」：
+    #   先剥掉尾部「(6位代码)基金」，再反复剥掉尾部括号块与币种词
+    #   （(QDII) / (人民币份额) / (QDII-LOF)(人民币) / 人民币），
+    #   最后取剩余名称末尾的那个大写字母作为份额类别。
+    # 非基金品种（SPY / BTC / XAU 等）名字不带「(6位代码)基金」尾巴，返回空串，
+    # 这样选任何份额类别时它们都会被排除，选「全部」时照常显示。
+    _SHARE_CLASS_LETTERS = ("A", "B", "C", "D", "E", "H", "I", "O", "R", "Y")
+
+    def _share_class(name):
+        s = str(name or "").strip()
+        if not re.search(r"\(\d{6}\)基金$", s):
+            return ""
+        s = re.sub(r"\(\d{6}\)基金$", "", s)
+        while True:
+            m = re.match(r"^(.*)\([^()]*\)$", s)
+            if m:
+                s = m.group(1)
+                continue
+            m = re.match(r"^(.*?)(人民币现汇|人民币现钞|美元现汇|美元现钞|人民币|美元|港币)$", s)
+            if m:
+                s = m.group(1)
+                continue
+            break
+        # 只认单个字母，避免把「…ETF」的 F、「ETF-SPDR」的 R 之类误判成份额类别
+        m = re.search(r"([A-Z])$", s)
+        if m and m.group(1) in _SHARE_CLASS_LETTERS:
+            return m.group(1)
+        return "none"
+
+    # ============ 年化跟踪误差 & 同类平均 ============
+    # ★ 仅使用 tsdata 页面的权威数据，不再本地兜底计算
+    #    原因：本地计算用「基金净值 vs 对标指数净值」的日收益率差异标准差，
+    #          无法考虑汇率波动 / 交易日时差 / 分红 / 跟踪行业偏离等因素，
+    #          对跟踪非标普500/非纳指100的基金（如 161128 跟踪标普信息技术）
+    #          会产生数十个百分点的错误结果，比源数据的 "--" 更具误导性。
+
+    def _pct_str_to_num(s):
+        """把 '1.43%' / '1.43' / '' 等转成 float，失败返回 None。"""
+        if s is None:
+            return None
+        m = re.search(r'([\d.]+)', str(s))
+        if not m:
+            return None
+        try:
+            return float(m.group(1))
+        except Exception:
+            return None
+
+    _seen_qdii_codes = set()
+    qdii_funds = []
+    for r in results:
+        code = r['code']
+        # ★ 去重：同一代码在 QDII 监控中只展示一次
+        if code in _seen_qdii_codes:
+            continue
+        if code in CPO_CODES or code in STORAGE_CODES or code in SEMICONDUCTOR_CODES:
+            continue
+        if code in AI_CODES or code in GRID_CODES or code in ROBOT_CODES:
+            continue
+        if (code in COMMODITIES_LOCAL or code in CRYPTO_LOCAL
+                or code in INDEX_SET_LOCAL or code in US_ETF_LOCAL_SET):    # ★ 新增最后一项
+            continue
+        _seen_qdii_codes.add(code)
+        grp_key = _qdii_group(code, r.get('name', ''))
+
+        # ★ 只取 tsdata 源数据
+        te_data = r.get('te_data', {}) or {}
+        te_str = (te_data.get('tracking_error') or '').strip()
+        peer_str = (te_data.get('peer_avg') or '').strip()
+
+        qdii_funds.append({
+            "data": r,
+            "group": grp_key,
+            "group_label": QDII_GROUP_LABELS[grp_key],
+            "buy_cat": _buy_category(r),
+            "te_str": te_str,
+            "peer_str": peer_str,
+            "sharp_1y": (te_data.get('sharp_1y') or '').strip(),
+            "sharp_2y": (te_data.get('sharp_2y') or '').strip(),
+            "sharp_3y": (te_data.get('sharp_3y') or '').strip(),
+        })
+
+    qdii_group_counts = {k: sum(1 for x in qdii_funds if x["group"] == k)
+                        for k in QDII_GROUP_LABELS}
+    buy_status_counts = {k: sum(1 for x in qdii_funds if x["buy_cat"] == k)
+                        for k in ("open", "limited", "paused")}
+
+    # ============ 筛选栏 ============
+    qdii_filter_html = f'''
+    <div class="qdii-filter-bar">
+        <div class="qdii-filter-group">
+            <span class="qdii-filter-label">跟踪标的</span>
+            <button class="qdii-chip active" data-filter="track" data-value="all" data-label="全部">全部 {len(qdii_funds)}</button>
+            <button class="qdii-chip" data-filter="track" data-value="ndx_passive" data-label="纳斯达克100">纳斯达克100 {qdii_group_counts["ndx_passive"]}</button>
+            <button class="qdii-chip" data-filter="track" data-value="spx_passive" data-label="标普500">标普500 {qdii_group_counts["spx_passive"]}</button>
+            <button class="qdii-chip" data-filter="track" data-value="us_active" data-label="美股主动">美股主动 {qdii_group_counts["us_active"]}</button>
+            <button class="qdii-chip" data-filter="track" data-value="emerging" data-label="新兴市场">新兴市场 {qdii_group_counts["emerging"]}</button>
+            <button class="qdii-chip" data-filter="track" data-value="other" data-label="其他">其他 {qdii_group_counts["other"]}</button>
+        </div>
+        <div class="qdii-filter-group">
+            <span class="qdii-filter-label">状态</span>
+            <button class="qdii-chip active" data-filter="buy" data-value="all" data-label="全部">全部 {len(qdii_funds)}</button>
+            <button class="qdii-chip" data-filter="buy" data-value="open" data-label="开放申购">开放申购 {buy_status_counts["open"]}</button>
+            <button class="qdii-chip" data-filter="buy" data-value="limited" data-label="限大额申购">限大额申购 {buy_status_counts["limited"]}</button>
+            <button class="qdii-chip" data-filter="buy" data-value="paused" data-label="暂停申购">暂停申购 {buy_status_counts["paused"]}</button>
+        </div>
+        <div class="qdii-search-wrap">
+            <input type="text" id="qdiiSearchInput" placeholder="搜索代码 / 名称...">
+        </div>
+    </div>
+    '''
+
+    # ============ 表格行 ============
+    def _clean_none_str(v):
+        """把 'None' / 'null' / 'nan' / 'nil' 等字符串视同空值。"""
+        if v is None:
+            return None
+        s = str(v).strip()
+        if s.lower() in ("none", "null", "nan", "nil", ""):
+            return None
+        return s
+
+    def _fmt_pct(v):
+        if v is None:
+            return '<span style="color:var(--footer-text);">--</span>'
+        # 过滤字符串 "None" / "null" 等
+        if isinstance(v, str):
+            if v.strip().lower() in ("none", "null", "nan", "nil", ""):
+                return '<span style="color:var(--footer-text);">--</span>'
+            try:
+                v = float(v)
+            except ValueError:
+                return '<span style="color:var(--footer-text);">--</span>'
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return '<span style="color:var(--footer-text);">--</span>'
+        cls = 'gain-positive' if v > 0 else ('gain-negative' if v < 0 else '')
+        sign = '+' if v > 0 else ''
+        return f'<span class="{cls}">{sign}{v:.2f}%</span>'
+
+    def _status_badge(data):
+        bs = _clean_none_str(data.get('buy_status', '')) or ''
+        lim = _clean_none_str(data.get('buy_limit', '')) or ''
+        if '暂停' in bs or '封闭' in bs:
+            return '<span class="qdii-badge qdii-badge-paused">● 暂停申购</span>'
+        if lim and lim not in ('--', '无限额'):
+            return '<span class="qdii-badge qdii-badge-limited">● 限大额申购</span>'
+        return '<span class="qdii-badge qdii-badge-open">● 开放申购</span>'
+
+    qdii_rows_html = ""
+    for item in qdii_funds:
+        r = item["data"]
+        fund_url = f"https://fund.eastmoney.com/{r['code']}.html"
+
+        # 日累计限额
+        lim = r.get('buy_limit', '') or ''
+        if lim and lim not in ('--', '无限额', ''):
+            limit_display = f'<span class="qdii-limit-num">{lim}</span>'
+            m = re.search(r'([\d.]+)', lim)
+            limit_sort = float(m.group(1)) if m else 999999
+            if '万' in lim:
+                limit_sort *= 10000
+        elif item["buy_cat"] == "paused":
+            limit_display = '<span style="color:var(--footer-text);">--</span>'
+            limit_sort = 999999
+        else:
+            limit_display = '<span style="color:var(--footer-text);">无限额</span>'
+            limit_sort = 9999999
+
+        # 手续费
+        fee_pur = (r.get('fee_purchase', '') or '').strip()
+        if fee_pur in ('0.00%', '0%', '0.00'):
+            fee_display = '<span class="qdii-fee-free">免</span>'
+            fee_sort = 0.0
+        elif fee_pur and fee_pur not in ('--',):
+            fee_display = f'<span class="qdii-fee-num">{fee_pur}</span>'
+            m = re.search(r'([\d.]+)', fee_pur)
+            fee_sort = float(m.group(1)) if m else 999
+        else:
+            fee_display = '<span style="color:var(--footer-text);">--</span>'
+            fee_sort = 999
+
+        # 最新规模
+        scale_str = r.get('scale', '--') or '--'
+        m = re.search(r'([\d.]+)', scale_str)
+        scale_sort = float(m.group(1)) if m else -1
+
+        # 近一年
+        yg = r.get('year_gain')
+        year_sort = yg if yg is not None else -9999
+
+        # 今年内 / 近三年 / 近五年 / 近十年（与主看板同源，落在 analyze_fund_metrics 里）
+        _ytd = r.get('ytd_gain')
+        _y3 = r.get('three_year_gain')
+        _y5 = r.get('five_year_gain')
+        _y10 = r.get('ten_year_gain')
+        ytd_sort = _ytd if _ytd is not None else -9999
+        y3_sort = _y3 if _y3 is not None else -9999
+        y5_sort = _y5 if _y5 is not None else -9999
+        y10_sort = _y10 if _y10 is not None else -9999
+
+        # 运作费：管理费 + 托管费 + 销售服务费（合计值直接取 fee_total）
+        _fee_m = _clean_none_str(r.get('fee_manage')) or '--'
+        _fee_c = _clean_none_str(r.get('fee_custody')) or '--'
+        _fee_s = _clean_none_str(r.get('fee_sales')) or '--'
+        _fee_total = _clean_none_str(r.get('fee_total')) or '--'
+        op_sort = r.get('fee_val', -1)
+        op_display = (
+            f'<div class="qdii-opfee">'
+            f'<span class="qdii-opfee-total">{_fee_total}</span>'
+            f'<span class="qdii-opfee-sub" title="管理费 {_fee_m} · 托管费 {_fee_c} · 销售服务费 {_fee_s}">'
+            f'管{_fee_m.rstrip("%")} 托{_fee_c.rstrip("%")} 销{_fee_s.rstrip("%")}</span>'
+            f'</div>'
+        )
+
+        # 年化跟踪误差（来自 tsdata 抓取）
+        te_str = item.get('te_str', '')
+        peer_str = item.get('peer_str', '')
+        te_num = _pct_str_to_num(te_str)
+        peer_num = _pct_str_to_num(peer_str)
+
+        if te_num is None:
+            te_display = '<span style="color:var(--footer-text);">--</span>'
+            te_sort = -1
+        else:
+            te_display = f'<span class="qdii-te-num">{te_num:.2f}%</span>'
+            te_sort = te_num
+
+        if peer_num is None:
+            peer_display = '<span style="color:var(--footer-text);">--</span>'
+            peer_sort = -1
+        else:
+            peer_display = f'<span class="qdii-peer-num">{peer_num:.2f}%</span>'
+            peer_sort = peer_num
+
+        # ★ 夏普比率（近1/2/3年纵向堆叠）
+        s1 = item.get('sharp_1y', '')
+        s2 = item.get('sharp_2y', '')
+        s3 = item.get('sharp_3y', '')
+
+        def _sharp_cell_val(v):
+            if not v or str(v).strip().lower() in ('', '--', 'none', 'null', 'nan'):
+                return '<span style="color:var(--footer-text);">--</span>'
+            return f'<span class="qdii-sharp-num">{v}</span>'
+
+        # 排序基准：优先用近1年，其次近2年
+        _s1n = _pct_str_to_num(s1) if s1 else None
+        _s2n = _pct_str_to_num(s2) if s2 else None
+        sharp_sort = _s1n if _s1n is not None else (_s2n if _s2n is not None else -999)
+
+        sharp_display = (
+            f'<div class="qdii-sharp-inner">'
+            f'<div class="qdii-sharp-row"><span class="qdii-sharp-label">近1年</span>{_sharp_cell_val(s1)}</div>'
+            f'<div class="qdii-sharp-row"><span class="qdii-sharp-label">近2年</span>{_sharp_cell_val(s2)}</div>'
+            f'<div class="qdii-sharp-row"><span class="qdii-sharp-label">近3年</span>{_sharp_cell_val(s3)}</div>'
+            f'</div>'
+        )
+
+        qdii_rows_html += f'''
+        <tr class="qdii-row" data-group="{item['group']}" data-buy="{item['buy_cat']}" data-code="{r['code']}" data-name="{r['name']}">
+            <td class="qdii-code-cell" data-val="{r['code']}"><a href="{fund_url}" target="_blank">{r['code']}</a></td>
+            <td class="qdii-name-cell" data-val="{r['name']}"><a href="{fund_url}" target="_blank" title="{r['name']}">{r['name']}</a></td>
+            <td data-val="{item['group_label']}"><span class="qdii-track-tag" data-g="{item['group']}">{item['group_label']}</span></td>
+            <td data-val="{item['buy_cat']}">{_status_badge(r)}</td>
+            <td class="qdii-limit-cell" data-val="{limit_sort}">{limit_display}</td>
+            <td class="qdii-pct-cell" data-val="{ytd_sort}">{_fmt_pct(_ytd)}</td>
+            <td class="qdii-pct-cell" data-val="{year_sort}">{_fmt_pct(yg)}</td>
+            <td class="qdii-pct-cell" data-val="{y3_sort}">{_fmt_pct(_y3)}</td>
+            <td class="qdii-pct-cell" data-val="{y5_sort}">{_fmt_pct(_y5)}</td>
+            <td class="qdii-pct-cell" data-val="{y10_sort}">{_fmt_pct(_y10)}</td>
+            <td class="qdii-te-cell" data-val="{te_sort}">{te_display}</td>
+            <td class="qdii-sharp-cell" data-val="{sharp_sort}">{sharp_display}</td>
+            <td class="qdii-peer-cell" data-val="{peer_sort}">{peer_display}</td>
+            <td class="qdii-opfee-cell" data-val="{op_sort}">{op_display}</td>
+            <td class="qdii-fee-cell" data-val="{fee_sort}">{fee_display}</td>
+            <td class="qdii-scale-cell" data-val="{scale_sort}">{scale_str}</td>
+        </tr>
+        '''
+
+    # ==================================================================
+    # 第二个标签页：QDII 基金季度持仓 / 国家地区配置 横向对比
+    # ==================================================================
+    _CMP_COLORS = ["#1a73e8", "#e8710a", "#188038", "#d93025",
+                   "#9334e6", "#12b5cb", "#f9ab00", "#5f6368"]
+
+    def _cmp_period_index(periods):
+        index = {}
+        for period in periods or []:
+            quarter = _period_label(period.get("date"))
+            if quarter and quarter != "--" and quarter not in index:
+                index[quarter] = period
+        return index
+
+    cmp_funds = []
+    for item in qdii_funds:
+        r = item["data"]
+        h_index = _cmp_period_index(r.get("holdings") or [])
+        c_info = r.get("countries_info") or {}
+        c_periods = c_info.get("periods") or []
+        if not c_periods and c_info.get("countries"):
+            c_periods = [{"date": c_info.get("date"), "countries": c_info.get("countries")}]
+        c_index = _cmp_period_index(c_periods)
+        if not h_index and not c_index:
+            continue
+        cmp_funds.append({
+            "code": r["code"],
+            "name": r.get("name", ""),
+            "group": item["group"],
+            "group_label": item["group_label"],
+            "scale": (r.get("scale") or "--"),
+            "holdings": h_index,
+            "countries": c_index,
+        })
+
+    # 列头：所有基金出现过的季度取并集，倒序取最近 4 个
+    # 只保留真正的季度标签，「指数成份分布」这类无日期标签不能当季度列
+    _is_quarter = lambda q: bool(re.fullmatch(r"\d{4}Q[1-4]", str(q or "")))
+    cmp_holding_quarters = sorted(
+        {q for f in cmp_funds for q in f["holdings"] if _is_quarter(q)},
+        reverse=True)[:COUNTRY_PERIODS_KEEP]
+    cmp_country_quarters = sorted(
+        {q for f in cmp_funds for q in f["countries"] if _is_quarter(q)},
+        reverse=True)[:COUNTRY_PERIODS_KEEP]
+
+    def _esc_cmp(text):
+        return html.escape(str(text or ""))
+
+    def _holdings_cell(fund, idx):
+        quarter = cmp_holding_quarters[idx]
+        period = fund["holdings"].get(quarter)
+        holdings = (period or {}).get("holdings") or []
+        latest_cls = " cmp-latest-col" if idx == 0 else ""
+        if not holdings:
+            return f'<td class="cmp-cell cmp-cell-na{latest_cls}" data-val="-1">未披露</td>'
+        # 缓存里存的是全量持仓（半年报/年报可达上百条），
+        # 对比页口径固定为「前十大」，必须显式截断，否则合计会虚高到 80%+。
+        top10 = holdings[:10]
+        total = sum(h["ratio"] for h in top10)
+        top3 = " · ".join(f'{h["name"]} {h["ratio"]:.2f}' for h in top10[:3])
+        # 与上一季度比较合计占比变化
+        delta_html = ""
+        if idx + 1 < len(cmp_holding_quarters):
+            prev_period = fund["holdings"].get(cmp_holding_quarters[idx + 1])
+            prev_holdings = ((prev_period or {}).get("holdings") or [])[:10]
+            if prev_holdings:
+                delta = total - sum(h["ratio"] for h in prev_holdings)
+                if abs(delta) >= 0.01:
+                    cls = "cmp-up" if delta > 0 else "cmp-down"
+                    arrow = "▲" if delta > 0 else "▼"
+                    delta_html = f'<span class="cmp-delta {cls}">{arrow}{abs(delta):.2f}</span>'
+        # 进度条以 60% 为满格（前十大合计通常在 30~60% 区间，超过即封顶）
+        meter = min(max(total / 60.0 * 100, 0), 100)
+        return (f'<td class="cmp-cell{latest_cls}" data-val="{total:.2f}">'
+                f'<div class="cmp-sum">{total:.2f}%{delta_html}</div>'
+                f'<div class="cmp-meter"><i style="width:{meter:.1f}%;"></i></div>'
+                f'<div class="cmp-tags" title="{_esc_cmp(top3)}">{_esc_cmp(top3)}</div>'
+                f'</td>')
+
+    def _country_cell(fund, idx):
+        quarter = cmp_country_quarters[idx]
+        period = fund["countries"].get(quarter)
+        countries = (period or {}).get("countries") or []
+        latest_cls = " cmp-latest-col" if idx == 0 else ""
+        if not countries:
+            return f'<td class="cmp-cell cmp-cell-na{latest_cls}" data-val="-1">未披露</td>'
+        total = sum(c["ratio"] for c in countries) or 1.0
+        bars = "".join(
+            f'<i style="width:{max(c["ratio"] / total * 100, 0):.2f}%;'
+            f'background:{_CMP_COLORS[k % len(_CMP_COLORS)]};" '
+            f'title="{_esc_cmp(c["country"])} {c["ratio"]:.2f}%"></i>'
+            for k, c in enumerate(countries[:6])
+        )
+        lead = countries[0]
+        rest = " · ".join(f'{c["country"]} {c["ratio"]:.1f}' for c in countries[1:4])
+        return (f'<td class="cmp-cell{latest_cls}" data-val="{lead["ratio"]:.2f}">'
+                f'<div class="cmp-lead"><b>{_esc_cmp(lead["country"])}</b>'
+                f'<span>{lead["ratio"]:.1f}%</span></div>'
+                f'<div class="cmp-bar">{bars}</div>'
+                f'<div class="cmp-tags" title="{_esc_cmp(rest)}">{_esc_cmp(rest)}</div>'
+                f'</td>')
+
+    cmp_group_chips = (
+        f'<button class="qdii-chip active" data-cmp-group="all">全部 {len(cmp_funds)}</button>'
+        + "".join(
+            f'<button class="qdii-chip" data-cmp-group="{g}">{QDII_GROUP_LABELS[g]} '
+            f'{sum(1 for f in cmp_funds if f["group"] == g)}</button>'
+            for g in QDII_GROUP_LABELS
+            if any(f["group"] == g for f in cmp_funds)
+        )
+    )
+
+    def _quarter_head(quarters):
+        return "".join(
+            f'<th class="cmp-q-head{" cmp-latest" if i == 0 else ""}" '
+            f'data-cmp-sort="{i}">{html.escape(q)} '
+            f'<span class="sort-icon">⇅</span></th>'
+            for i, q in enumerate(quarters)
+        )
+
+    cmp_holding_head = _quarter_head(cmp_holding_quarters)
+    cmp_country_head = _quarter_head(cmp_country_quarters)
+
+    cmp_holding_rows = []
+    cmp_country_rows = []
+
+    def _holdings_total(fund, idx):
+        """该基金第 idx 个季度列的「前十大合计占比」，用于默认排序。"""
+        if idx >= len(cmp_holding_quarters):
+            return -1.0
+        period = fund["holdings"].get(cmp_holding_quarters[idx])
+        holdings = (period or {}).get("holdings") or []
+        # 缓存存的是全量持仓，这里统一按前十大口径统计
+        return sum(h["ratio"] for h in holdings[:10]) if holdings else -1.0
+
+    def _country_lead(fund, idx):
+        """该基金第 idx 个季度列的第一大国家/地区占比，用于默认排序。"""
+        if idx >= len(cmp_country_quarters):
+            return -1.0
+        period = fund["countries"].get(cmp_country_quarters[idx])
+        countries = (period or {}).get("countries") or []
+        return countries[0]["ratio"] if countries else -1.0
+
+    # 默认按「最新季度」降序，打开就能看到集中度最高 / 配置最集中的基金
+    holdings_sorted = sorted(cmp_funds, key=lambda f: _holdings_total(f, 0), reverse=True)
+    country_sorted = sorted(cmp_funds, key=lambda f: _country_lead(f, 0), reverse=True)
+
+    for fund in holdings_sorted:
+        meta = (f'<td class="cmp-code">{_esc_cmp(fund["code"])}</td>'
+                f'<td class="cmp-name" title="{_esc_cmp(fund["name"])}">{_esc_cmp(fund["name"])}</td>'
+                f'<td><span class="qdii-track-tag" data-g="{fund["group"]}">{_esc_cmp(fund["group_label"])}</span></td>')
+        cmp_holding_rows.append(
+            f'<tr data-group="{fund["group"]}">{meta}'
+            + "".join(_holdings_cell(fund, i) for i in range(len(cmp_holding_quarters)))
+            + "</tr>"
+        )
+
+    for fund in country_sorted:
+        cmp_country_rows.append(
+            f'<tr data-group="{fund["group"]}">'
+            f'<td class="cmp-code">{_esc_cmp(fund["code"])}</td>'
+            f'<td class="cmp-name" title="{_esc_cmp(fund["name"])}">{_esc_cmp(fund["name"])}</td>'
+            f'<td class="cmp-scale">{_esc_cmp(fund["scale"])}</td>'
+            + "".join(_country_cell(fund, i) for i in range(len(cmp_country_quarters)))
+            + "</tr>"
+        )
+
+    qdii_compare_html = f'''
+    <div class="qdii-container">
+        <div class="qdii-filter-bar">
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">跟踪标的</span>
+                {cmp_group_chips}
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">提示</span>
+                <span class="cmp-hint">点击季度列头可排序；「未披露」表示该季度没有公开该数据</span>
+            </div>
+        </div>
+
+        <div class="qdii-table-card cmp-card">
+            <div class="cmp-block-title">📦 季度前十大持仓合计占比
+                <span class="cmp-block-sub">进度条以 60% 为满格 · ▲▼ 为环比上季度的合计占比变化</span>
+            </div>
+            <div class="qdii-table-wrap cmp-scroll">
+                <table class="cmp-table" id="cmpHoldingTable">
+                    <thead>
+                        <tr>
+                            <th class="cmp-code">代码</th>
+                            <th class="cmp-name">基金简称</th>
+                            <th class="cmp-group">跟踪标的</th>
+                            {cmp_holding_head}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {"".join(cmp_holding_rows)}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="qdii-table-card cmp-card">
+            <div class="cmp-block-title">🌍 国家 / 地区配置
+                <span class="cmp-block-sub">最近 {len(cmp_country_quarters)} 个季度 · 色条为各国家/地区占净值比例</span>
+            </div>
+            <div class="qdii-table-wrap cmp-scroll">
+                <table class="cmp-table" id="cmpCountryTable">
+                    <thead>
+                        <tr>
+                            <th class="cmp-code">代码</th>
+                            <th class="cmp-name">基金简称</th>
+                            <th class="cmp-scale">规模</th>
+                            {cmp_country_head}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {"".join(cmp_country_rows)}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    '''
+
+    # ==================================================================
+    # 第三个标签页：年化收益排行（基准 = 纳指100）
+    # ------------------------------------------------------------------
+    # QDII 基金只缓存了「年度收益」（annual_returns），没有全历史日净值，
+    # 所以年化用「区间内各年收益累乘 → 按年数开方」折算，而不是日净值。
+    # 基准同样用 NDX 的年度收益，保证两边口径一致、同期可比。
+    # ==================================================================
+    def _annual_map_of(result_row):
+        """把 annual_returns 统一成 {'2021': -1.24, ...}（float，失败丢弃）。"""
+        out = {}
+        for k, v in (result_row.get('annual_returns') or {}).items():
+            try:
+                out[str(k)] = round(float(v), 2)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    _ndx_row = next((r for r in results if r.get('code') == 'NDX'), None)
+    qdii_annual_benchmark = _annual_map_of(_ndx_row) if _ndx_row else {}
+
+    qdii_annual_funds = []
+    for item in qdii_funds:
+        r = item["data"]
+        annual = _annual_map_of(r)
+        if not annual:
+            continue
+        profile = r.get('profile') or {}
+        qdii_annual_funds.append({
+            "code": r["code"],
+            "name": r.get("name", ""),
+            "group": item["group"],
+            "group_label": item["group_label"],
+            "share": _share_class(r.get("name", "")),
+            "inception": (profile.get('inception_date') or '').strip(),
+            "annual": annual,
+            "scale": r.get("scale") or "--",
+        })
+
+    qdii_annual_payload = json.dumps({
+        "benchmark": {"code": "NDX", "name": "纳指100", "annual": qdii_annual_benchmark},
+        "funds": qdii_annual_funds,
+    }, ensure_ascii=False, separators=(',', ':'))
+
+    qdii_annual_html = f'''
+    <div class="qdii-container">
+        <div class="qdii-filter-bar">
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">统计区间</span>
+                <button type="button" class="qdii-chip active" data-arange="inception">成立以来</button>
+                <button type="button" class="qdii-chip" data-arange="10">近 10 年</button>
+                <button type="button" class="qdii-chip" data-arange="5">近 5 年</button>
+                <button type="button" class="qdii-chip" data-arange="3">近 3 年</button>
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">类型</span>
+                <button type="button" class="qdii-chip active" data-atype="all" data-label="全部">全部</button>
+                <button type="button" class="qdii-chip" data-atype="ndx_passive" data-label="纳指100">纳指100</button>
+                <button type="button" class="qdii-chip" data-atype="spx_passive" data-label="标普500">标普500</button>
+                <button type="button" class="qdii-chip" data-atype="us_active" data-label="美股主动">美股主动</button>
+                <button type="button" class="qdii-chip" data-atype="emerging" data-label="新兴市场">新兴市场</button>
+                <button type="button" class="qdii-chip" data-atype="other" data-label="其他">其他</button>
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">份额</span>
+                <button type="button" class="qdii-chip active" data-ashare="all" data-label="全部">全部</button>
+                <button type="button" class="qdii-chip" data-ashare="A" data-label="A类">A类</button>
+                <button type="button" class="qdii-chip" data-ashare="C" data-label="C类">C类</button>
+                <button type="button" class="qdii-chip" data-ashare="E" data-label="E类">E类</button>
+                <button type="button" class="qdii-chip" data-ashare="none" data-label="无份额">无份额</button>
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">自定义区间</span>
+                <select class="qdii-year-select" id="qdiiAnnualStart"></select>
+                <span class="qdii-range-sep">至</span>
+                <select class="qdii-year-select" id="qdiiAnnualEnd"></select>
+            </div>
+            <div class="qdii-filter-group">
+                <span class="qdii-filter-label">筛选</span>
+                <button type="button" class="qdii-chip" id="qdiiAnnualBeatOnly">只看跑赢纳指的主动基金</button>
+            </div>
+        </div>
+
+        <div class="qdii-table-card">
+            <div class="cmp-block-title">📈 QDII 年化收益排行
+                <span class="cmp-block-sub">基准：纳指100（NDX）· 年化 = 区间累计收益按年数开方 · 每行基准取与该基金相同的年份区间</span>
+            </div>
+            <div class="qdii-table-wrap qdii-annual-wrap">
+                <table class="cmp-table" id="qdiiAnnualTable">
+                    <thead>
+                        <tr>
+                            <th class="cmp-code">#</th>
+                            <th class="cmp-name">基金</th>
+                            <th class="qdii-th-sort qdii-col-secondary" data-akey="group_label">类型</th>
+                            <th class="qdii-th-sort qdii-col-secondary" data-akey="inception">成立日期</th>
+                            <th class="qdii-th-sort" data-akey="ann">区间年化</th>
+                            <th class="qdii-th-sort" data-akey="total">总涨幅</th>
+                            <th class="qdii-th-sort qdii-col-bench" data-akey="bench">纳指100同期</th>
+                            <th class="qdii-th-sort" data-akey="excess">超额</th>
+                            <th>标记</th>
+                        </tr>
+                    </thead>
+                    <tbody id="qdiiAnnualBody"></tbody>
+                </table>
+            </div>
+            <div class="qdii-annual-foot" id="qdiiAnnualFoot"></div>
+        </div>
+    </div>
+    '''
+
+    # 年化排行的前端逻辑单独放一个普通字符串，避免在 f-string 里写大量 {{ }}
+    qdii_annual_js = r"""
+        // ===== QDII 年化收益排行（基准：纳指100）=====
+        (function() {
+            function initQdiiAnnual() {
+                var data = (typeof qdiiAnnualData !== 'undefined' && qdiiAnnualData) ? qdiiAnnualData : null;
+                var body = document.getElementById('qdiiAnnualBody');
+                if (!data || !body) return;
+
+                var benchAnnual = (data.benchmark && data.benchmark.annual) || {};
+                var funds = data.funds || [];
+
+                // 收集所有出现过的年份
+                var yearSet = {};
+                Object.keys(benchAnnual).forEach(function(y) { yearSet[Number(y)] = 1; });
+                funds.forEach(function(f) {
+                    Object.keys(f.annual || {}).forEach(function(y) { yearSet[Number(y)] = 1; });
+                });
+                var years = Object.keys(yearSet).map(Number).filter(function(y) { return y > 1900; })
+                    .sort(function(a, b) { return a - b; });
+                if (!years.length) return;
+
+                var startSel = document.getElementById('qdiiAnnualStart');
+                var endSel = document.getElementById('qdiiAnnualEnd');
+                if (startSel && !startSel.options.length) {
+                    years.forEach(function(y) {
+                        startSel.appendChild(new Option(y + ' 年', y));
+                        endSel.appendChild(new Option(y + ' 年', y));
+                    });
+                    startSel.value = years[0];
+                    endSel.value = years[years.length - 1];
+                }
+
+                var mode = 'inception';   // inception | 10 | 5 | 3 | custom
+                var beatOnly = false;
+                var sortKey = 'ann', sortDir = 'desc';
+                // 类型 / 份额：初始沿用监控页或对比页选中的类，避免切页后还要再点一次
+                var typeFilter = window.QDII_TRACK || 'all';
+                var shareFilter = 'all';
+
+                // 区间年化：区间内各年收益累乘，再按「实际有数据的年数」开方
+                function annualize(map, from, to) {
+                    var prod = 1, n = 0, first = null, last = null;
+                    for (var y = from; y <= to; y++) {
+                        var v = map[String(y)];
+                        if (v === undefined || v === null || isNaN(v)) continue;
+                        prod *= (1 + v / 100);
+                        n++;
+                        if (first === null) first = y;
+                        last = y;
+                    }
+                    if (!n) return null;
+                    return {
+                        ann: (Math.pow(prod, 1 / n) - 1) * 100,
+                        total: (prod - 1) * 100,
+                        n: n, first: first, last: last
+                    };
+                }
+
+                function resolveRange(f) {
+                    var latest = years[years.length - 1];
+                    if (mode === 'inception') {
+                        var incYear = String(f.inception || '').slice(0, 4);
+                        var start = /^\d{4}$/.test(incYear) ? Number(incYear) : years[0];
+                        return { from: start, to: latest };
+                    }
+                    if (mode === 'custom') {
+                        var a = Number(startSel.value), b = Number(endSel.value);
+                        return { from: Math.min(a, b), to: Math.max(a, b) };
+                    }
+                    var n = Number(mode);
+                    return { from: latest - n + 1, to: latest };
+                }
+
+                var fmt = function(v) {
+                    if (v === null || v === undefined || isNaN(v)) return '--';
+                    return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+                };
+                var cls = function(v) {
+                    if (v === null || v === undefined || isNaN(v)) return '';
+                    return v >= 0 ? 'metric-red' : 'metric-green';
+                };
+
+                // 类型 / 份额两组标签的数量，随另一维度的选择实时变化
+                function refreshAnnualChips(rows) {
+                    var typeCounts = {}, shareCounts = {}, typeTotal = 0, shareTotal = 0;
+                    rows.forEach(function(r) {
+                        var s = r.share || 'none';
+                        if (shareFilter === 'all' || s === shareFilter) {
+                            typeTotal++;
+                            typeCounts[r.group] = (typeCounts[r.group] || 0) + 1;
+                        }
+                        if (typeFilter === 'all' || r.group === typeFilter) {
+                            shareTotal++;
+                            shareCounts[s] = (shareCounts[s] || 0) + 1;
+                        }
+                    });
+                    document.querySelectorAll('[data-atype]').forEach(function(b) {
+                        var v = b.dataset.atype;
+                        b.textContent = (b.dataset.label || '') + ' ' + (v === 'all' ? typeTotal : (typeCounts[v] || 0));
+                    });
+                    document.querySelectorAll('[data-ashare]').forEach(function(b) {
+                        var v = b.dataset.ashare;
+                        b.textContent = (b.dataset.label || '') + ' ' + (v === 'all' ? shareTotal : (shareCounts[v] || 0));
+                    });
+                }
+
+                function render() {
+                    var rows = [];
+                    funds.forEach(function(f) {
+                        var rg = resolveRange(f);
+                        var mine = annualize(f.annual || {}, rg.from, rg.to);
+                        if (!mine) return;
+                        // 基准取「与该基金完全相同的年份区间」，保证同期可比
+                        var bm = annualize(benchAnnual, mine.first, mine.last);
+                        rows.push({
+                            code: f.code,
+                            name: f.name,
+                            group: f.group,
+                            group_label: f.group_label,
+                            share: f.share || 'none',
+                            inception: f.inception || '--',
+                            ann: mine.ann,
+                            total: mine.total,
+                            bench: bm ? bm.ann : null,
+                            excess: bm ? (mine.ann - bm.ann) : null,
+                            // 基金成立晚于区间起点时，实际只覆盖部分年份，如实显示
+                            span: (mine.first === mine.last)
+                                ? String(mine.first)
+                                : (mine.first + '-' + mine.last),
+                            n: mine.n
+                        });
+                    });
+
+                    refreshAnnualChips(rows);
+
+                    var list = rows.filter(function(r) {
+                        if (typeFilter !== 'all' && r.group !== typeFilter) return false;
+                        if (shareFilter !== 'all' && (r.share || 'none') !== shareFilter) return false;
+                        return true;
+                    });
+                    if (beatOnly) {
+                        list = list.filter(function(r) {
+                            return r.group === 'us_active' && r.excess !== null && r.excess > 0;
+                        });
+                    }
+
+                    list.sort(function(a, b) {
+                        var av = a[sortKey], bv = b[sortKey];
+                        if (typeof av === 'string' || typeof bv === 'string') {
+                            av = String(av || ''); bv = String(bv || '');
+                            return sortDir === 'asc' ? av.localeCompare(bv, 'zh-CN') : bv.localeCompare(av, 'zh-CN');
+                        }
+                        if (av === null || av === undefined) return 1;
+                        if (bv === null || bv === undefined) return -1;
+                        return sortDir === 'asc' ? av - bv : bv - av;
+                    });
+
+                    body.innerHTML = list.map(function(r, i) {
+                        var isActive = r.group === 'us_active';
+                        var beat = isActive && r.excess !== null && r.excess > 0;
+                        var tag = '';
+                        if (isActive) {
+                            tag = beat
+                                ? '<span class="qdii-beat-tag">🏆 跑赢纳指</span>'
+                                : '<span class="qdii-lag-tag">跑输纳指</span>';
+                        }
+                        return '<tr' + (beat ? ' class="qdii-beat-row"' : '') + '>'
+                            + '<td class="cmp-code">' + (i + 1) + '</td>'
+                            + '<td class="cmp-name"><div class="etf-cell"><strong>' + r.name
+                            + '</strong><span class="etf-code">' + r.code + '</span></div></td>'
+                            + '<td class="qdii-col-secondary">' + r.group_label + '</td>'
+                            + '<td class="qdii-col-secondary">' + r.inception + '</td>'
+                            + '<td class="' + cls(r.ann) + '"><strong>' + fmt(r.ann) + '</strong>'
+                            + '<span class="qdii-span-hint">' + r.span + ' · ' + r.n + '年</span></td>'
+                            + '<td class="' + cls(r.total) + '">' + fmt(r.total) + '</td>'
+                            + '<td class="qdii-col-bench ' + cls(r.bench) + '">' + fmt(r.bench) + '</td>'
+                            + '<td class="' + cls(r.excess) + '">' + fmt(r.excess) + '</td>'
+                            + '<td>' + tag + '</td>'
+                            + '</tr>';
+                    }).join('') || '<tr><td colspan="9"><div class="empty">当前区间暂无可用数据</div></td></tr>';
+
+                    var foot = document.getElementById('qdiiAnnualFoot');
+                    if (foot) {
+                        var activeAll = rows.filter(function(r) { return r.group === 'us_active'; });
+                        var beatAll = activeAll.filter(function(r) { return r.excess !== null && r.excess > 0; });
+                        foot.textContent = '共 ' + list.length + ' 只 · 主动基金 ' + activeAll.length
+                            + ' 只，其中 ' + beatAll.length + ' 只跑赢纳指100 · 点击表头可换排序';
+                    }
+                }
+
+                document.querySelectorAll('[data-arange]').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        document.querySelectorAll('[data-arange]').forEach(function(b) {
+                            b.classList.toggle('active', b === btn);
+                        });
+                        mode = btn.dataset.arange;
+                        render();
+                    });
+                });
+
+                [startSel, endSel].forEach(function(sel) {
+                    if (!sel) return;
+                    sel.addEventListener('change', function() {
+                        mode = 'custom';
+                        document.querySelectorAll('[data-arange]').forEach(function(b) {
+                            b.classList.remove('active');
+                        });
+                        render();
+                    });
+                });
+
+                var beatBtn = document.getElementById('qdiiAnnualBeatOnly');
+                if (beatBtn) {
+                    beatBtn.addEventListener('click', function() {
+                        beatOnly = !beatOnly;
+                        beatBtn.classList.toggle('active', beatOnly);
+                        render();
+                    });
+                }
+
+                // 类型标签（纳指 / 标普 / 主动…）：与「现有监控」「基金对比」共享同一个选择
+                function setTypeFilter(v) {
+                    typeFilter = v || 'all';
+                    document.querySelectorAll('[data-atype]').forEach(function(b) {
+                        b.classList.toggle('active', b.dataset.atype === typeFilter);
+                    });
+                    render();
+                }
+                window.qdiiAnnualSetType = setTypeFilter;
+                document.querySelectorAll('[data-atype]').forEach(function(b) {
+                    b.addEventListener('click', function() { setTypeFilter(b.dataset.atype); });
+                });
+
+                // 份额标签（A / C / E / 无份额）
+                document.querySelectorAll('[data-ashare]').forEach(function(b) {
+                    b.addEventListener('click', function() {
+                        shareFilter = b.dataset.ashare;
+                        document.querySelectorAll('[data-ashare]').forEach(function(x) {
+                            x.classList.toggle('active', x === b);
+                        });
+                        render();
+                    });
+                });
+
+                document.querySelectorAll('#qdiiAnnualTable th.qdii-th-sort').forEach(function(th) {
+                    th.addEventListener('click', function() {
+                        var key = th.dataset.akey;
+                        if (sortKey === key) sortDir = (sortDir === 'desc' ? 'asc' : 'desc');
+                        else { sortKey = key; sortDir = 'desc'; }
+                        render();
+                    });
+                });
+
+                // 初始渲染：顺手把类型标签的 active 状态对齐（可能已从别的子页带过来）
+                setTypeFilter(typeFilter);
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initQdiiAnnual);
+            } else {
+                initQdiiAnnual();
+            }
+        })();
+    """
+
+    qdii_sections_html = f'''
+    <div class="qdii-subtabs">
+        <button type="button" class="qdii-subtab active" data-qtab="overview">📋 现有监控</button>
+        <button type="button" class="qdii-subtab" data-qtab="compare">🎯 QDII 基金对比</button>
+        <button type="button" class="qdii-subtab" data-qtab="annual">📈 年化收益排行</button>
+    </div>
+    <div class="qdii-subpane active" data-qpane="overview">
+    <div class="qdii-container">
+        {qdii_filter_html}
+        <div class="qdii-table-card">
+            <div class="qdii-table-wrap">
+                <table id="qdiiTable">
+                    <thead>
+                        <tr>
+                            <th style="width:52px;"  data-sort="text" data-col="0">代码 <span class="sort-icon">⇅</span></th>
+                            <th style="width:160px;" data-sort="text" data-col="1">基金简称 <span class="sort-icon">⇅</span></th>
+                            <th style="width:76px;"  data-sort="text" data-col="2">跟踪标的 <span class="sort-icon">⇅</span></th>
+                            <th style="width:80px;"  data-sort="text" data-col="3">申购状态 <span class="sort-icon">⇅</span></th>
+                            <th style="width:84px;"  data-sort="num"  data-col="4">日累计限额 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="5">今年内 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="6">近一年 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="7">近三年 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="8">近五年 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="9">近十年 <span class="sort-icon">⇅</span></th>
+                            <th style="width:82px;"  data-sort="num"  data-col="10">年化跟踪误差 <span class="sort-icon">⇅</span></th>
+                            <th style="width:90px;"  data-sort="num"  data-col="11">夏普比率 <span class="sort-icon">⇅</span></th>
+                            <th style="width:70px;"  data-sort="num"  data-col="12">同类平均 <span class="sort-icon">⇅</span></th>
+                            <th style="width:134px;" data-sort="num"  data-col="13" title="运作费 = 管理费 + 托管费 + 销售服务费">运作费 <span class="sort-icon">⇅</span></th>
+                            <th style="width:68px;"  data-sort="num"  data-col="14">手续费 <span class="sort-icon">⇅</span></th>
+                            <th style="width:74px;"  data-sort="num"  data-col="15">最新规模 <span class="sort-icon">⇅</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {qdii_rows_html}
+                        <tr id="qdiiEmptyRow" class="qdii-empty-row" style="display:none;">
+                            <td colspan="16">当前筛选条件下暂无匹配基金</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <div class="qdii-subpane" data-qpane="compare">
+        {qdii_compare_html}
+    </div>
+
+    <div class="qdii-subpane" data-qpane="annual">
+        {qdii_annual_html}
+    </div>
+    '''
+
+    # ================= 【新增】止盈三信号逻辑计算 =================
+    vix_val = metrics['vix']['val']
+    fng_val = metrics['fng']['score']
+
+    qqq_pe_val = 0.0
+    for item in index_valuations:
+        if item['name'] == '纳指100':
+            try:
+                qqq_pe_val = float(item['pe'])
+            except (ValueError, TypeError):
+                qqq_pe_val = 0.0
+            break
+
+    vix_trigger = (0 < vix_val < 14)
+    pe_trigger = (qqq_pe_val > 35)
+    fng_trigger = (fng_val > 80)
+    trigger_count = sum([vix_trigger, pe_trigger, fng_trigger])
+
+    if trigger_count == 3:
+        risk_level = "💣 极度疯狂"
+        risk_color = "#d93025"
+        strategy = "执行大额止盈。至少将仓位降至 50% 以下，或通过定投式分批卖出，保留大量现金等待暴跌后的抄底机会。"
+    elif trigger_count == 2:
+        risk_level = "🚨 中度危险"
+        risk_color = "#e67e22"
+        strategy = "执行一档止盈。比如减掉 20% 仓位，锁定部分利润。"
+    elif trigger_count == 1:
+        risk_level = "⚠️ 轻度过热"
+        risk_color = "#fbbc04"
+        strategy = "持股不动，或者仅对涨幅过夸张的个股进行微调。"
+    else:
+        risk_level = "🟢 相对安全"
+        risk_color = "#188038"
+        strategy = "尚未触发止盈信号，正常持有或逢低买入。"
+
+    # 生成止盈信号面板的 HTML（默认折叠）
+    stop_profit_html = f"""
+    <div class="metric-card" style="grid-column: 1 / -1; margin-top: 10px; border-left: 4px solid {risk_color};">
+        <div class="metric-header" id="stopProfitHeader" style="border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 0; cursor: pointer; user-select: none;">
+            <span style="font-size: 16px; font-weight: bold; color: var(--header-text); display: flex; align-items: center; gap: 8px;">
+                <span id="stopProfitToggleIcon" style="font-size: 11px; color: var(--footer-text); transition: transform 0.2s;">▶</span>
+                🚦 美股止盈三信号共振监控
+            </span>
+            <span class="metric-tag" style="background: {risk_color}20; color: {risk_color}; border: 1px solid {risk_color}80;">
+                {risk_level} (触发 {trigger_count}/3 指标)
+            </span>
+        </div>
+
+        <div id="stopProfitBody" style="display: none; margin-top: 12px;">
+            <div class="stop-profit-grid">
+                <div class="stop-profit-item">
+                    <div class="stop-profit-title">VIX 标普恐慌指数</div>
+                    <div class="stop-profit-value" style="color: {risk_color if vix_trigger else 'var(--link-color)'};">
+                        {vix_val if vix_val > 0 else '--'}
+                    </div>
+                    <div class="stop-profit-rules">
+                        <div style="color: {risk_color if vix_trigger else 'inherit'}; font-weight: { 'bold' if vix_trigger else 'normal' };">VIX &lt; 14: 开始关注止盈</div>
+                        <div>VIX 15-20: 正常持有</div>
+                        <div>VIX &gt; 30: 重点考虑买入</div>
+                    </div>
+                </div>
+
+                <div class="stop-profit-item">
+                    <div class="stop-profit-title">QQQ 纳指100市盈率</div>
+                    <div class="stop-profit-value" style="color: {risk_color if pe_trigger else 'var(--link-color)'};">
+                        {qqq_pe_val if qqq_pe_val > 0 else '--'}
+                    </div>
+                    <div class="stop-profit-rules">
+                        <div style="color: {risk_color if pe_trigger else 'inherit'}; font-weight: { 'bold' if pe_trigger else 'normal' };">PE &gt; 35: 进入止盈区</div>
+                        <div>PE 30-35: 偏贵</div>
+                        <div>PE &lt; 30: 估值合理</div>
+                    </div>
+                </div>
+
+                <div class="stop-profit-item">
+                    <div class="stop-profit-title">Fear &amp; Greed 恐惧贪婪</div>
+                    <div class="stop-profit-value" style="color: {risk_color if fng_trigger else 'var(--link-color)'};">
+                        {fng_val if fng_val > 0 else '--'}
+                    </div>
+                    <div class="stop-profit-rules">
+                        <div style="color: {risk_color if fng_trigger else 'inherit'}; font-weight: { 'bold' if fng_trigger else 'normal' };">&gt; 80: 考虑分批止盈</div>
+                        <div>50-75: 正常持有</div>
+                        <div>&lt; 25: 重点寻找机会</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="font-size: 12px; color: var(--footer-text); margin: 16px 0 8px 0;">
+                💡 单一指标有时会出现“钝化”（比如 CNN 指数在贪婪区卡了一个月，股市还在涨）。为了提高准确率，建议使用三共振法则：
+            </div>
+
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; min-width: 600px;">
+                    <thead>
+                        <tr style="background: var(--header-bg); color: var(--header-text);">
+                            <th style="padding: 10px; border-bottom: 1px solid var(--border); width: 20%;">触发条件数量</th>
+                            <th style="padding: 10px; border-bottom: 1px solid var(--border); width: 20%;">风险等级</th>
+                            <th style="padding: 10px; border-bottom: 1px solid var(--border);">对应操作策略</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="background: { 'rgba(251, 188, 4, 0.1)' if trigger_count == 1 else 'transparent' }; border-left: 3px solid {'#fbbc04' if trigger_count == 1 else 'transparent'}; transition: all 0.3s ease;">
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: var(--text);">仅 1 个指标触发止盈区</td>
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: #fbbc04; font-weight: bold;">⚠️ 轻度过热</td>
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: var(--text);">持股不动，或者仅对涨幅过夸张的个股进行微调。</td>
+                        </tr>
+                        <tr style="background: { 'rgba(230, 126, 34, 0.1)' if trigger_count == 2 else 'transparent' }; border-left: 3px solid {'#e67e22' if trigger_count == 2 else 'transparent'}; transition: all 0.3s ease;">
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: var(--text);">有 2 个指标同时触发</td>
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: #e67e22; font-weight: bold;">🚨 中度危险</td>
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: var(--text);">执行一档止盈。比如减掉 20% 仓位，锁定部分利润。</td>
+                        </tr>
+                        <tr style="background: { 'rgba(217, 48, 37, 0.1)' if trigger_count == 3 else 'transparent' }; border-left: 3px solid {'#d93025' if trigger_count == 3 else 'transparent'}; transition: all 0.3s ease;">
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: var(--text);">3 个指标全满 (VIX &lt; 14 + QQQ PE &gt; 35 + CNN &gt; 80)</td>
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: #d93025; font-weight: bold;">💣 极度疯狂</td>
+                            <td style="padding: 10px; border-bottom: 1px solid var(--border); color: var(--text);">执行大额止盈。至少将仓位降至 50% 以下，或通过定投式分批卖出，保留大量现金等待暴跌后的抄底机会。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div style="background: {risk_color}15; border: 1px dashed {risk_color}; border-radius: 8px; padding: 12px; text-align: center; margin-top: 16px;">
+                <div style="font-weight: bold; color: {risk_color}; font-size: 14px;">
+                    📢 当前市场诊断：触发 <span style="font-size: 18px;">{trigger_count}</span> 个止盈信号 ➔ <span style="font-size: 18px;">{risk_level}</span>
+                </div>
+                <div style="font-weight: normal; font-size: 12px; color: var(--text); margin-top: 6px;">
+                    操作建议：{strategy}
+                </div>
+            </div>
+        </div>
+    </div>
+    """
+    # ================= 止盈三信号逻辑结束 =================
+
+    def date_to_label(date_str):
+        """统一把各种季度写法归一为 2026Q3 这类短标签（缓存里存的是「2026年3季度股票投资明细」）。"""
+        date_str = str(date_str or '')
+        if date_str.isdigit() and len(date_str) == 4:
+            return f"{date_str}年报"
+        return _period_label(date_str) or date_str
+
+    def quarter_to_end_date(date_str):
+        if not date_str: return ""
+        date_str = str(date_str)
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str): return date_str
+        m = re.match(r'^(\d{4})Q([1-4])$', _period_label(date_str), re.I)
+        if m:
+            end_map = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+            return f"{m.group(1)}-{end_map[int(m.group(2))]}"
+        return ""
+
+    nav_data_json = {}
+    fund_names_json = {}
+    holding_detail_data_json = {}
+    # 首屏 8 列之外的更早季度：单独成文件，点「加载更早季度」时才拉，
+    # 否则把 135 只基金的全部历史季度都内联会让 details.js 涨到 8MB+。
+    holding_detail_more_json = {}
+    # 全历史持仓明细（结构化），与上面的 HTML 一起写进 details.js，
+    # 供「详细」浮窗按季度查看全部持仓并支持切换历史季度。
+    full_holdings_data_json = {}
+    for r in results:
+        fund_names_json[r['code']] = r['name']
+        if 'nav_data' in r and r['nav_data']:
+            nav_data_json[r['code']] = {
+                'dates': [item['date'] for item in r['nav_data']],
+                'navs': [item['nav'] for item in r['nav_data']]
+            }
+
+    nav_data_script = "window.__FUND_NAV_DATA__=" + json.dumps(
+        nav_data_json, ensure_ascii=False, separators=(",", ":")
+    ) + ";"
+    nav_data_version = hashlib.sha256(nav_data_script.encode("utf-8")).hexdigest()[:12]
+
+    rows_html = ""
+    cmp_meta = {}
+    share_counts = {}
+    for r in results:
+        _sc = _share_class(r.get('name'))
+        if _sc:
+            share_counts[_sc] = share_counts.get(_sc, 0) + 1
+        INDEX_URL_MAP = {
+            # ---- 主流指数（Yahoo 指数符号需加 ^ 前缀）----
+            "NDX":  "https://sg.finance.yahoo.com/quote/%5ENDX/",
+            "SPX":  "https://sg.finance.yahoo.com/quote/%5EGSPC/",
+            "SOX":  "https://sg.finance.yahoo.com/quote/%5ESOX/",
+            "COMP": "https://sg.finance.yahoo.com/quote/%5EIXIC/",
+
+            # ---- 美股 ETF（Yahoo 直接使用 ticker 作为符号）----
+            "QQQ":  "https://sg.finance.yahoo.com/quote/QQQ/",
+            "SPY":  "https://sg.finance.yahoo.com/quote/SPY/",
+            "IVV":  "https://sg.finance.yahoo.com/quote/IVV/",
+            "IVW":  "https://sg.finance.yahoo.com/quote/IVW/",
+            "VOO":  "https://sg.finance.yahoo.com/quote/VOO/",
+            "SMH":  "https://sg.finance.yahoo.com/quote/SMH/",
+            "VGT":  "https://sg.finance.yahoo.com/quote/VGT/",
+            "ARKW": "https://sg.finance.yahoo.com/quote/ARKW/",
+            "DIA":  "https://sg.finance.yahoo.com/quote/DIA/",
+            "XLK":  "https://sg.finance.yahoo.com/quote/XLK/",
+            "SOXL": "https://sg.finance.yahoo.com/quote/SOXL/",
+            "SOXQ": "https://sg.finance.yahoo.com/quote/SOXQ/",
+
+            # ---- 大宗商品与加密货币（保持原样，不修改）----
+            "XAU":  "https://cn.investing.com/currencies/xau-usd",
+            "AUM":  "https://quote.eastmoney.com/qihuo/aum.html",
+            "XAG":  "https://cn.investing.com/currencies/xag-usd",
+            "BTC":  "https://www.tradingview.com/symbols/BTCUSD/",
+            "ETH":  "https://www.tradingview.com/symbols/ETHUSD/",
+            "SOL":  "https://www.tradingview.com/symbols/SOLUSD/",
+            "BNB":  "https://www.tradingview.com/symbols/BNBUSD/"
+        }
+        fund_url = INDEX_URL_MAP.get(r['code'], f"https://fund.eastmoney.com/{r['code']}.html")
+
+        max_dd_pct = min(max(r['max_drawdown'], 0), 100)
+        rec_pct = max(0, min(r['recovery_rate'], 100))
+        reb_pct = min(r['rebound_gain'], 100)
+        limit_display = r.get('buy_limit', '无限额')
+        limit_val = r.get('buy_limit_val', -1)
+        max_nav_display = f"{r['max_nav']:.4f} ({r['max_nav_date']})"
+        min_nav_display = f"{r['min_nav']:.4f} ({r['min_nav_date']})"
+
+        redemption_text = r.get('fee_redemption', '未知')
+        if redemption_text and redemption_text != "未知":
+            parts = redemption_text.split(" | ")
+            highlighted_parts = [re.sub(r'(\d+\.\d+%)', r'<span class="highlight-rate">\1</span>', p) for p in parts]
+            redemption_lines = "<br>".join(highlighted_parts)
+        else:
+            redemption_lines = redemption_text or "未知"
+
+        def format_gain(val): return f"{val:.2f}%" if val is not None else '-'
+        def gain_class(val): return 'gain-positive' if (val and val > 0) else ('gain-negative' if (val and val < 0) else '')
+
+        if r['code'] in CPO_CODES: group = "cpo"; macro_category = "a_share"
+        elif r['code'] in STORAGE_CODES: group = "storage"; macro_category = "a_share"
+        elif r['code'] in SEMICONDUCTOR_CODES: group = "semiconductor"; macro_category = "a_share"
+        elif r['code'] in AI_CODES: group = "ai"; macro_category = "a_share"
+        elif r['code'] in GRID_CODES: group = "grid"; macro_category = "a_share"
+        elif r['code'] in ROBOT_CODES: group = "robot"; macro_category = "a_share"
+        elif r['code'] in COMMODITIES_LOCAL: group = "commodities"; macro_category = "other"
+        elif r['code'] in CRYPTO_LOCAL: group = "crypto"; macro_category = "other"
+        elif r['code'] in INDEX_SET_LOCAL: group = "index"; macro_category = "other"
+        elif r['code'] in US_ETF_LOCAL_SET:  group = "us_etf";      macro_category = "us_share"   # ★ 新增
+        elif r['code'] in NDX_PASSIVE_CODES: group = "ndx_passive"; macro_category = "us_share"
+        elif r['code'] in SPX_PASSIVE_CODES: group = "spx_passive"; macro_category = "us_share"
+        else: group = "us_active"; macro_category = "us_share"
+
+        nav_display_html = f'<span class="highlight-special-nav">{r["latest_nav"]:.4f}</span>' if group in ["commodities", "currency", "crypto", "index"] else f'{r["latest_nav"]:.4f}'
+        holdings_history = r.get('holdings', [])
+        today_gain_val = r.get('today_gain', None)
+        latest_date = r['latest_date']
+        if today_gain_val is not None:
+            today_gain_display = format_gain(today_gain_val) + f' <span class="gain-date">({latest_date})</span>'
+            today_gain_class = gain_class(today_gain_val)
+            today_data_val = today_gain_val
+        else:
+            today_gain_display = "--"
+            today_gain_class = ''
+            today_data_val = -9999
+
+        fee_src = str(r.get('fee_source', ''))
+        fee_pur = str(r.get('fee_purchase', ''))
+        if fee_src and "%" not in fee_src and fee_src != "0.00": fee_src += "%"
+        if fee_pur and "%" not in fee_pur and fee_pur != "0.00": fee_pur += "%"
+
+        if fee_src and fee_pur and fee_src != fee_pur:
+            fee_purchase_html = f'<s style="color:var(--footer-text); font-size:10px;">{fee_src}</s><br><span style="color:#d93025; font-weight:600;">{fee_pur}</span>'
+            clean_pur = fee_pur.strip('%')
+            fee_pur_val = float(clean_pur) if clean_pur.replace('.', '', 1).isdigit() else 999.0
+        else:
+            fee_purchase_html = fee_pur if fee_pur else '--'
+            clean_pur = fee_pur.strip('%') if fee_pur else ''
+            fee_pur_val = float(clean_pur) if clean_pur.replace('.', '', 1).isdigit() else 999.0
+
+        # 对比表用到的补充指标（夏普/跟踪误差/同类平均）：主表不展示这几列，
+        # 但 tsdata 已经抓过，挂到 tr 的 data-* 上供对比弹窗读取，避免再发一轮请求。
+        _te = r.get('te_data') or {}
+        te_sharp1y = _te_attr(_te.get('sharp_1y'))
+        te_sharp3y = _te_attr(_te.get('sharp_3y'))
+        te_track = _te_attr(_te.get('tracking_error'))
+        te_peer = _te_attr(_te.get('peer_avg'))
+
+        rows_html += f"""
+        <tr data-group="{group}" data-macro="{macro_category}" data-share="{_sc}" data-buy-status="{r.get('buy_status', '')}" class="fund-row" data-code="{r['code']}" data-navdate="{r['latest_date']}" data-sharp1y="{te_sharp1y}" data-sharp3y="{te_sharp3y}" data-te="{te_track}" data-peer="{te_peer}">
+            <td class="fav-col" data-val="0"><span class="fav-tools"><button class="star-btn" data-code="{r['code']}" title="点击添加/取消自选">☆</button><input type="checkbox" class="cmp-check" data-code="{r['code']}" title="勾选加入对比（最多 6 只）" aria-label="加入对比"></span></td>
+            <td class="code" data-val="{r['code']}">{r['code']}</td>
+            <td class="name" data-val="{r['name']}">
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 4px;">
+                    <a href="{fund_url}" target="_blank" title="点击查看行情/概况" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{r['name']}</a>
+                    <button class="dca-btn" data-code="{r['code']}" title="启动定投回测测算小工具">📊 定投</button>
+                </div>
+                <div class="redemption-sub" style="white-space: normal; line-height: 1.6;">赎回:<br><span class="highlight-redemption">{redemption_lines}</span></div>
+            </td>
+            <td data-val="{r['scale_val']}" class="highlight-val">{r['scale']}</td>
+            <td data-val="{r['fee_val']}">{r['fee_total']} <span class="fee-sub">(管:{r['fee_manage']}/托:{r['fee_custody']}/销:{r['fee_sales']})</span></td>
+            <td data-val="{fee_pur_val}">{fee_purchase_html}</td>
+            <td data-val="{limit_val}">{r.get('buy_status', '--')}<div class="fee-sub">{limit_display}</div></td>
+            <td data-val="{r['max_nav']}">{max_nav_display}</td>
+            <td data-val="{r['min_nav']}">{min_nav_display}</td>
+            <td data-val="{r['latest_nav']}">{nav_display_html}</td>
+            <td class="metric-red" data-val="{r['max_drawdown']}">
+                <div class="progress-container">
+                    <div class="progress-bar bar-red" style="width: {max_dd_pct}%;">
+                        <span>{r['max_drawdown']:.2f}%</span>
+                    </div>
+                </div>
+            </td>
+            <td class="metric-green" data-val="{r['rebound_gain']}">
+                <div class="progress-container">
+                    <div class="progress-bar bar-green" style="width: {reb_pct}%;">
+                        <span>{r['rebound_gain']:.2f}%</span>
+                    </div>
+                </div>
+            </td>
+            <td data-val="{r['recovery_rate']}">
+                <div class="progress-container">
+                    <div class="progress-bar bar-blue" style="width: {rec_pct}%;">
+                        <span>{r['recovery_rate']:.2f}%</span>
+                    </div>
+                </div>
+            </td>
+            <td data-val="{r['recovery_days']}">{r['recovery_days']} 天</td>
+            <td data-val="{today_data_val}" class="{today_gain_class}">{today_gain_display}</td>
+            <td data-val="{r['week_gain'] if r['week_gain'] is not None else -9999}" class="{gain_class(r['week_gain'])}">{format_gain(r['week_gain'])}</td>
+            <td data-val="{r['month_gain'] if r['month_gain'] is not None else -9999}" class="{gain_class(r['month_gain'])}">{format_gain(r['month_gain'])}</td>
+            <td data-val="{r['quarter_gain'] if r['quarter_gain'] is not None else -9999}" class="{gain_class(r['quarter_gain'])}">{format_gain(r['quarter_gain'])}</td>
+            <td data-val="{r['half_year_gain'] if r['half_year_gain'] is not None else -9999}" class="{gain_class(r['half_year_gain'])}">{format_gain(r['half_year_gain'])}</td>
+            <td data-val="{r['ytd_gain'] if r['ytd_gain'] is not None else -9999}" class="{gain_class(r['ytd_gain'])}">{format_gain(r['ytd_gain'])}</td>
+            <td data-val="{r['year_gain'] if r['year_gain'] is not None else -9999}" class="{gain_class(r['year_gain'])}">{format_gain(r['year_gain'])}</td>
+            <td data-val="{r['three_year_gain'] if r.get('three_year_gain') is not None else -9999}" class="{gain_class(r.get('three_year_gain'))}">{format_gain(r.get('three_year_gain'))}</td>
+            <td data-val="{r['five_year_gain'] if r.get('five_year_gain') is not None else -9999}" class="{gain_class(r.get('five_year_gain'))}">{format_gain(r.get('five_year_gain'))}</td>
+            <td data-val="{r['ten_year_gain'] if r.get('ten_year_gain') is not None else -9999}" class="{gain_class(r.get('ten_year_gain'))}">{format_gain(r.get('ten_year_gain'))}</td>
+            <td class="dca-col" data-val="-9999">--</td>
+        </tr>
+        """
+
+        # 对比弹窗的深度资料（资产配置 / 集中度 / 十大重仓 / 持有人 / 申购）
+        cmp_meta[r['code']] = build_cmp_meta(r)
+
+        display_holdings = []
+        holdings_cards = []
+        # 全历史持仓的结构化数据，供「详细」浮窗按季度查看全部持仓（按占比降序）
+        full_holdings_by_quarter = {}
+        if holdings_history:
+            sorted_holdings = sorted(
+                holdings_history,
+                key=lambda x: (_parse_holdings_quarter(x.get('date')) or (0, 0)),
+                reverse=True,
+            )
+            # 这里要为「全部历史季度」建列：首屏只内联最近 HOLDINGS_PERIODS_KEEP 列，
+            # 更早的季度进 fund_dashboard_details_more.js，点「加载更早季度」时再拉。
+            # 全塞进首屏的话，135 只基金 × 平均 21 列会让 details.js 涨到 8MB+。
+            display_holdings = sorted_holdings
+            for period in sorted_holdings:
+                q_label = _period_label(period.get('date'))
+                if not q_label or q_label in full_holdings_by_quarter:
+                    continue
+                rows = sorted(
+                    (h for h in (period.get('holdings') or []) if h.get('ratio', 0) > 0),
+                    key=lambda h: h.get('ratio', 0),
+                    reverse=True,
+                )
+                if not rows:
+                    continue
+                full_holdings_by_quarter[q_label] = {
+                    'date': str(period.get('date') or q_label),
+                    'end': quarter_to_end_date(period.get('date')) or '',
+                    'list': [[h.get('name', ''), h.get('code', ''), round(float(h.get('ratio', 0)), 2)]
+                             for h in rows],
+                }
+            for i, period in enumerate(display_holdings):
+                date_str = period['date']
+                holdings_list = period['holdings']
+                label = date_to_label(date_str)
+                end_date_str = quarter_to_end_date(date_str)
+                end_date_html = f'<span class="quarter-end">截止至：{end_date_str}</span>' if end_date_str else ""
+                prev_period = sorted_holdings[i+1] if i+1 < len(sorted_holdings) else None
+                prev_holdings_dict = {h['name']: h['ratio'] for h in prev_period['holdings']} if prev_period else {}
+                stocks_html = ""
+                total_ratio = 0.0
+                if holdings_list:
+                    for h in holdings_list[:10]:
+                        name = h['name']
+                        ratio = h['ratio']
+                        total_ratio += ratio
+                        change_text = ''
+                        change_class = ''
+                        if prev_period is None:
+                            # 只有一期快照（如美股 ETF 每日持仓）时没有对比基准，
+                            # 不能把每一只都标成「新增」
+                            pass
+                        elif name in prev_holdings_dict:
+                            diff = ratio - prev_holdings_dict[name]
+                            if abs(diff) < 0.01: change_text = '持平'; change_class = ''
+                            elif diff > 0.3: change_text = f'加仓 {diff:.2f}%'; change_class = 'change-add'
+                            elif diff > 0: change_text = f'↑{diff:.2f}%'; change_class = 'change-up'
+                            elif diff < -0.3: change_text = f'减仓 {abs(diff):.2f}%'; change_class = 'change-sub'
+                            else: change_text = f'↓{abs(diff):.2f}%'; change_class = 'change-down'
+                        else:
+                            change_text = '新增'; change_class = 'change-new'
+                        # 美股 ETF 的持仓名做了中文化，英文原名放进 title 供悬停查看
+                        _name_en = h.get('name_en') or ''
+                        _title_attr = f' title="{html.escape(str(_name_en))}"' if _name_en else ''
+                        stocks_html += f'''
+                        <div class="stock-item">
+                            <span class="stock-name"{_title_attr}>{name}</span>
+                            <span class="stock-ratio">{ratio:.2f}%</span>
+                            <span class="stock-change {change_class}">{change_text}</span>
+                        </div>
+                        '''
+                    # 杠杆 ETF（如 SOXL）靠掉期合约拿倍数敞口，各腿占比相加会超过 100%，
+                    # 直接写「前十大合计 261%」会让人以为是数据错误，加一句口径说明。
+                    total_label = '前十大合计' if total_ratio <= 100 else '前十大合计（含杠杆敞口）'
+                    stocks_html += f'''
+                    <div class="stock-item stock-total">
+                        <span class="stock-name">{total_label}</span>
+                        <span class="stock-ratio">{total_ratio:.2f}%</span>
+                        <span class="stock-change"></span>
+                    </div>
+                    '''
+                else:
+                    stocks_html = '<div style="color: var(--footer-text); padding: 10px 0;">暂无持仓明细</div>'
+                # 「详细」按钮：打开该季度全部持仓（半年报/年报披露全量，季报只有前十大）
+                q_key = _period_label(date_str)
+                full_count = len(full_holdings_by_quarter.get(q_key, {}).get('list') or [])
+                detail_btn = (
+                    f'<button type="button" class="quarter-detail-btn" '
+                    f'data-code="{r["code"]}" data-quarter="{html.escape(str(q_key))}" '
+                    f'title="查看 {html.escape(str(q_key))} 全部 {full_count} 条持仓">详细</button>'
+                ) if full_count else ''
+                holdings_cards.append(f"""
+                <div class="quarter-card">
+                    <div class="quarter-label">
+                        <span class="quarter-title">{label}</span>
+                        <span class="quarter-label-right">{end_date_html}{detail_btn}</span>
+                    </div>
+                    <div class="quarter-stocks">{stocks_html}</div>
+                </div>
+                """)
+        else:
+            holdings_cards = [
+                """
+                <div class="quarter-card empty-holdings-placeholder">
+                    <div class="quarter-label"><span class="quarter-title">前十大持仓</span></div>
+                    <div style="flex:1; display:flex; align-items:center; justify-content:center; color:var(--footer-text); font-size:12px;">
+                        暂无持仓披露数据
+                    </div>
+                </div>
+                """
+            ]
+
+        # ===== 持有人结构 / 国家地区分布：严格按「季度」对齐 =====
+        # 关键：不再按「最近 N 期依次填坑」。
+        # 持有人结构是半年报节点（只有 06-30 / 12-31），国家分布是季报节点，
+        # 两者与持仓季度往往对不上，按顺序填会把 2026Q2 的数据塞到 2026Q3 那一列。
+        # 现在改为「列 = 季度」，每格只放本季度的数据，没有就显示「本季度未披露」。
+        # 列数必须与持仓卡数量一致：列锚点来自 display_holdings，
+        # 两处取不同的上限会导致饼图列和持仓卡错位。
+        PIE_PERIOD_COUNT = HOLDINGS_PERIODS_KEEP
+
+        holder_data = r.get("holder_struct") or {}
+        holder_periods = holder_data.get("periods") or []
+        if not holder_periods and ("inst" in holder_data) and ("indiv" in holder_data):
+            # 兼容旧缓存结构（单期）
+            holder_periods = [{
+                "date": holder_data.get("date", "--"),
+                "inst": holder_data.get("inst", 0),
+                "indiv": holder_data.get("indiv", 0),
+            }]
+
+        c_info = r.get("countries_info") or {}
+        country_periods = c_info.get("periods") or []
+        if not country_periods and c_info.get("countries"):
+            country_periods = [{
+                "date": c_info.get("date", "--"),
+                "countries": c_info.get("countries"),
+            }]
+
+        # 非 QDII 基金根本不做国家/地区配置，抓取层给的是「长期基准 / 中国大陆 100%」
+        # 这种占位数据，画成饼图纯属噪音。这里判定为占位就整块不显示，
+        # 让持有人结构饼图独占整列（宽度翻倍，饼图更清楚）。
+        def _has_real_country_data(periods):
+            for period in periods:
+                raw = str(period.get("date") or "")
+                if raw == "指数成份分布":          # 纳指/标普被动 QDII 的指数成份兜底
+                    return True
+                if re.fullmatch(r"\d{4}Q[1-4]", _period_label(raw)):
+                    return True
+            return False
+
+        show_country = _has_real_country_data(country_periods)
+
+        def _period_index(periods):
+            """{季度标签: 该期数据}，同季度重复时保留最新一条。"""
+            index = {}
+            for period in periods:
+                quarter = _period_label(period.get("date"))
+                if quarter and quarter != "--" and quarter not in index:
+                    index[quarter] = period
+            return index
+
+        holder_by_quarter = _period_index(holder_periods)
+        country_by_quarter = _period_index(country_periods)
+
+        # 列锚点 = 持仓季度（没有持仓时退回饼图自己的季度，保证仍有内容可看）
+        column_quarters = [_period_label(p.get("date")) for p in display_holdings]
+        if not column_quarters:
+            union = {q for q in list(holder_by_quarter) + list(country_by_quarter)
+                     if q and q != "--"}
+            # 真正的季度排前面（倒序），「指数成份分布」这类无日期标签排最后
+            real_quarters = sorted(
+                (q for q in union if re.fullmatch(r"\d{4}Q[1-4]", q)), reverse=True
+            )
+            other_labels = sorted(q for q in union if not re.fullmatch(r"\d{4}Q[1-4]", q))
+            column_quarters = real_quarters + other_labels
+            if len(column_quarters) > PIE_PERIOD_COUNT and other_labels:
+                # 给「指数成份分布」这类标签留一个位置，否则被截断后
+                # ETF 联接基金的地区配置饼图会整块消失
+                column_quarters = (real_quarters[:PIE_PERIOD_COUNT - 1]
+                                   + other_labels[:1])
+        # 注意：有持仓时不再截断，column_quarters 保留全部历史季度，
+        # 由下面的 head/more 拆分决定哪些内联、哪些按需加载。
+
+        # 持仓卡按季度建索引，便于严格对齐
+        holdings_card_by_quarter = {}
+        for i, period in enumerate(display_holdings):
+            quarter = _period_label(period.get("date"))
+            if quarter not in holdings_card_by_quarter and i < len(holdings_cards):
+                holdings_card_by_quarter[quarter] = holdings_cards[i]
+
+        def _pie_date_caption(date_str):
+            date_str = str(date_str or "--")
+            quarter = _period_label(date_str)
+            if quarter == date_str:
+                return f'<span class="pie-quarter">{html.escape(date_str)}</span>'
+            return (f'<span class="pie-quarter">{html.escape(quarter)}</span>'
+                    f'<span class="pie-exact">{html.escape(date_str)}</span>')
+
+        def _pie_cell(period, kind, quarter, idx):
+            """生成单个饼图格；本季度没有该数据时返回占位格（并标明是哪一季度）。"""
+            if not period:
+                return f"""
+                <div class="pie-cell pie-cell-empty">
+                    <div class="pie-mini-title">{'持有人结构' if kind == 'holder' else '国家/地区'}</div>
+                    <div class="pie-empty-body">本季度未披露</div>
+                    <div class="pie-cell-date"><span class="pie-quarter">{html.escape(str(quarter))}</span></div>
+                </div>
+                """
+            if kind == "holder":
+                payload = json.dumps([
+                    {"name": "机构持有", "ratio": period.get("inst", 0)},
+                    {"name": "个人持有", "ratio": period.get("indiv", 0)},
+                ], ensure_ascii=False)
+                canvas_cls, data_attr, title = "holder-pie-canvas", "data-holders", "持有人结构"
+            else:
+                payload = json.dumps(period.get("countries") or [], ensure_ascii=False)
+                canvas_cls, data_attr, title = "country-pie-canvas", "data-countries", "国家/地区"
+            payload = payload.replace("'", "&#39;")
+            return f"""
+            <div class="pie-cell">
+                <div class="pie-mini-title">{title}</div>
+                <div class="pie-cell-canvas">
+                    <canvas class="{canvas_cls}" data-code="{r['code']}" data-idx="{idx}" {data_attr}='{payload}'></canvas>
+                </div>
+                <div class="pie-cell-date">{_pie_date_caption(period.get("date"))}</div>
+            </div>
+            """
+
+        # 每列：上=该季度持仓明细，下=左持有人 / 右国家地区
+        # 缺持仓的列补一个「幽灵卡」占位：它 flex-grow 撑满剩余高度，
+        # 保证各列的饼图行始终落在同一水平线上（否则会高低错位）。
+        GHOST_HOLDINGS_CARD = (
+            '<div class="quarter-card quarter-card-ghost" aria-hidden="true"></div>'
+        )
+        EMPTY_HOLDINGS_CARD = """
+                <div class="quarter-card empty-holdings-placeholder">
+                    <div class="quarter-label"><span class="quarter-title">前十大持仓</span></div>
+                    <div style="flex:1; display:flex; align-items:center; justify-content:center; color:var(--footer-text); font-size:12px;">
+                        暂无持仓披露数据
+                    </div>
+                </div>
+                """
+        if not holdings_card_by_quarter:
+            # 整只基金都没有持仓披露：第一列显示提示卡，其余列用幽灵卡保持饼图对齐
+            fallback_cards = [EMPTY_HOLDINGS_CARD] + [
+                GHOST_HOLDINGS_CARD for _ in range(max(0, len(column_quarters) - 1))
+            ]
+        else:
+            fallback_cards = [GHOST_HOLDINGS_CARD] * len(column_quarters)
+
+        # 美股 ETF 这类标的既没有持有人结构也没有国家/地区配置，
+        # 整块饼图区会退化成一大片「本季度未披露」空白，直接不渲染。
+        has_pie_data = bool(holder_by_quarter) or bool(country_by_quarter)
+        quarter_columns = []
+        for idx, quarter in enumerate(column_quarters):
+            holdings_card = (holdings_card_by_quarter.get(quarter)
+                             or fallback_cards[idx])
+            if has_pie_data:
+                pies_class = "quarter-pies" if show_country else "quarter-pies single"
+                country_cell = (_pie_cell(country_by_quarter.get(quarter), "country",
+                                          quarter, idx) if show_country else "")
+                pies_html = f"""
+                <div class="{pies_class}">
+                    {_pie_cell(holder_by_quarter.get(quarter), "holder", quarter, idx)}
+                    {country_cell}
+                </div>"""
+            else:
+                pies_html = ""
+            quarter_columns.append(f"""
+            <div class="quarter-column" data-quarter="{html.escape(str(quarter))}">
+                {holdings_card}{pies_html}
+            </div>
+            """)
+        # 首屏内联最近 HOLDINGS_PERIODS_KEEP 列；更早的季度单独成文件按需加载
+        head_columns = quarter_columns[:HOLDINGS_PERIODS_KEEP]
+        more_columns = quarter_columns[HOLDINGS_PERIODS_KEEP:]
+        holdings_html = "".join(head_columns)
+        more_holdings_html = _minify_frag("".join(more_columns))
+        # 首屏里多出来的「加载更早季度」占位列由 JS 追加，不占服务端 HTML
+        head_col_count = max(len(head_columns), 1)
+
+        # ===== ★ 构建年度收益 HTML（热力图 + 统计栏）=====
+        annual_returns = r.get('annual_returns', {}) or {}
+
+        # ★ 主流指数：额外计算每年的年末收盘点位，用于在百分比下方展示
+        is_main_index = (group == "index")
+        annual_close_map = {}
+        if is_main_index and r.get('nav_data'):
+            # nav_data 已按日期升序排序，逐年覆盖即可得到年末值
+            for item in r['nav_data']:
+                try:
+                    year_key = str(item['date'])[:4]
+                    annual_close_map[year_key] = float(item['nav'])
+                except Exception:
+                    continue
+
+        if annual_returns:
+            sorted_years = sorted(annual_returns.keys())
+            pairs = [(yr, annual_returns[yr]) for yr in sorted_years]
+
+            # 热力图单元格
+            cells = []
+            for yr, v in pairs:
+                if v > 0:
+                    alpha = min(0.72 + abs(v) / 100.0 * 0.8, 0.98)
+                    bg = f"rgba(190, 30, 30, {alpha:.2f})"
+                elif v < 0:
+                    alpha = min(0.72 + abs(v) / 100.0 * 0.8, 0.98)
+                    bg = f"rgba(15, 110, 45, {alpha:.2f})"
+                else:
+                    bg = "rgba(110, 110, 110, 0.9)"
+
+                # ★ 主流指数：追加年末收盘点位
+                close_html = ""
+                if is_main_index:
+                    cv = annual_close_map.get(str(yr))
+                    close_display = f"{cv:,.2f}" if cv is not None else "--"
+                    close_html = f'<div class="fund-annual-close">{close_display}</div>'
+
+                cells.append(
+                    f'<div class="fund-annual-heatmap-cell" style="background:{bg};">'
+                    f'<div class="fund-annual-year">{yr}</div>'
+                    f'<div class="fund-annual-pct">{v:+.2f}%</div>'
+                    f'{close_html}'
+                    f'</div>'
+                )
+            heatmap_html = '<div class="fund-annual-heatmap-grid">' + ''.join(cells) + '</div>'
+
+            # 统计信息
+            max_gain_year, max_gain = max(pairs, key=lambda x: x[1])
+            max_loss_year, max_loss = min(pairs, key=lambda x: x[1])
+            values = [v for _, v in pairs]
+            pos_years = sum(1 for v in values if v > 0)
+            neg_years = sum(1 for v in values if v < 0)
+            cum = 1.0
+            for v in values:
+                cum *= (1 + v / 100.0)
+            n_years = len(values)
+            if n_years > 0 and cum > 0:
+                ann_return = ((cum ** (1.0 / n_years)) - 1) * 100.0
+            else:
+                ann_return = 0.0
+            ann_color = "#d93025" if ann_return >= 0 else "#188038"
+
+            stats_html = f'''
+            <div class="fund-annual-stats-footer">
+                <div class="fund-annual-stat-item">
+                    <span class="fund-annual-stat-label">最大涨幅</span>
+                    <span class="fund-annual-stat-value" style="color:#d93025;">+{max_gain:.2f}%</span>
+                    <span class="fund-annual-stat-sub">{max_gain_year}</span>
+                </div>
+                <div class="fund-annual-stat-item">
+                    <span class="fund-annual-stat-label">最大跌幅</span>
+                    <span class="fund-annual-stat-value" style="color:#188038;">{max_loss:.2f}%</span>
+                    <span class="fund-annual-stat-sub">{max_loss_year}</span>
+                </div>
+                <div class="fund-annual-stat-item"><span class="fund-annual-stat-label">正收益年份</span><span class="fund-annual-stat-value">{pos_years} 年</span></div>
+                <div class="fund-annual-stat-item"><span class="fund-annual-stat-label">负收益年份</span><span class="fund-annual-stat-value">{neg_years} 年</span></div>
+                <div class="fund-annual-stat-item"><span class="fund-annual-stat-label">年化收益</span><span class="fund-annual-stat-value" style="color:{ann_color};">{ann_return:+.2f}%</span></div>
+            </div>
+            '''
+
+            annual_returns_html = heatmap_html + stats_html
+        else:
+            annual_returns_html = '<div class="chart-history-empty">暂无年度收益数据</div>'
+
+        chart_html = f"""
+        <div class="chart-container" id="chart-container-{r['code']}">
+            <div class="chart-history-panel">
+                <div class="chart-history-header">📅 年度收益率</div>
+                {annual_returns_html}
+            </div>
+            <div class="chart-line-panel">
+                <div class="chart-controls">
+                    <button class="period-btn active" data-period="week" data-code="{r['code']}">近一周</button>
+                    <button class="period-btn" data-period="month" data-code="{r['code']}">近一月</button>
+                    <button class="period-btn" data-period="quarter" data-code="{r['code']}">近三月</button>
+                    <button class="period-btn" data-period="half" data-code="{r['code']}">近半年</button>
+                    <button class="period-btn" data-period="ytd" data-code="{r['code']}">今年内</button>
+                    <button class="period-btn" data-period="year" data-code="{r['code']}">近一年</button>
+                    <button class="period-btn" data-period="3y" data-code="{r['code']}">近三年</button>
+                    <button class="period-btn" data-period="5y" data-code="{r['code']}">近五年</button>
+                    <button class="period-btn" data-period="10y" data-code="{r['code']}">近十年</button>
+                    <button class="period-btn" data-period="all" data-code="{r['code']}">成立以来</button>
+                </div>
+                <canvas id="chart-{r['code']}" width="400" height="200"></canvas>
+            </div>
+        </div>
+        """
+
+        # ===== 基金简介卡片 =====
+        profile = r.get('profile') or {}
+        pf_inception = profile.get('inception_date', '') or ''
+        pf_type = profile.get('fund_type', '') or ''
+        pf_objective = profile.get('objective', '') or ''
+        pf_managers = profile.get('managers', []) or []
+
+        # 构建基金经理 HTML
+        mgr_html_parts = []
+        for mgr in pf_managers:
+            mgr_name = mgr.get('name', '')
+            mgr_start = mgr.get('start_date', '')
+            mgr_tenure_str = mgr.get('tenure_str', '')
+            mgr_return = mgr.get('return_pct', '--')
+            mgr_peer = mgr.get('peer_avg_pct', '--')
+            mgr_brief = mgr.get('brief', '')
+
+            # 任职收益 vs 同类平均的颜色
+            def _ret_color(val_str):
+                try:
+                    v = float(val_str.replace('%', ''))
+                    if v > 0:
+                        return '#d93025'  # 红=涨
+                    elif v < 0:
+                        return '#188038'  # 绿=跌
+                except Exception:
+                    pass
+                return 'var(--footer-text)'
+
+            ret_color = _ret_color(mgr_return)
+            peer_color = _ret_color(mgr_peer)
+
+            mgr_html_parts.append(f"""
+                <div class="profile-manager">
+                    <div class="profile-manager-head">
+                        <span class="profile-mgr-name">{html.escape(mgr_name)}</span>
+                        <span class="profile-mgr-tag">任职起始：{html.escape(mgr_start)}</span>
+                        <span class="profile-mgr-tag">任职年限：{html.escape(mgr_tenure_str or '--')}</span>
+                    </div>
+                    <div class="profile-manager-returns">
+                        <span class="profile-ret-item">任职收益：<span style="color:{ret_color};font-weight:600;">{html.escape(mgr_return)}</span></span>
+                        <span class="profile-ret-item">同类平均：<span style="color:{peer_color};">{html.escape(mgr_peer)}</span></span>
+                    </div>
+                    {f'<div class="profile-mgr-brief">{html.escape(mgr_brief)}</div>' if mgr_brief else ''}
+                </div>
+            """)
+        mgr_html = ''.join(mgr_html_parts) if mgr_html_parts else '<div class="profile-manager-empty">暂无经理信息</div>'
+
+        # 美股 ETF / 指数这类标的三费、规模、经理全是 "--" 或空，
+        # 整张简介卡片没有实质信息，不渲染（否则只剩一排「--」和「暂无经理信息」）
+        def _tag_ok(val):
+            return val not in (None, "", "--", "-", "未知")
+
+        profile_tags = []
+        if pf_inception:
+            profile_tags.append(f'<span class="profile-tag">📅 成立日期：{html.escape(pf_inception)}</span>')
+        if pf_type:
+            profile_tags.append(f'<span class="profile-tag">📋 类型：{html.escape(pf_type)}</span>')
+        if _tag_ok(r.get("scale")):
+            profile_tags.append(f'<span class="profile-tag">💰 规模：{html.escape(str(r.get("scale")))}</span>')
+        if _tag_ok(r.get("fee_manage")):
+            profile_tags.append(f'<span class="profile-tag">💳 管理费：{html.escape(str(r.get("fee_manage")))}</span>')
+        if _tag_ok(r.get("fee_custody")):
+            profile_tags.append(f'<span class="profile-tag">🏦 托管费：{html.escape(str(r.get("fee_custody")))}</span>')
+
+        if profile_tags or pf_objective or mgr_html_parts:
+            profile_html = f"""
+            <div class="fund-profile-card">
+                {f'<div class="fund-profile-tags">{"".join(profile_tags)}</div>' if profile_tags else ''}
+                {f'<div class="fund-profile-objective"><span class="profile-obj-label">投资目标：</span>{html.escape(pf_objective)}</div>' if pf_objective else ''}
+                {f'''<div class="fund-profile-managers">
+                    <div class="profile-managers-title">👤 基金经理</div>
+                    {mgr_html}
+                </div>''' if mgr_html_parts else ''}
+            </div>
+        """
+        else:
+            profile_html = ""
+
+        holding_detail_data_json[r['code']] = _minify_frag(f"""
+            <div class="holdings-wrapper">
+                {profile_html}
+                <div class="quarters-panel">
+                    <div class="holdings-container" style="--qcols: {head_col_count};"
+                         data-more="{len(more_columns)}" data-total="{len(column_quarters)}">
+                        {holdings_html}
+                    </div>
+                </div>
+                <div class="right-chart-wrapper">
+                    {chart_html}
+                </div>
+            </div>
+        """)
+        if more_holdings_html:
+            holding_detail_more_json[r['code']] = more_holdings_html
+        if full_holdings_by_quarter:
+            full_holdings_data_json[r['code']] = full_holdings_by_quarter
+
+    empty_row = f"""
+        <tr id="empty-row" style="display:none;">
+            <td colspan="{col_count}" style="text-align:center; padding:30px; color: var(--footer-text);">
+                该分类暂无基金，敬请期待
+            </td>
+        </tr>
+    """
+
+    holding_detail_script = (
+        "window.__FUND_HOLDING_DETAILS__="
+        + json.dumps(holding_detail_data_json, ensure_ascii=False, separators=(",", ":"))
+        + ";"
+    )
+    # 全历史持仓单独成文件：体积比详情 HTML 还大，只在点「详细」时才加载，
+    # 避免每次打开基金浮窗都多下几 MB。
+    full_holdings_script = (
+        "window.__FUND_FULL_HOLDINGS__="
+        + json.dumps(full_holdings_data_json, ensure_ascii=False, separators=(",", ":"))
+        + ";"
+    )
+    # 更早季度（首屏 8 列之外）同样单独成文件，点「加载更早季度」时才拉。
+    # 全站合计约 4.5MB，但只有真的要看历史时才下载，不影响首屏。
+    detail_more_script = (
+        "window.__FUND_DETAIL_MORE__="
+        + json.dumps(holding_detail_more_json, ensure_ascii=False, separators=(",", ":"))
+        + ";"
+    )
+    holding_detail_version = hashlib.sha256(
+        holding_detail_script.encode("utf-8")
+    ).hexdigest()[:12]
+    full_holdings_version = hashlib.sha256(
+        full_holdings_script.encode("utf-8")
+    ).hexdigest()[:12]
+    detail_more_version = hashlib.sha256(
+        detail_more_script.encode("utf-8")
+    ).hexdigest()[:12]
+    nav_data_asset = f"fund_dashboard_data.js?v={nav_data_version}"
+    holding_detail_asset = f"fund_dashboard_details.js?v={holding_detail_version}"
+    full_holdings_asset = f"fund_dashboard_full_holdings.js?v={full_holdings_version}"
+    detail_more_asset = f"fund_dashboard_details_more.js?v={detail_more_version}"
+    output_path = os.path.abspath(filename)
+    output_dir = os.path.dirname(output_path)
+    nav_data_output = os.path.join(output_dir, "fund_dashboard_data.js")
+    holding_detail_output = os.path.join(output_dir, "fund_dashboard_details.js")
+    full_holdings_output = os.path.join(output_dir, "fund_dashboard_full_holdings.js")
+    detail_more_output = os.path.join(output_dir, "fund_dashboard_details_more.js")
+
+    def _atomic_write(target, content):
+        temp_target = target + ".tmp"
+        with open(temp_target, "w", encoding="utf-8") as f:
+            f.write(content)
+        try:
+            os.replace(temp_target, target)
+        except OSError:
+            import shutil
+            shutil.copyfile(temp_target, target)
+            os.remove(temp_target)
+
+    friend_link_categories = [
+        {
+            "category": "📊 估值与数据",
+            "links": [
+                {"name": "纳指估值助手", "url": "https://nsdk.top/", "desc": "纳指基金估值与持仓参考"},
+                {"name": "蛋卷估值中心", "url": "https://danjuanfunds.com/djmodule/value-center?channel=1300100141", "desc": "全市场指数估值与定投参考"},
+                {"name": "QDII申购限额监控(pmtools)", "url": "https://pmtools.com.cn/qdii", "desc": "QDII基金数据分析与投资参考"},
+            ]
+        },
+        {
+            "category": "🔬 基金分析与工具",
+            "links": [
+                {"name": "DCA HUB定投估值计算机(btcdca)", "url": "https://btcdca.me/", "desc": "多资产定投策略与估值评分"},
+                {"name": "晨星中国", "url": "https://www.morningstar.cn/", "desc": "全球权威基金评级与研究报告"},
+                {"name": "WiseETF", "url": "https://www.wise-etf.com/", "desc": "美股ETF/QDII基金估值与溢价监控"},
+                {"name": "基金决策宝(jjpro)", "url": "https://jjpro.cn/", "desc": "基金组合分析与投研决策辅助工具"},
+                {"name": "股查查", "url": "https://guchacha.com/", "desc": "专业的企业/股票基本面查询工具"},
+                {"name": "ETF Flow Terminal", "url": "https://www.kzgflow.com/", "desc": "比特币、以太坊现货 ETF 历史资金流与最新变化"},
+            ]
+        },
+        {
+            "category": "📰 资讯与行情",
+            "links": [
+                {"name": "FiNews 美股日报", "url": "https://finews.elsetech.app/", "desc": "每日美股盘后总结与新闻聚合"},
+                {"name": "美股编年史", "url": "https://historyofmarket.com/", "desc": "美股百年历史数据与市场统计"},
+                {"name": "Yahoo 财经香港", "url": "https://hk.finance.yahoo.com/", "desc": "港股/美股实时行情与财经资讯"},
+                {"name": "WISE HOLD", "url": "https://www.wise-hold.com/", "desc": "追踪机构持仓与政商名人投资动向"},
+                {"name": "MarketGrep", "url": "https://marketgrep.com/", "desc": "今日市场分析"},
+            ]
+        },
+    ]
+
+    friend_cards_html = ""
+    for cat in friend_link_categories:
+        cards_list = []
+        for link in cat['links']:
+            try:
+                _domain = urllib.parse.urlparse(link['url']).netloc
+            except Exception:
+                _domain = ""
+            _icon_url = f"https://www.google.com/s2/favicons?domain={_domain}&sz=64" if _domain else ""
+            cards_list.append(f"""
+        <a href="{link['url']}" target="_blank" class="metric-card friend-card" style="text-decoration: none; display: flex; flex-direction: column; justify-content: center; cursor: pointer;">
+            <div class="friend-card-head">
+                <img src="{_icon_url}" alt="{link['name']}" class="friend-logo" loading="lazy" onerror="this.style.display='none';">
+                <span class="friend-name">{link['name']}</span>
+                <span class="friend-arrow">↗</span>
+            </div>
+            <div class="metric-desc" style="border-top: none; padding-top: 0; margin-top: 4px; font-size: 11px; color: var(--footer-text);">
+                {link['desc']}
+            </div>
+        </a>
+        """)
+        links_html = "".join(cards_list)
+        friend_cards_html += f"""
+        <div class="friend-category-block">
+            <h4 class="friend-category-title">{cat['category']}</h4>
+            <div class="friend-links-grid">{links_html}</div>
+        </div>
+        """
+
+    index_source_url = "https://danjuanfunds.com/screw/valuation-table"
+    index_source_link_html = (
+        f'<a href="{index_source_url}" target="_blank" '
+        f'style="color:var(--link-color); text-decoration:none;" '
+        f'title="点击跳转至蛋卷指数估值表">（数据源：蛋卷）↗</a>'
+    )
+    def _macro_history_panel(panel_id):
+        return f"""
+                    <div class="macro-history-panel" id="{panel_id}" data-macro-panel hidden>
+                        <div class="macro-history-head">
+                            <div class="macro-history-title-wrap">
+                                <strong class="macro-history-title" data-macro-part="title"></strong>
+                                <span class="macro-history-meta">
+                                    <span data-macro-part="meta"></span>
+                                    <a class="macro-history-source" data-macro-part="source" target="_blank" rel="noopener">官方源 ↗</a>
+                                </span>
+                            </div>
+                            <div class="macro-history-controls">
+                                <button class="macro-history-range-toggle" data-macro-part="rangeToggle" type="button" title="切换横轴范围" hidden>自 2000 起</button>
+                                <button class="macro-history-reset" data-macro-part="resetZoom" type="button" aria-label="重置缩放" title="重置缩放" hidden>↺</button>
+                                <button class="macro-history-close" data-macro-part="close" type="button" aria-label="收起历史图" title="收起历史图">×</button>
+                            </div>
+                        </div>
+                        <div class="macro-history-chart-wrap">
+                            <canvas data-macro-part="canvas" role="img" aria-label="宏观指标历史数据图"></canvas>
+                            <div class="macro-history-range-labels" data-macro-part="rangeLabels" aria-hidden="true"></div>
+                            <div class="macro-selection-box" data-macro-part="selectionBox" hidden></div>
+                            <div class="macro-history-empty" data-macro-part="empty" hidden></div>
+                        </div>
+                        <div class="macro-history-legend" data-macro-part="legend"></div>
+                    </div>
+        """
+
+    core_history_panel_html = _macro_history_panel("macroHistoryPanelCore")
+    commodity_history_panel_html = _macro_history_panel("macroHistoryPanelCommodity")
+    index_history_panel_html = _macro_history_panel("macroHistoryPanelIndex")
+
+    # ===== 计算指数历年回报数据的更新时间（优先取缓存文件 mtime）=====
+    _index_annual_cache_file = os.path.join(CACHE_DIR, "index_annual.json")
+    if os.path.exists(_index_annual_cache_file):
+        try:
+            _mtime = os.path.getmtime(_index_annual_cache_file)
+            index_annual_update_time = ts_to_beijing(_mtime).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            index_annual_update_time = now_beijing().strftime("%Y-%m-%d %H:%M")
+    else:
+        index_annual_update_time = now_beijing().strftime("%Y-%m-%d %H:%M")
+
+    # ===== 生成指数历年回报 HTML (优化版 v3) =====
+    index_annual_html = ""
+    if index_annual_data and isinstance(index_annual_data, dict):
+        index_order = ANNUAL_INDEX_TARGETS
+        index_annual_html = '<div class="index-annual-grid" style="margin: 20px 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px;">'
+        index_annual_html += '<div style="grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 0;">'
+        index_annual_html += '<h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">📈 指数历年回报 (2000年至今)</h3>'
+        index_annual_html += '<span style="font-size: 12px; color: var(--footer-text);">数据来源: historyofmarket.com / 搜狐财经 / 腾讯财经</span>'
+        index_annual_html += '</div>'
+
+        for idx_name in index_order:
+            idx_data = index_annual_data.get(idx_name)
+            if not idx_data or not idx_data.get("data"):
+                continue
+            ticker = idx_data.get("ticker", "")
+            # 首页统一口径：只展示 2000 年及以后（2000 年前成立的指数从 2000 起算，
+            # 2000 年后才成立的指数自然从成立当年起）。费城半导体原始序列能到 1995，
+            # 这里一并裁掉，避免和其它指数的时间轴口径不一致。
+            yearly_data = [
+                row for row in (idx_data.get("data") or [])
+                if _year_of(row.get("year")) >= HISTORY_START_YEAR
+            ]
+            if not yearly_data:
+                continue
+
+            max_abs_pct = max([abs(r.get("pct", 0)) for r in yearly_data] + [1.0])
+
+            # ===== 计算统计信息（含最大涨跌年份） =====
+            pairs = [(r.get("year", ""), r.get("pct", 0)) for r in yearly_data]
+            if pairs:
+                max_gain_year, max_gain = max(pairs, key=lambda x: x[1])
+                max_loss_year, max_loss = min(pairs, key=lambda x: x[1])
+            else:
+                max_gain_year = max_loss_year = ""
+                max_gain = max_loss = 0.0
+            returns = [v for _, v in pairs]
+            pos_years = sum(1 for v in returns if v > 0)
+            neg_years = sum(1 for v in returns if v < 0)
+            cum = 1.0
+            for v in returns:
+                cum *= (1 + v / 100.0)
+            n_years = len(returns)
+            if n_years > 0 and cum > 0:
+                ann_return = ((cum ** (1.0 / n_years)) - 1) * 100.0
+            else:
+                ann_return = 0.0
+            ann_color = "#d93025" if ann_return >= 0 else "#188038"
+
+            stats_html = f'''
+            <div class="annual-stats-footer">
+                <div class="annual-stat-item">
+                    <span class="annual-stat-label">最大涨幅</span>
+                    <span class="annual-stat-value" style="color:#d93025;">+{max_gain:.2f}%</span>
+                    <span class="annual-stat-sub">{max_gain_year}</span>
+                </div>
+                <div class="annual-stat-item">
+                    <span class="annual-stat-label">最大跌幅</span>
+                    <span class="annual-stat-value" style="color:#188038;">{max_loss:.2f}%</span>
+                    <span class="annual-stat-sub">{max_loss_year}</span>
+                </div>
+                <div class="annual-stat-item"><span class="annual-stat-label">正收益年份</span><span class="annual-stat-value">{pos_years} 年</span></div>
+                <div class="annual-stat-item"><span class="annual-stat-label">负收益年份</span><span class="annual-stat-value">{neg_years} 年</span></div>
+                <div class="annual-stat-item"><span class="annual-stat-label">年化收益率</span><span class="annual-stat-value" style="color:{ann_color};">{ann_return:+.2f}%</span></div>
+            </div>
+            '''
+
+            bar_data_json = json.dumps(
+                [{"year": r.get("year"), "pct": r.get("pct"), "close": r.get("close")} for r in yearly_data],
+                ensure_ascii=False
+            )
+
+            # ===== 年内最大收盘价回撤（独立视图）=====
+            _dd_item = ((index_annual_drawdown or {}).get("items") or {}).get(idx_name) or {}
+            _dd_years = _dd_item.get("years") or {}
+            _dd_rows = []
+            for _y in sorted(_dd_years, key=lambda x: int(x)):
+                _rec = _dd_years[_y] or {}
+                _rows_for_year = _rec.get("last", "")
+                _dd_rows.append({
+                    "year": int(_y),
+                    "mdd": _rec.get("mdd"),
+                    "peak": _rec.get("peak_date"),
+                    "trough": _rec.get("trough_date"),
+                    # 当年还没走完（最后一个交易日不在 12 月）→ 标记为进行中
+                    "partial": not str(_rows_for_year).startswith(f"{_y}-12"),
+                })
+            dd_data_json = json.dumps(_dd_rows, ensure_ascii=False)
+            _mdd_vals = [row["mdd"] for row in _dd_rows if row["mdd"] is not None]
+            if _mdd_vals:
+                _dd_avg = sum(_mdd_vals) / len(_mdd_vals)
+                _dd_deep = min(_mdd_vals)
+                _dd_deep_year = [row["year"] for row in _dd_rows if row["mdd"] == _dd_deep][0]
+                _dd_n20 = sum(1 for v in _mdd_vals if v <= -20)
+                _dd_n10 = sum(1 for v in _mdd_vals if v > -10)
+                _dd_total = len(_mdd_vals)
+                dd_stats_html = f'''
+                <div class="annual-stats-footer annual-dd-stats">
+                    <div class="annual-stat-item">
+                        <span class="annual-stat-label">平均每年最大回撤</span>
+                        <span class="annual-stat-value" style="color:#c62828;">{_dd_avg:.1f}%</span>
+                        <span class="annual-stat-sub">{_dd_total} 年</span>
+                    </div>
+                    <div class="annual-stat-item">
+                        <span class="annual-stat-label">最深回撤</span>
+                        <span class="annual-stat-value" style="color:#c62828;">{_dd_deep:.1f}%</span>
+                        <span class="annual-stat-sub">{_dd_deep_year} 年</span>
+                    </div>
+                    <div class="annual-stat-item">
+                        <span class="annual-stat-label">回撤达 20%</span>
+                        <span class="annual-stat-value">{_dd_n20} 次</span>
+                        <span class="annual-stat-sub">占比 {_dd_n20 / _dd_total * 100:.0f}%</span>
+                    </div>
+                    <div class="annual-stat-item">
+                        <span class="annual-stat-label">回撤不足 10%</span>
+                        <span class="annual-stat-value" style="color:#188038;">{_dd_n10} 年</span>
+                        <span class="annual-stat-sub">仅 {_dd_n10 / _dd_total * 100:.0f}%</span>
+                    </div>
+                </div>
+                '''
+            else:
+                dd_stats_html = '<div class="annual-dd-empty">该指数暂无日线数据，无法计算年内回撤</div>'
+
+            index_annual_html += f'''
+            <div class="metric-card" style="margin-bottom:0; padding: 16px; display: flex; flex-direction: column;">
+                <div class="metric-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:15px; flex-shrink: 0; flex-wrap: wrap; gap: 8px;">
+                    <span style="font-size:15px; font-weight:700; color:var(--text);">
+                        {idx_name} <span style="font-size:12px; color:var(--footer-text); font-weight:normal;">({ticker})</span>
+                    </span>
+                    <div style="display:flex; gap:6px;">
+                        <button class="mode-toggle-btn" data-idx="{idx_name}" data-mode="card" onclick="toggleAnnualView('{idx_name}', 'card')">📋 卡片</button>
+                        <button class="mode-toggle-btn active" data-idx="{idx_name}" data-mode="heatmap" onclick="toggleAnnualView('{idx_name}', 'heatmap')">🔥 热力图</button>
+                        <button class="mode-toggle-btn" data-idx="{idx_name}" data-mode="bar" onclick="toggleAnnualView('{idx_name}', 'bar')">📊 柱状图</button>
+                        <button class="mode-toggle-btn" data-idx="{idx_name}" data-mode="dd" onclick="toggleAnnualView('{idx_name}', 'dd')" title="每个自然年内的最大收盘价回撤（年内峰值→随后谷值）">📉 年内回撤</button>
+                    </div>
+                </div>
+                <div id="annual-view-{idx_name}" class="annual-view-container" style="flex: 1; min-height: 0;">
+            '''
+
+            # --- 视图 1：卡片布局 (默认隐藏) ---
+            index_annual_html += f'<div id="annual-card-{idx_name}" class="annual-mode-content" style="display:none;">'
+            index_annual_html += '<div class="annual-card-grid">'
+            for row in yearly_data:
+                year = row.get("year", "")
+                close_val = row.get("close")
+                close_display = f"{close_val:,.2f}" if close_val is not None else "--"
+                pct_val = row.get("pct", 0)
+                if pct_val > 0:
+                    pct_color = "#d93025"; pct_sign = "+"; bar_color = "#d93025"
+                elif pct_val < 0:
+                    pct_color = "#188038"; pct_sign = ""; bar_color = "#188038"
+                else:
+                    pct_color = "var(--text)"; pct_sign = "+"; bar_color = "#aaa"
+                bar_width_half = min(abs(pct_val) / max_abs_pct * 50, 50)
+                index_annual_html += f'''
+                <div class="annual-year-row">
+                    <span class="annual-year-col">{year}</span>
+                    <span class="annual-points-col">{close_display}</span>
+                    <span class="annual-pct-col" style="color: {pct_color};">{pct_sign}{pct_val:.2f}%</span>
+                    <div class="annual-bar-col">
+                        <div class="annual-zero-line"></div>
+                        <div class="annual-bar-fill" style="background: {bar_color}; { 'left: 50%;' if pct_val >= 0 else 'right: 50%;' } width: {bar_width_half}%;"></div>
+                    </div>
+                </div>
+                '''
+            index_annual_html += '</div>'
+            index_annual_html += stats_html
+            index_annual_html += '</div>'
+
+            # --- 视图 2：热力图布局 (默认显示) ---
+            index_annual_html += f'<div id="annual-heatmap-{idx_name}" class="annual-mode-content" style="display:block;">'
+            index_annual_html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 6px;">'
+            for row in yearly_data:
+                year = row.get("year", "")
+                close_val = row.get("close")
+                close_heatmap_display = f"{close_val:,.2f}" if close_val is not None else "--"
+                pct_val = row.get("pct", 0)
+                # 提高最小 alpha，让文字始终有足够对比度
+                if pct_val > 0:
+                    alpha = min(0.72 + abs(pct_val) / 100.0 * 0.8, 0.98)
+                    bg_color = f"rgba(190, 30, 30, {alpha:.2f})"
+                elif pct_val < 0:
+                    alpha = min(0.72 + abs(pct_val) / 100.0 * 0.8, 0.98)
+                    bg_color = f"rgba(15, 110, 45, {alpha:.2f})"
+                else:
+                    bg_color = "rgba(110, 110, 110, 0.9)"
+                # 去掉 text-shadow，改用更清晰的字重与颜色
+                index_annual_html += f'''
+                <div class="annual-heatmap-cell" style="background:{bg_color}; border-radius:4px; padding:6px 2px; text-align:center; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); cursor: default;">
+                    <div style="font-size:10px; font-weight:600; color:#ffffff;">{year}</div>
+                    <div style="font-size:13px; font-weight:800; color:#ffffff; letter-spacing: 0.2px;">{pct_val:+.2f}%</div>
+                    <div style="font-size:9px; font-weight:500; color:rgba(255,255,255,0.92);">{close_heatmap_display}</div>
+                </div>
+                '''
+            index_annual_html += '</div>'
+            index_annual_html += stats_html
+            index_annual_html += '</div>'
+
+            # --- 视图 3：柱状图布局 (默认隐藏) ---
+            index_annual_html += f'<div id="annual-bar-{idx_name}" class="annual-mode-content" style="display:none;">'
+            index_annual_html += f'<div style="height: 280px; width: 100%; position: relative;"><canvas id="annual-bar-chart-{idx_name}" data-bar=\'{bar_data_json}\'></canvas></div>'
+            index_annual_html += stats_html
+            index_annual_html += '</div>'
+
+            # --- 视图 4：年内最大收盘价回撤（默认隐藏）---
+            _dd_span = ""
+            if _dd_item.get("start"):
+                _dd_span = f"数据区间 {_dd_item.get('start')} ~ {_dd_item.get('end', '')}"
+            index_annual_html += f'<div id="annual-dd-{idx_name}" class="annual-mode-content" style="display:none;">'
+            index_annual_html += f'<div style="height: 300px; width: 100%; position: relative;"><canvas id="annual-dd-chart-{idx_name}" data-dd=\'{dd_data_json}\'></canvas></div>'
+            index_annual_html += dd_stats_html
+            index_annual_html += (
+                '<div class="annual-dd-note">'
+                '口径：每个自然年内的<b>最大收盘价回撤</b>（年内阶段高点 → 随后阶段低点，高点不跨年回溯），'
+                '不是年度涨跌幅，也不是跨年度最大回撤。'
+                '<span class="annual-dd-legend">'
+                '<i style="background:#b71c1c;"></i>≥20%　'
+                '<i style="background:#ef8a8a;"></i>10%~20%　'
+                '<i style="background:#4caf50;"></i>不足10%'
+                '</span>'
+                f'<span class="annual-dd-src">{_dd_span}　{_dd_item.get("source", "")}</span>'
+                '</div>'
+            )
+            index_annual_html += '</div>'
+
+            index_annual_html += '</div>'  # 关闭 annual-view-container
+            index_annual_html += f'<div style="margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border); text-align: right; font-size: 11px; color: var(--footer-text);">📅 数据更新于: {index_annual_update_time}</div>'
+            index_annual_html += '</div>'  # 关闭 metric-card
+        index_annual_html += '</div>'
+    else:
+        index_annual_html = '<div style="margin:20px 0;"><div class="metric-card"><div class="metric-body"><span style="color:var(--footer-text);">暂无指数年度数据</span></div></div></div>'
+
+
+    fed_monitor = fed_monitor or {}
+    fed_source_url = fed_monitor.get("source_url", "https://www.cmegroup.com/cn-s/markets/interest-rates/cme-fedwatch-tool.html")
+    fed_meeting_text = fed_monitor.get("meeting_text", "--")
+    fed_meeting_iso = fed_monitor.get("meeting_iso", "")
+    fed_countdown_text = fed_monitor.get("countdown_text", "暂无倒计时")
+    fed_futures_price = fed_monitor.get("futures_price", "--")
+    fed_probabilities = fed_monitor.get("probabilities", [])
+    fed_table_rows = fed_monitor.get("table_rows", [])
+    fed_update_text = fed_monitor.get("update_text", "--")
+
+    fed_bar_html = ""
+    for i, prob in enumerate(fed_probabilities):
+        bar_class = "blue" if i == 0 else ("grey" if i == 1 else "green")
+        pct = max(0.0, min(float(prob["pct"]), 100.0))
+        fed_bar_html += f"""
+        <div class="fed-bar-row">
+            <div class="fed-bar-label">{prob['rate']}</div>
+            <div class="fed-bar-track" style="background: transparent; display: flex; align-items: center; margin: 0;">
+                <div class="fed-bar-fill {bar_class}" style="width: {pct:.1f}%;"></div>
+                <span class="fed-bar-pct">{pct:.1f}%</span>
+            </div>
+        </div>
+        """
+
+    if fed_table_rows:
+        fed_table_body = "".join(
+            f"""<tr>
+                <td>{row['rate']} <span style="color:#aaa;">📈</span></td>
+                <td>{row['current']}{'' if row['current'] in ['—', '-'] else '%'}</td>
+                <td>{row['prev_day']}{'' if row['prev_day'] in ['—', '-'] else '%'}</td>
+                <td>{row['prev_week']}{'' if row['prev_week'] in ['—', '-'] else '%'}</td>
+            </tr>"""
+            for row in fed_table_rows
+        )
+    else:
+        fed_table_body = '<tr><td colspan="4" style="text-align:center;">暂无历史概率数据</td></tr>'
+
+    fed_countdown_js = ""
+    if fed_meeting_iso:
+        fed_countdown_js = f"""
+        <script>
+        (function() {{
+            const meetingMs = new Date("{fed_meeting_iso}").getTime();
+            const el = document.getElementById("fedCountdown");
+            function updateFedCountdown() {{
+                if (!el || !meetingMs) return;
+                const diff = Math.max(0, meetingMs - Date.now());
+                const totalMinutes = Math.ceil(diff / 60000);
+                if (diff <= 0) {{
+                    el.textContent = "会议已开始/已结束";
+                    return;
+                }}
+                const days = Math.floor(diff / 86400000);
+                const hours = Math.floor((diff % 86400000) / 3600000);
+                const minutes = Math.floor((diff % 3600000) / 60000);
+                el.textContent = `剩余 ${{days}}天 ${{String(hours).padStart(2, '0')}}小时 ${{String(minutes).padStart(2, '0')}}分钟（${{totalMinutes.toLocaleString()}} 分钟）`;
+            }}
+            updateFedCountdown();
+            setInterval(updateFedCountdown, 1000);
+        }})();
+        </script>
+        """
+
+    fed_monitor_html = f"""
+    <div class="fed-card">
+        <div class="fed-title">
+            下一次美国利率决议：{fed_meeting_text}
+            <a href="{fed_source_url}" target="_blank" style="float:right; color:var(--link-color); font-size: 13px; font-weight: 500; text-decoration: none;">🔗 源数据直达 ↗</a>
+        </div>
+        <div style="text-align:center; margin: 4px 0 12px; padding: 8px 10px; background: var(--hover-bg); border-radius: 8px;">
+            <div style="font-size: 11px; color: var(--footer-text); margin-bottom: 3px;">距离美国利率决议会议</div>
+            <strong id="fedCountdown" style="font-size: 18px; color: var(--link-color);">{fed_countdown_text}</strong>
+        </div>
+        <div class="fed-info">
+            会议时间: <strong>{fed_meeting_text}</strong><br>
+            期货价格: <strong>{fed_futures_price}</strong>
+        </div>
+        {fed_bar_html if fed_bar_html else '<div style="padding: 12px 0; color: var(--footer-text);">暂无当前市场概率数据</div>'}
+
+        <table class="fed-table" style="width: 100%; table-layout: fixed;">
+            <thead>
+                <tr>
+                    <th style="width: 40%;">目标利率</th>
+                    <th style="width: 20%;">目前</th>
+                    <th style="width: 20%;">上一日</th>
+                    <th style="width: 20%;">上一周</th>
+                </tr>
+            </thead>
+            <tbody>
+                {fed_table_body}
+            </tbody>
+        </table>
+
+        <div style="text-align: right; font-size: 11px; color: var(--footer-text); margin-top: 12px;">更新: {fed_update_text}</div>
+    </div>
+    {fed_countdown_js}
+    """
+
+
+    now_dt = now_beijing()
+    update_time_str = now_dt.strftime("%Y-%m-%d %H:%M") + " (北京时间)"
+
+    # 盘中刷新的前端脚本：阈值表直接从 Python 常量序列化过去，
+    # 免得 JS 里再手写一套档位，两边迟早对不上。
+    live_quotes_script = (
+        "<script>"
+        + _LIVE_JS_SRC.replace(
+            "__LIVE_RULES__",
+            json.dumps(LIVE_MACRO_RULES, ensure_ascii=False, separators=(",", ":")),
+        )
+        + "</script>"
+    )
+
+    if now_dt.weekday() == 5:
+        fri_dt = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        col_today_title = f"今日涨幅 (基准周五: {fri_dt})"
+    elif now_dt.weekday() == 6:
+        fri_dt = (now_dt - timedelta(days=2)).strftime("%Y-%m-%d")
+        col_today_title = f"今日涨幅 (基准周五: {fri_dt})"
+    else:
+        col_today_title = f"今日涨幅 ({today_str})"
+
+    mode_badge = '<span style="background:#e67e22; color:#fff; font-size:11px; padding:2px 8px; border-radius:10px; margin-left:6px;">🛠️ 调试测试模式</span>' if is_debug_mode else '<span style="background:#188038; color:#fff; font-size:11px; padding:2px 8px; border-radius:10px; margin-left:6px;">🚀 正式发布版本</span>'
+
+    fng = metrics["fng"]
+    vix = metrics["vix"]
+    usdcny = metrics["usdcny"]
+    vxn = metrics["vxn"]
+    vxsmh = metrics.get("vxsmh", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+    skew = metrics["skew"]
+    brent = metrics["brent"]
+
+    gold_london = metrics.get("gold_london", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+    gold_shfe = metrics.get("gold_shfe", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+    silver_london = metrics.get("silver_london", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+    copper_lme = metrics.get("copper_lme", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+    btc = metrics.get("btc", {"val": 0.0, "status": "数据暂缺", "source": "获取失败", "url": "#", "desc": ""})
+
+    brent_tag_color = "#70757a" if brent['val'] <= 0 else ("#d93025" if brent['val'] >= 95 else ("#e67e22" if brent['val'] >= 80 else ("#188038" if brent['val'] >= 65 else "#1a73e8")))
+    gold_tag_color = "#70757a" if gold_london['val'] <= 0 else ("#d93025" if gold_london['val'] >= 2500 else ("#e67e22" if gold_london['val'] >= 2000 else ("#188038" if gold_london['val'] >= 1500 else "#1a73e8")))
+    gold_shfe_tag_color = "#70757a" if gold_shfe['val'] <= 0 else ("#d93025" if gold_shfe['val'] >= 700 else ("#e67e22" if gold_shfe['val'] >= 600 else ("#188038" if gold_shfe['val'] >= 500 else "#1a73e8")))
+    silver_tag_color = "#70757a" if silver_london['val'] <= 0 else ("#d93025" if silver_london['val'] >= 35 else ("#e67e22" if silver_london['val'] >= 28 else ("#188038" if silver_london['val'] >= 20 else "#1a73e8")))
+    copper_tag_color = "#70757a" if copper_lme['val'] <= 0 else ("#d93025" if copper_lme['val'] >= 5.5 else ("#e67e22" if copper_lme['val'] >= 4.5 else ("#188038" if copper_lme['val'] >= 3.5 else "#1a73e8")))
+    btc_tag_color = "#70757a" if btc['val'] <= 0 else ("#d93025" if btc['val'] >= 100000 else ("#e67e22" if btc['val'] >= 70000 else ("#188038" if btc['val'] >= 40000 else "#1a73e8")))
+
+    macro_history = macro_history or {}
+    index_valuation_history = index_valuation_history or {}
+    for key, item in index_valuation_history.items():
+        if item and item.get("points"):
+            macro_history["pe_" + key] = item
+
+    for _history_key, _label in (
+        ("pe_ndx", "纳指100"),
+        ("pe_sp500", "标普500"),
+        ("pe_hs300", "沪深300"),
+        ("pe_kc50", "科创50"),
+        ("pe_hstech", "恒生科技"),
+    ):
+        macro_history.setdefault(
+            _history_key,
+            {
+                "title": f"{_label}历史 PE",
+                "unit": "倍",
+                "source": "蛋卷指数估值",
+                "points": [],
+            },
+        )
+
+    def _append_current_history_value(key, value, title, unit, source, value_date=""):
+        if value is None:
+            return
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return
+        if numeric <= 0:
+            return
+        # 估值类数据的「今天」由数据源决定（美股 PE 天然比 A 股晚一天），
+        # 不能一律写 today_str，否则会把昨天的值复制成今天的点。
+        point_date = str(value_date or today_str)
+        append_macro_history_points(
+            macro_history,
+            key,
+            [[point_date, numeric]],
+            title,
+            unit,
+            source,
+        )
+
+    current_history_sources = {
+        "cnn": (fng.get("score"), "CNN 恐慌贪婪指数", "分", "CNN 官方历史序列"),
+        "vix": (vix.get("val"), "VIX 标普500波动率", "点", "CBOE 官方历史收盘价"),
+        "vxn": (vxn.get("val"), "VXN 纳斯达克100波动率", "点", "CBOE 官方历史收盘价"),
+        "vxsmh": (vxsmh.get("val"), "VXSMH 半导体 ETF 波动率", "点", "CBOE 官方历史收盘价"),
+        "skew": (skew.get("val"), "SKEW 黑天鹅偏斜", "点", "CBOE 官方历史收盘价"),
+        "usdcny": (usdcny.get("val"), "USD/CNY 汇率", "", "东方财富 USDCNH 历史日线"),
+        "gold_london": (gold_london.get("val"), "伦敦金 (XAU/USD)", "美元/盎司", "东方财富 COMEX 黄金历史日线"),
+        "gold_shfe": (gold_shfe.get("val"), "沪金主连 (AU0)", "元/克", "新浪 AkShare 沪金历史日线"),
+        "silver_london": (silver_london.get("val"), "伦敦银 (XAG/USD)", "美元/盎司", "东方财富 COMEX 白银历史日线"),
+        "copper_lme": (copper_lme.get("val"), "COMEX 铜", "美元/磅", "东方财富 COMEX 铜历史日线"),
+        "brent": (brent.get("val"), "布伦特原油 (BZ=F)", "美元/桶", "新浪 Brent 期货 + EIA 布伦特现货"),
+        "btc": (btc.get("val"), "比特币 (BTC/USDT)", "USDT", "Binance 日线"),
+    }
+    for _history_key, (_value, _title, _unit, _source) in current_history_sources.items():
+        _append_current_history_value(_history_key, _value, _title, _unit, _source)
+
+    index_history_key_map = {
+        "纳指100": "pe_ndx",
+        "标普500": "pe_sp500",
+        "沪深300": "pe_hs300",
+        "科创50": "pe_kc50",
+        "恒生科技": "pe_hstech",
+    }
+    for _item in index_valuations:
+        _history_key = index_history_key_map.get(_item.get("name"))
+        if _history_key:
+            _append_current_history_value(
+                _history_key,
+                _item.get("pe"),
+                f"{_item.get('name')}历史 PE",
+                "倍",
+                "蛋卷指数估值",
+                _item.get("date") or "",
+            )
+
+    def _macro_history_available(key):
+        return bool(macro_history.get(key, {}).get("points"))
+
+    def _macro_history_attrs(key, panel_id):
+        if not _macro_history_available(key):
+            return ' class="metric-card"'
+        return (
+            ' class="metric-card metric-card-expandable"'
+            f' data-macro-history="{key}" role="button" tabindex="0"'
+            f' data-macro-panel="{panel_id}"'
+            f' aria-expanded="false" aria-controls="{panel_id}"'
+            ' title="点击展开历史数据图"'
+        )
+
+    def _macro_history_hint(key):
+        if not _macro_history_available(key):
+            return ''
+        return (
+            '<span class="metric-expand-hint" aria-hidden="true">'
+            '历史图 <span class="chevron">▼</span></span>'
+        )
+
+    index_cards_html = ""
+    for item in index_valuations:
+        ticker_html = (
+            f'<span style="font-size: 13px; color: var(--footer-text); '
+            f'font-weight: normal; margin-left: 4px;">({item["ticker"]})</span>'
+            if item["ticker"] else ""
+        )
+        history_key = index_history_key_map.get(item["name"], "")
+        card_attrs = (
+            _macro_history_attrs(history_key, "macroHistoryPanelIndex")
+            if history_key else ' class="metric-card"'
+        )
+        # 蛋卷的美股 PE 是 T+1 收盘估值（今天只能给到前一个交易日），
+        # 把数据日期标在数字后面，避免与 A 股卡片对比时误以为「没更新」。
+        _pe_asof = str(item.get("date") or "")
+        pe_asof_html = (
+            f'<span style="font-size:11px; font-weight:500; color:var(--footer-text); '
+            f'margin-left:6px;">截至 {_pe_asof[5:]}</span>'
+            if len(_pe_asof) == 10 else ""
+        )
+        index_cards_html += f"""
+        <div{card_attrs}>
+            <div class="metric-header">
+                <span style="font-size: 18px; font-weight: 800; color: var(--text); display: flex; align-items: baseline;">
+                    {item['name'].split('（')[0]} {ticker_html}
+                </span>
+                {_macro_history_hint(history_key) if history_key else ''}
+                <span class="metric-tag" style="background:rgba(0,0,0,0.05); color:{item['color']};">{item['status']}</span>
+            </div>
+            <div class="metric-body" style="margin: 12px 0 6px 0;">
+                <span class="metric-value" style="color:var(--link-color); font-size:22px;">PE: {item['pe']}{pe_asof_html}</span>
+            </div>
+            <div class="metric-desc" style="border-top: none; padding-top: 0;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px;">
+                    <span>历史分位</span>
+                    <strong style="color:var(--text);">{item['pct']}</strong>
+                </div>
+                <div style="width: 100%; height: 6px; background-color: var(--progress-track); border-radius: 3px; overflow: hidden;">
+                    <div style="width: {item['pct_raw']}%; height: 100%; background-color: {item['color']}; border-radius: 3px; transition: width 1s ease-in-out;"></div>
+                </div>
+
+            </div>
+        </div>
+        """
+
+    # ===== 宽基指数估值：给 PE 序列挂载指数点位，供历史图右轴叠加展示 =====
+    # 只注入页面，不写回缓存：overlay 是按 PE 日期轴对齐后的派生数组。
+    # ★ PE 只有 10 年（蛋卷 day=all 的硬上限），但指数点位能到 2000 年。
+    #   若只按 PE 日期做横轴，估值图的起点会被 PE 卡在 2016-10，看起来像「数据没取全」。
+    #   因此把横轴改成「PE 日期 ∪ 2000 年起的周采样点位日期」，PE 在自身起点之前留空，
+    #   点位线从指数起点连续画起，两条线共用同一日期轴。
+    _macro_history_for_page = {}
+    for _key, _item in macro_history.items():
+        if _key in INDEX_POINT_TARGETS:
+            continue
+        _macro_history_for_page[_key] = dict(_item) if isinstance(_item, dict) else _item
+
+    _idx_weekly = _read_index_daily_weekly()
+    for _pe_key, (_idx_key, _label) in INDEX_PE_OVERLAY.items():
+        _pe_item = _macro_history_for_page.get(_pe_key) or {}
+        _idx_item = (index_point_history or {}).get(_idx_key) or {}
+        _pe_points = _pe_item.get("points") or []
+        _idx_points = _idx_item.get("points") or []
+        if not _pe_points:
+            continue
+        _pe_map = {}
+        for _row in _pe_points:
+            try:
+                _pe_map[str(_row[0])] = float(_row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+        if not _pe_map:
+            continue
+        _idx_map = {}
+        for _row in _idx_points:
+            try:
+                _idx_map[str(_row[0])] = float(_row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+        if not _idx_map:
+            continue
+
+        _pe_start = min(_pe_map)
+        _dd_name = (INDEX_POINT_TARGETS.get(_idx_key) or (None,) * 6)[5]
+        # 点位两个来源：周采样快照（2000 年起，每周一个收盘）+ 指数日线（近 10 年，日频）。
+        # 日线写在后面，同一天覆盖周采样，保证 2016 年以后是真实日频。
+        _point_map = {}
+        for _row in ((_idx_weekly.get(_dd_name) or {}).get("points") or []):
+            try:
+                _d = str(_row[0])
+                _v = float(_row[1])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if _v > 0:
+                _point_map[_d] = _v
+        for _d, _v in _idx_map.items():
+            _point_map[_d] = _v
+
+        # 横轴 = PE 日期 ∪ 点位日期（含 2000 年起的周采样）。
+        # ★ 不能只取 PE 日期：长历史 PE 是月频（每年 12 个点），只按它建轴会让
+        #   2000-2016 的点位一年只剩 12 个采样点，点位折线变得又钝又假；
+        #   而美股 PE 日期（北京时间）与点位日线（美东日期）几乎不重合，
+        #   全量并集又会把两套序列切碎。所以并入"周采样"这一层，粒度可控。
+        #   PE 在周采样日期上是 null，前端 spanGaps 直连月度点，不影响连续。
+        _axis = sorted(set(_pe_map) | set(_point_map))
+        _overlay_values = _align_points_to_dates(_axis, sorted(_point_map.items()))
+        _pe_item["points"] = [[_d, _pe_map.get(_d)] for _d in _axis]
+        _overlay_source = ((_idx_weekly.get(_dd_name) or {}).get("source")
+                           or _idx_item.get("source") or "东方财富指数日线")
+        if not any(value is not None for value in _overlay_values):
+            continue
+        _pe_item["overlay"] = {
+            "title": f"{_label}指数点位",
+            "unit": "点",
+            "axisTitle": "点位(千)",
+            "divisor": 1000,
+            "source": _overlay_source,
+            "values": _overlay_values,
+            # 供前端在图注里说明「PE 起点晚于横轴起点」；PE 与点位同起点时置空
+            "peStart": _pe_start if _axis and _axis[0] < _pe_start else "",
+            # PE 的最后一天（美股 T+1 收盘估值，常比点位轴晚一格）
+            "peEnd": max(_pe_map),
+        }
+
+    macro_history_json = json.dumps(
+        _macro_history_for_page, ensure_ascii=False, separators=(",", ":")
+    ).replace("</", "<\\/")
+
+    macro_history_script = r"""
+<script>
+(function() {
+    'use strict';
+
+    const MACRO_HISTORY = __MACRO_HISTORY_JSON__;
+    const MACRO_CONFIG = {
+        usdcny: {
+            lineColor: '#188038',
+            yStart: 5.8,
+            suggestedMax: 7.6,
+            sourceUrl: 'https://finance.sina.com.cn/money/forex/hq/USDCNY.shtml',
+            bands: [
+                { min: 0,   max: 7.15, label: '人民币偏强', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 7.15, max: 7.30, label: '区间震荡',   color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 7.30, max: 20,   label: '美元偏强',   color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' }
+            ],
+            lines: [
+                { value: 7.15, label: '7.15 偏强', color: '#188038' },
+                { value: 7.30, label: '7.30 偏强', color: '#e67e22' }
+            ]
+        },
+        skew: {
+            lineColor: '#6f42c1',
+            yStart: 90,
+            suggestedMax: 170,
+            sourceUrl: 'https://www.cboe.com/us/indices/dashboard/skew/',
+            bands: [
+                { min: 0,   max: 132, label: '常态平稳', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 132, max: 140, label: '风险积聚', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 140, max: 300, label: '尾部警戒', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 132, label: '132 积聚', color: '#e67e22' },
+                { value: 140, label: '140 预警', color: '#d93025' }
+            ]
+        },
+        vix: {
+            lineColor: '#1a73e8',
+            yStart: 8,
+            suggestedMax: 45,
+            sourceUrl: 'https://www.cboe.com/us/indices/dashboard/vix/',
+            bands: [
+                { min: 0,  max: 15,  label: '平稳低波',   color: 'rgba(24,128,56,0.08)',  swatch: '#188038' },
+                { min: 15, max: 20,  label: '正常震荡',   color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 20, max: 30,  label: '警惕波动',   color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 30, max: 200, label: '极度恐慌',   color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 15, label: '15 平稳', color: '#188038' },
+                { value: 20, label: '20 警惕', color: '#e67e22' },
+                { value: 30, label: '30 恐慌', color: '#d93025' }
+            ]
+        },
+        vxn: {
+            lineColor: '#0f9d58',
+            yStart: 8,
+            suggestedMax: 45,
+            sourceUrl: 'https://www.cboe.com/us/indices/dashboard/vxn/',
+            bands: [
+                { min: 0,  max: 22,  label: '波动平缓',   color: 'rgba(24,128,56,0.08)',  swatch: '#188038' },
+                { min: 22, max: 30,  label: '杀估值抛压', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 30, max: 200, label: '科技股极恐', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 22, label: '22 抛压', color: '#e67e22' },
+                { value: 30, label: '30 极恐', color: '#d93025' }
+            ]
+        },
+        // VXSMH 中枢显著高于 VIX/VXN（历史中位数约 42），阈值按自身分布分档
+        vxsmh: {
+            lineColor: '#9334e6',
+            yStart: 25,
+            suggestedMax: 75,
+            sourceUrl: 'https://www.cboe.com/us/indices/dashboard/vxsmh/',
+            bands: [
+                { min: 0,  max: 38,  label: '平稳低波',   color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 38, max: 45,  label: '正常震荡',   color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 45, max: 55,  label: '警惕波动',   color: 'rgba(230,126,34,0.10)',  swatch: '#e67e22' },
+                { min: 55, max: 200, label: '半导体极恐', color: 'rgba(217,48,37,0.10)',   swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 38, label: '38 平稳', color: '#188038' },
+                { value: 45, label: '45 警惕', color: '#e67e22' },
+                { value: 55, label: '55 极恐', color: '#d93025' }
+            ]
+        },
+        cnn: {
+            lineColor: '#6f42c1',
+            yStart: 0,
+            yEnd: 100,
+            sourceUrl: 'https://edition.cnn.com/markets/fear-and-greed',
+            bands: [
+                { min: 0,  max: 25,  label: '极度恐惧', color: 'rgba(217,48,37,0.12)',  swatch: '#d93025' },
+                { min: 25, max: 45,  label: '恐惧',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 45, max: 55,  label: '中性',     color: 'rgba(128,134,139,0.10)', swatch: '#80868b' },
+                { min: 55, max: 75,  label: '贪婪',     color: 'rgba(52,168,83,0.09)',  swatch: '#34a853' },
+                { min: 75, max: 100, label: '极度贪婪', color: 'rgba(24,128,56,0.13)',  swatch: '#188038' }
+            ],
+            lines: [
+                { value: 25, label: '25 极恐', color: '#d93025' },
+                { value: 45, label: '45 恐惧', color: '#e67e22' },
+                { value: 55, label: '55 中性', color: '#2f855a' },
+                { value: 75, label: '75 贪婪', color: '#188038' }
+            ]
+        },
+        gold_london: {
+            lineColor: '#f39c12',
+            yStart: 800,
+            suggestedMax: 4800,
+            sourceUrl: 'https://www.investing.com/currencies/xau-usd',
+            bands: [
+                { min: 0,    max: 1500, label: '低位盘整', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 1500, max: 2000, label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 2000, max: 2500, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 2500, max: 10000,label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 1500, label: '1500 低位', color: '#1a73e8' },
+                { value: 2000, label: '2000 中性', color: '#188038' },
+                { value: 2500, label: '2500 高企', color: '#d93025' }
+            ]
+        },
+        gold_shfe: {
+            lineColor: '#e67e22',
+            yStart: 150,
+            suggestedMax: 950,
+            sourceUrl: 'https://finance.sina.com.cn/futures/quotes/AU0.shtml',
+            bands: [
+                { min: 0,   max: 500, label: '低位盘整', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 500, max: 600, label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 600, max: 700, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 700, max: 3000,label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 500, label: '500 低位', color: '#1a73e8' },
+                { value: 600, label: '600 中性', color: '#188038' },
+                { value: 700, label: '700 高企', color: '#d93025' }
+            ]
+        },
+        silver_london: {
+            lineColor: '#95a5a6',
+            yStart: 8,
+            suggestedMax: 65,
+            sourceUrl: 'https://www.investing.com/currencies/xag-usd',
+            bands: [
+                { min: 0,  max: 20, label: '低位盘整', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 20, max: 28, label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 28, max: 35, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 35, max: 200,label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 20, label: '20 低位', color: '#1a73e8' },
+                { value: 28, label: '28 中位', color: '#188038' },
+                { value: 35, label: '35 高企', color: '#d93025' }
+            ]
+        },
+        copper_lme: {
+            lineColor: '#b87333',
+            yStart: 2,
+            suggestedMax: 7,
+            sourceUrl: 'https://finance.yahoo.com/quote/HG%3DF/',
+            bands: [
+                { min: 0,   max: 3.5, label: '需求疲软', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 3.5, max: 4.5, label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 4.5, max: 5.5, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 5.5, max: 20,  label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 3.5, label: '3.5 低位', color: '#1a73e8' },
+                { value: 4.5, label: '4.5 中位', color: '#188038' },
+                { value: 5.5, label: '5.5 高企', color: '#d93025' }
+            ]
+        },
+        brent: {
+            lineColor: '#2c3e50',
+            yStart: 10,
+            suggestedMax: 130,
+            sourceUrl: 'https://finance.sina.com.cn/futures/quotes/OIL.shtml',
+            bands: [
+                { min: 0,  max: 65,  label: '需求疲软', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 65, max: 80,  label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 80, max: 95,  label: '通胀溢价', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 95, max: 300, label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 65, label: '65 低位', color: '#1a73e8' },
+                { value: 80, label: '80 中位', color: '#188038' },
+                { value: 95, label: '95 高企', color: '#d93025' }
+            ]
+        },
+        btc: {
+            lineColor: '#f7931a',
+            yStart: 0,
+            suggestedMax: 120000,
+            sourceUrl: 'https://www.binance.com/zh-CN/trade/BTC_USDT',
+            bands: [
+                { min: 0,      max: 40000,  label: '低位盘整', color: 'rgba(26,115,232,0.07)',  swatch: '#1a73e8' },
+                { min: 40000,  max: 70000,  label: '温和中性', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 70000,  max: 100000, label: '高位震荡', color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 100000, max: 1000000,label: '极度高企', color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 40000,  label: '4万 低位', color: '#1a73e8' },
+                { value: 70000,  label: '7万 中位', color: '#188038' },
+                { value: 100000, label: '10万 高企', color: '#d93025' }
+            ]
+        },
+        pe_ndx: {
+            lineColor: '#1a73e8',
+            yStart: 10,
+            suggestedMax: 50,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,  max: 20, label: '极度低估', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 20, max: 30, label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 30, max: 40, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 40, max: 200,label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 20, label: 'PE 20', color: '#188038' },
+                { value: 30, label: 'PE 30', color: '#1a73e8' },
+                { value: 40, label: 'PE 40', color: '#d93025' }
+            ]
+        },
+        pe_sp500: {
+            lineColor: '#1a73e8',
+            yStart: 8,
+            suggestedMax: 40,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,  max: 15, label: '低估',     color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 15, max: 25, label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 25, max: 32, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 32, max: 200,label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 15, label: 'PE 15', color: '#188038' },
+                { value: 25, label: 'PE 25', color: '#1a73e8' },
+                { value: 32, label: 'PE 32', color: '#d93025' }
+            ]
+        },
+        pe_hs300: {
+            lineColor: '#1a73e8',
+            yStart: 5,
+            suggestedMax: 25,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,  max: 10, label: '低估',     color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 10, max: 15, label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 15, max: 20, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 20, max: 200,label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 10, label: 'PE 10', color: '#188038' },
+                { value: 15, label: 'PE 15', color: '#1a73e8' },
+                { value: 20, label: 'PE 20', color: '#d93025' }
+            ]
+        },
+        pe_kc50: {
+            lineColor: '#1a73e8',
+            yStart: 20,
+            suggestedMax: 150,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,   max: 40,  label: '相对低位', color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 40,  max: 80,  label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 80,  max: 120, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 120, max: 500, label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 40,  label: 'PE 40',  color: '#188038' },
+                { value: 80,  label: 'PE 80',  color: '#1a73e8' },
+                { value: 120, label: 'PE 120', color: '#d93025' }
+            ]
+        },
+        pe_hstech: {
+            lineColor: '#1a73e8',
+            yStart: 10,
+            suggestedMax: 50,
+            yUnit: ' 倍',
+            sourceUrl: 'https://danjuanfunds.com/screw/valuation-table',
+            bands: [
+                { min: 0,  max: 15, label: '低估',     color: 'rgba(24,128,56,0.08)',   swatch: '#188038' },
+                { min: 15, max: 25, label: '合理区间', color: 'rgba(26,115,232,0.07)', swatch: '#1a73e8' },
+                { min: 25, max: 35, label: '偏高',     color: 'rgba(230,126,34,0.10)', swatch: '#e67e22' },
+                { min: 35, max: 200,label: '高估',     color: 'rgba(217,48,37,0.10)',  swatch: '#d93025' }
+            ],
+            lines: [
+                { value: 15, label: 'PE 15', color: '#188038' },
+                { value: 25, label: 'PE 25', color: '#1a73e8' },
+                { value: 35, label: 'PE 35', color: '#d93025' }
+            ]
+        }
+    };
+
+    const state = {
+        key: null,
+        target: null,
+        panel: null,
+        chart: null,
+        waitAttempts: 0,
+        zoomRange: null,
+        // 估值卡默认只画「有 PE 的区间」（蛋卷 PE 最多 10 年），
+        // 需要看指数 2000 年以来的长周期点位时再手动切到全量横轴。
+        fullRange: false
+    };
+    const PANEL_IDS = [
+        'macroHistoryPanelCore',
+        'macroHistoryPanelCommodity',
+        'macroHistoryPanelIndex'
+    ];
+
+    function themeColors() {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        return {
+            text: dark ? '#b9c0c8' : '#5f6368',
+            grid: dark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)',
+            labelBg: dark ? 'rgba(37,37,37,0.88)' : 'rgba(255,255,255,0.90)',
+            // 估值图双轴：PE 用高对比中性色，点位用蓝色（与右侧坐标轴同色）
+            peLine: dark ? '#e8eaed' : '#202124',
+            pointLine: dark ? '#6ea8fe' : '#1a73e8'
+        };
+    }
+
+    function drawMacroRangeLines(chart, opts) {
+        if (!opts || !opts.lines) return;
+        const area = chart.chartArea;
+        const yScale = chart.scales && chart.scales.y;
+        if (!area || !yScale) return;
+        const ctx = chart.ctx;
+        // 双轴图右侧是点位坐标轴，虚线只画到绘图区右边界，避免穿过右轴刻度
+        const rightEdge = (chart.scales && chart.scales.y1)
+            ? area.right : (chart.width - 54);
+
+        opts.lines.forEach(function(line) {
+            const y = yScale.getPixelForValue(line.value);
+            if (y < area.top || y > area.bottom) return;
+            ctx.save();
+            ctx.strokeStyle = line.color;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 3]);
+            ctx.lineDashOffset = 0;
+            ctx.beginPath();
+            ctx.moveTo(area.left, y);
+            ctx.lineTo(rightEdge, y);
+            ctx.stroke();
+            ctx.restore();
+        });
+    }
+
+    function ensureRangePlugin() {
+        if (window.__macroRangePluginRegistered || typeof Chart === 'undefined') return;
+        Chart.register({
+            id: 'macroRanges',
+            beforeDatasetsDraw(chart, args, opts) {
+                if (!opts || !opts.bands) return;
+                const area = chart.chartArea;
+                const yScale = chart.scales && chart.scales.y;
+                if (!area || !yScale) return;
+                const ctx = chart.ctx;
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(area.left, area.top, area.width, area.height);
+                ctx.clip();
+                opts.bands.forEach(function(band) {
+                    const yA = yScale.getPixelForValue(band.max);
+                    const yB = yScale.getPixelForValue(band.min);
+                    const top = Math.max(area.top, Math.min(yA, yB));
+                    const bottom = Math.min(area.bottom, Math.max(yA, yB));
+                    if (bottom <= top) return;
+                    ctx.fillStyle = band.color;
+                    ctx.fillRect(area.left, top, area.width, bottom - top);
+                });
+                ctx.restore();
+            },
+            afterDatasetsDraw(chart, args, opts) {
+                drawMacroRangeLines(chart, opts);
+            }
+        });
+        Chart.register({
+            id: 'macroCrosshairPlugin',
+            afterDraw(chart) {
+                const crosshair = chart._macroCrosshair;
+                if (!crosshair) return;
+                const area = chart.chartArea;
+                const ctx = chart.ctx;
+                if (!area || crosshair.x < area.left || crosshair.x > area.right ||
+                    crosshair.y < area.top || crosshair.y > area.bottom) return;
+
+                if (!window._crosshairLineColor) {
+                    window._crosshairLineColor =
+                        getComputedStyle(document.documentElement)
+                            .getPropertyValue('--footer-text').trim() || '#70757a';
+                }
+                ctx.save();
+                ctx.beginPath();
+                ctx.setLineDash([4, 4]);
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = window._crosshairLineColor;
+                ctx.moveTo(crosshair.x, area.top);
+                ctx.lineTo(crosshair.x, area.bottom);
+                ctx.moveTo(area.left, crosshair.y);
+                ctx.lineTo(area.right, crosshair.y);
+                ctx.stroke();
+                ctx.restore();
+            }
+        });
+        window.__macroRangePluginRegistered = true;
+    }
+
+    function classifyValue(cfg, value) {
+        const band = cfg.bands.find(function(item) {
+            return value >= item.min && value < item.max;
+        });
+        return band ? band.label : cfg.bands[cfg.bands.length - 1].label;
+    }
+
+    function panelPart(name) {
+        if (!state.panel) return null;
+        return state.panel.querySelector('[data-macro-part="' + name + '"]');
+    }
+
+    function renderLegend(cfg, series, colors) {
+        const legend = panelPart('legend');
+        if (!legend) return;
+        legend.replaceChildren();
+        cfg.bands.forEach(function(band) {
+            const item = document.createElement('span');
+            item.className = 'macro-history-legend-item';
+            const swatch = document.createElement('span');
+            swatch.className = 'macro-history-legend-swatch';
+            swatch.style.background = band.swatch;
+            const text = document.createElement('span');
+            const upper = band.max >= 200 ? '∞' : band.max;
+            text.textContent = band.min + '–' + upper + ' ' + band.label;
+            item.append(swatch, text);
+            legend.appendChild(item);
+        });
+        const overlay = series && series.overlay;
+        if (overlay) {
+            // 先标 PE 线（左轴），再标点位线（右轴）：两条线的起点不同，必须让读者分得清
+            const peItem = document.createElement('span');
+            peItem.className = 'macro-history-legend-item';
+            const peSwatch = document.createElement('span');
+            peSwatch.className = 'macro-history-legend-swatch';
+            peSwatch.style.background = (colors && colors.peLine) || '#d93025';
+            const peText = document.createElement('span');
+            peText.textContent = '市盈率 PE（左轴 · 倍）';
+            peItem.append(peSwatch, peText);
+            legend.appendChild(peItem);
+
+            const item = document.createElement('span');
+            item.className = 'macro-history-legend-item';
+            const swatch = document.createElement('span');
+            swatch.className = 'macro-history-legend-swatch';
+            swatch.style.background = (colors && colors.pointLine) || '#1a73e8';
+            const text = document.createElement('span');
+            text.textContent = overlay.title + '（右轴 · ' + overlay.axisTitle + '）';
+            item.append(swatch, text);
+            legend.appendChild(item);
+        }
+    }
+
+    function renderRangeLabels(cfg, chart) {
+        const layer = panelPart('rangeLabels');
+        if (!layer || !chart || !chart.scales || !chart.scales.y) return;
+        layer.replaceChildren();
+        const candidates = [];
+        cfg.lines.forEach(function(line) {
+            const y = chart.scales.y.getPixelForValue(line.value);
+            if (!Number.isFinite(y) || y < chart.chartArea.top || y > chart.chartArea.bottom) return;
+            candidates.push({ line: line, y: y });
+        });
+        candidates.sort(function(a, b) { return a.y - b.y; });
+
+        const gap = 18;
+        const minY = chart.chartArea.top + gap / 2;
+        const maxY = chart.chartArea.bottom - gap / 2;
+        for (let i = 1; i < candidates.length; i++) {
+            candidates[i].y = Math.max(candidates[i].y, candidates[i - 1].y + gap);
+        }
+        if (candidates.length && candidates[candidates.length - 1].y > maxY) {
+            const shift = candidates[candidates.length - 1].y - maxY;
+            candidates.forEach(function(item) { item.y -= shift; });
+        }
+        if (candidates.length && candidates[0].y < minY) {
+            const shift = minY - candidates[0].y;
+            candidates.forEach(function(item) { item.y += shift; });
+        }
+
+        candidates.forEach(function(item) {
+            const tag = document.createElement('span');
+            tag.className = 'macro-range-tag';
+            tag.style.top = item.y + 'px';
+            tag.style.color = item.line.color;
+            tag.textContent = item.line.label;
+            tag.dataset.value = String(item.line.value);
+            layer.appendChild(tag);
+        });
+    }
+
+    function destroyChart() {
+        if (state.chart) {
+            try { state.chart.destroy(); } catch (e) {}
+            state.chart = null;
+        }
+    }
+
+    function handleMacroHover(event, activeElements, chart) {
+        const rect = chart.canvas.getBoundingClientRect();
+        const x = event.native ? event.native.offsetX : (event.x - rect.left);
+        const y = event.native ? event.native.offsetY : (event.y - rect.top);
+        if (x >= chart.chartArea.left && x <= chart.chartArea.right &&
+            y >= chart.chartArea.top && y <= chart.chartArea.bottom) {
+            chart._macroCrosshair = { x: x, y: y };
+        } else {
+            chart._macroCrosshair = null;
+        }
+        if (!chart._macroRafPending) {
+            chart._macroRafPending = true;
+            requestAnimationFrame(function() {
+                chart._macroRafPending = false;
+                chart.draw();
+            });
+        }
+    }
+
+    // 估值卡的 PE 起点下标（蛋卷只给近 10 年，点位却能回溯到 2000 年）。
+    // 默认横轴从 PE 起点开始：两条线都能铺满整张图，不会出现「左半张只有点位、
+    // 没有 PE」的残缺画面；用户点「自 2000 起」时才把横轴拉回指数起点。
+    function macroPeStartIndex(series) {
+        if (!series || !series.overlay || !series.overlay.peStart) return 0;
+        const points = series.points || [];
+        const at = points.findIndex(function(point) {
+            return point && point[0] >= series.overlay.peStart;
+        });
+        return at > 0 ? at : 0;
+    }
+
+    function macroBaseStart(series) {
+        if (state.fullRange) return 0;
+        const points = (series && series.points) || [];
+        const values = (series && series.overlay && series.overlay.values) || null;
+        let at = macroPeStartIndex(series);
+        // 科创50/恒生科技这类「PE 早于指数发布日」的标的，PE 起点之前点位是空的，
+        // 起点要同时满足「有 PE」和「有点位」，否则左侧又会出现半张空白。
+        if (values) {
+            while (at < points.length - 1 && (values[at] === null || values[at] === undefined)) {
+                at += 1;
+            }
+        }
+        return at;
+    }
+
+    function updateMacroHistoryMeta(key) {
+        const series = MACRO_HISTORY[key];
+        if (!series || !series.points || !series.points.length) return;
+        const total = series.points.length;
+        let start = macroBaseStart(series);
+        let end = total - 1;
+        if (state.zoomRange) {
+            start = Math.max(0, Math.min(state.zoomRange[0], total - 2));
+            end = Math.max(start + 1, Math.min(state.zoomRange[1], total - 1));
+        }
+        const count = end - start + 1;
+        const meta = panelPart('meta');
+        // 双轴卡的来源分开写清楚：左轴 PE 一条源，右轴点位一条源
+        const sourceText = series.overlay
+            ? 'PE：' + series.source + ' · 点位：' + (series.overlay.source || '指数日线')
+            : series.source;
+        // PE 起点晚于点位起点时，说明缺口是数据源限制而不是抓取失败
+        const peIdx = macroPeStartIndex(series);
+        const peNote = (peIdx > 0 && series.overlay.peStart)
+            ? (start >= peIdx
+                ? ' · PE 与点位均自 ' + series.overlay.peStart + ' 起'
+                : ' · ' + series.overlay.peStart + ' 之前只有点位，无 PE')
+            : '';
+        // 美股 PE 是 T+1 收盘估值，通常比点位轴晚一个交易日，注明以免误判「没更新」
+        const peEndNote = (series.overlay && series.overlay.peEnd
+            && series.points[end][0] > series.overlay.peEnd)
+            ? ' · PE 截至 ' + series.overlay.peEnd
+            : '';
+        if (meta) meta.textContent =
+            series.points[start][0] + ' ~ ' + series.points[end][0] +
+            ' · ' + count.toLocaleString('zh-CN') + ' 个观测点 · ' +
+            sourceText + peNote + peEndNote;
+        const reset = panelPart('resetZoom');
+        if (reset) reset.hidden = !state.zoomRange;
+        const toggle = panelPart('rangeToggle');
+        if (toggle) {
+            toggle.hidden = peIdx <= 0;
+            if (peIdx > 0) {
+                toggle.textContent = state.fullRange
+                    ? '只看 PE 区间'
+                    : '自 ' + String(series.points[0][0]).slice(0, 4) + ' 起';
+                toggle.title = state.fullRange
+                    ? '收起到 PE 与点位都有数据的区间'
+                    : '横轴拉回指数起点，PE 之前只有点位';
+            }
+        }
+    }
+
+    function setupMacroSelection(canvas, panel) {
+        if (!canvas || canvas._macroSelectionBound) return;
+        canvas._macroSelectionBound = true;
+        const box = panel.querySelector('[data-macro-part="selectionBox"]');
+        let drag = null;
+
+        function pointerPosition(event) {
+            const rect = canvas.getBoundingClientRect();
+            return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        }
+
+        function drawSelection(chart, x) {
+            if (!box) return;
+            const area = chart.chartArea;
+            const left = Math.max(area.left, Math.min(drag.startX, x));
+            const right = Math.min(area.right, Math.max(drag.startX, x));
+            box.style.left = left + 'px';
+            box.style.top = area.top + 'px';
+            box.style.width = Math.max(0, right - left) + 'px';
+            box.style.height = (area.bottom - area.top) + 'px';
+            box.hidden = false;
+            drag.currentX = x;
+        }
+
+        function finishSelection() {
+            const chart = state.chart;
+            if (!drag || !chart || !box) {
+                drag = null;
+                return;
+            }
+            const area = chart.chartArea;
+            const startX = Math.max(area.left, Math.min(drag.startX, area.right));
+            const endX = Math.max(area.left, Math.min(drag.currentX, area.right));
+            box.hidden = true;
+            canvas.style.cursor = '';
+            if (Math.abs(endX - startX) < 12 || !chart.data.labels.length) {
+                drag = null;
+                return;
+            }
+
+            const ratioA = (Math.min(startX, endX) - area.left) / Math.max(1, area.right - area.left);
+            const ratioB = (Math.max(startX, endX) - area.left) / Math.max(1, area.right - area.left);
+            const currentStart = state.zoomRange
+                ? state.zoomRange[0]
+                : macroBaseStart(MACRO_HISTORY[state.key]);
+            const currentCount = chart.data.labels.length;
+            const localStart = Math.round(ratioA * Math.max(0, currentCount - 1));
+            const localEnd = Math.round(ratioB * Math.max(0, currentCount - 1));
+            if (localEnd - localStart < 1) {
+                drag = null;
+                return;
+            }
+            state.zoomRange = [currentStart + localStart, currentStart + localEnd];
+            drag = null;
+            updateMacroHistoryMeta(state.key);
+            renderMacroHistory(state.key);
+        }
+
+        canvas.addEventListener('pointerdown', function(event) {
+            const chart = state.chart;
+            if (!chart || event.button !== 0) return;
+            const point = pointerPosition(event);
+            const area = chart.chartArea;
+            if (point.x < area.left || point.x > area.right ||
+                point.y < area.top || point.y > area.bottom) return;
+            drag = { startX: point.x, currentX: point.x };
+            canvas.style.cursor = 'ew-resize';
+            drawSelection(chart, point.x);
+            if (canvas.setPointerCapture) {
+                try { canvas.setPointerCapture(event.pointerId); } catch (e) {}
+            }
+            event.preventDefault();
+        });
+
+        canvas.addEventListener('pointermove', function(event) {
+            if (!drag || !state.chart) return;
+            const point = pointerPosition(event);
+            drawSelection(
+                state.chart,
+                Math.max(state.chart.chartArea.left,
+                    Math.min(point.x, state.chart.chartArea.right))
+            );
+            event.preventDefault();
+        });
+
+        canvas.addEventListener('pointerup', finishSelection);
+        canvas.addEventListener('pointercancel', function() {
+            drag = null;
+            if (box) box.hidden = true;
+            canvas.style.cursor = '';
+        });
+    }
+
+    function resetMacroZoom() {
+        if (!state.key) return;
+        state.zoomRange = null;
+        updateMacroHistoryMeta(state.key);
+        renderMacroHistory(state.key);
+    }
+
+    function renderMacroHistory(key) {
+        const series = MACRO_HISTORY[key];
+        const cfg = MACRO_CONFIG[key];
+        const panel = state.panel;
+        const canvas = panelPart('canvas');
+        const empty = panelPart('empty');
+        if (!series || !cfg || !canvas || !empty) return;
+
+        if (typeof Chart === 'undefined') {
+            state.waitAttempts += 1;
+            empty.textContent = state.waitAttempts > 25
+                ? '图表组件加载失败，请刷新页面重试'
+                : '图表组件加载中…';
+            empty.hidden = false;
+            if (state.waitAttempts <= 25) {
+                setTimeout(function() { renderMacroHistory(key); }, 200);
+            }
+            return;
+        }
+
+        const points = series.points || [];
+        if (!points.length) {
+            empty.textContent = '历史数据暂不可用';
+            empty.hidden = false;
+            return;
+        }
+
+        ensureRangePlugin();
+        destroyChart();
+        empty.hidden = true;
+
+        const total = points.length;
+        let start = macroBaseStart(series);
+        let end = total - 1;
+        if (state.zoomRange) {
+            start = Math.max(0, Math.min(state.zoomRange[0], total - 2));
+            end = Math.max(start + 1, Math.min(state.zoomRange[1], total - 1));
+        }
+        // 相邻两个真实观测点之间按日期线性插值补齐缺口。
+        // PE 源是周频（蛋卷 515 点铺满 10 年）、标普500 长历史段是月频，
+        // 而横轴细到 2~4 天，中间原本大量是 null：折线靠 spanGaps 看着连着，
+        // 但鼠标移到这些日期，Chart.js 会把 null 的序列整条过滤掉，
+        // tooltip 只剩点位一行 —— 就是「有时不能同时显示 PE 和点位」。
+        // 两点之间本来就是用直线连接的，插值不改变曲线形状，只让每个横轴位置都有值。
+        // maxGapDays 之外（如「自 2000 起」里 PE 起点前那段）保持 null，不伪造数据。
+        function interpolateGaps(raw, axisLabels, maxGapDays) {
+            const out = raw.slice();
+            let prev = -1;
+            for (let i = 0; i < raw.length; i += 1) {
+                if (raw[i] === null) continue;
+                if (prev >= 0 && i - prev > 1) {
+                    const t0 = Date.parse(axisLabels[prev]);
+                    const t1 = Date.parse(axisLabels[i]);
+                    const spanDays = (t1 - t0) / 86400000;
+                    if (spanDays > 0 && spanDays <= maxGapDays) {
+                        const v0 = raw[prev];
+                        const v1 = raw[i];
+                        for (let j = prev + 1; j < i; j += 1) {
+                            const tj = Date.parse(axisLabels[j]);
+                            const ratio = Math.max(0, Math.min(1, (tj - t0) / (t1 - t0)));
+                            out[j] = Math.round((v0 + (v1 - v0) * ratio) * 100) / 100;
+                        }
+                    }
+                }
+                prev = i;
+            }
+            // 开头的少量缺口（某条序列比另一条晚一两天起步）用第一个真实值回填，
+            // 只回填 7 天内、且不超过 3 个点，否则保持 null。
+            const first = out.findIndex(function(value) { return value !== null; });
+            if (first > 0 && first <= 3) {
+                const t1 = Date.parse(axisLabels[first]);
+                for (let j = 0; j < first; j += 1) {
+                    const span = (t1 - Date.parse(axisLabels[j])) / 86400000;
+                    if (span >= 0 && span <= 7) out[j] = out[first];
+                }
+            }
+            return out;
+        }
+
+        // 必须在「整条序列」上插值再切片：默认视图从 PE 起点开始，
+        // 若先 slice 再插值，起点左侧的参照点被切掉，开头的缺口就补不上了。
+        const allLabels = points.map(function(point) { return point[0]; });
+        // 估值卡的横轴比 PE 更长（点位到 2000 年）：PE 起点之前的值是 null，
+        // 不能走 Number(null)=0，否则会画出一条贴着 0 的假线。
+        const peFull = interpolateGaps(points.map(function(point) {
+            const raw = point[1];
+            return (raw === null || raw === undefined || raw === '' || !Number.isFinite(Number(raw)))
+                ? null : Number(raw);
+        }), allLabels, 75);
+        const values = peFull.slice(start, end + 1);
+        const labels = allLabels.slice(start, end + 1);
+        const colors = themeColors();
+        const unit = series.unit || '';
+        // 宽基指数估值图：PE 走左轴，指数点位走右轴，两条线共用同一日期轴
+        const overlay = series.overlay || null;
+        // overlay.values 是建页时按 points 同一份日期轴生成的；若历史增量合并后
+        // 两者长度不一致，直接 slice 会让右轴线的尾部整段缺失（蓝线「断头」）。
+        // 先按 points 长度铺满（缺的补 null），再在整条序列上做短缺口插值。
+        let overlayValues = null;
+        if (overlay) {
+            const overlayFull = new Array(points.length).fill(null);
+            (overlay.values || []).forEach(function(value, index) {
+                if (index < overlayFull.length && value !== null && value !== undefined
+                    && Number.isFinite(Number(value))) {
+                    overlayFull[index] = Number(value);
+                }
+            });
+            overlayValues = interpolateGaps(overlayFull, allLabels, 75).slice(start, end + 1);
+        }
+        // 双轴图右侧要同时容纳点位坐标轴与分位标签；其它卡片沿用原有留白
+        const rightGutter = overlay
+            ? (window.innerWidth <= 640 ? 62 : 68)
+            : (window.innerWidth <= 640 ? 76 : 90);
+        const xTickLimit = window.innerWidth <= 480 ? 4 : (window.innerWidth <= 900 ? 6 : 10);
+        const showAxisTitle = window.innerWidth > 640;
+
+        const datasets = [{
+            label: series.title,
+            data: values,
+            borderColor: overlay ? colors.peLine : cfg.lineColor,
+            backgroundColor: 'transparent',
+            borderWidth: overlay ? 2.2 : 1.6,
+            pointRadius: 0,
+            pointHitRadius: 7,
+            tension: 0.08,
+            // 估值卡的 PE 从 2016 年才开始，之前整段是 null；双轴图里个别交易
+            // 日历不对齐也会留空。跨过空值直接连线，避免被切成碎的短线。
+            spanGaps: true,
+            fill: false
+        }];
+        if (overlay) {
+            datasets.push({
+                label: overlay.title,
+                data: overlayValues,
+                yAxisID: 'y1',
+                borderColor: colors.pointLine,
+                backgroundColor: 'transparent',
+                borderWidth: 1.5,
+                pointRadius: 0,
+                pointHitRadius: 7,
+                tension: 0.12,
+                spanGaps: true,
+                fill: false
+            });
+        }
+
+        const scalesConfig = {
+            x: {
+                ticks: {
+                    color: colors.text,
+                    maxTicksLimit: xTickLimit,
+                    maxRotation: 0,
+                    autoSkip: true,
+                    font: { size: window.innerWidth <= 480 ? 9 : 10 }
+                },
+                grid: { display: false },
+                border: { color: colors.grid }
+            },
+            y: {
+                suggestedMin: cfg.yStart,
+                suggestedMax: cfg.suggestedMax,
+                min: cfg.yEnd === 100 ? 0 : undefined,
+                max: cfg.yEnd === 100 ? 100 : undefined,
+                title: {
+                    display: !!overlay && showAxisTitle,
+                    text: '市盈率 PE (倍)',
+                    color: colors.text,
+                    font: { size: 10 }
+                },
+                ticks: {
+                    color: colors.text,
+                    font: { size: 10 },
+                    callback: function(value) { return Number(value).toFixed(0); }
+                },
+                grid: { color: colors.grid },
+                border: { color: colors.grid }
+            }
+        };
+        if (overlay) {
+            const divisor = Number(overlay.divisor) || 1;
+            scalesConfig.y1 = {
+                position: 'right',
+                grid: { drawOnChartArea: false, drawTicks: false },
+                border: { display: false },
+                ticks: {
+                    color: colors.pointLine,
+                    font: { size: 10 },
+                    maxTicksLimit: 6,
+                    callback: function(value) {
+                        return (Number(value) / divisor).toFixed(1);
+                    }
+                },
+                title: {
+                    display: showAxisTitle,
+                    text: overlay.axisTitle || '点位(千)',
+                    color: colors.pointLine,
+                    font: { size: 10 }
+                }
+            };
+        }
+
+        state.chart = new Chart(canvas.getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 220 },
+                interaction: { mode: 'index', intersect: false },
+                onHover: handleMacroHover,
+                layout: { padding: { right: rightGutter } },
+                plugins: {
+                    legend: { display: false },
+                    macroRanges: {
+                        bands: cfg.bands,
+                        lines: cfg.lines,
+                        labelBg: colors.labelBg
+                    },
+                    tooltip: {
+                        displayColors: false,
+                        callbacks: {
+                            title: function(items) { return items.length ? items[0].label : ''; },
+                            label: function(context) {
+                                // 注意不能直接 Number(context.raw)：null 会被转成 0，
+                                // 于是「当日无 PE」被画成「0.00 倍 · 极度低估」这种假读数。
+                                const raw = context.raw;
+                                const missing = (raw === null || raw === undefined || raw === '');
+                                if (overlay && context.dataset.yAxisID === 'y1') {
+                                    const pointValue = missing ? NaN : Number(raw);
+                                    if (!Number.isFinite(pointValue)) {
+                                        return overlay.title + ': -- （当日无点位）';
+                                    }
+                                    return overlay.title + ': ' +
+                                        pointValue.toLocaleString('zh-CN', {
+                                            minimumFractionDigits: 2,
+                                            maximumFractionDigits: 2
+                                        }) + ' ' + (overlay.unit || '点');
+                                }
+                                const value = missing ? NaN : Number(raw);
+                                if (!Number.isFinite(value)) {
+                                    return '市盈率 PE: -- （当日无估值）';
+                                }
+                                return (overlay ? '市盈率 PE' : series.title) + ': ' +
+                                    value.toFixed(2) + unit + ' · ' + classifyValue(cfg, value);
+                            }
+                        }
+                    }
+                },
+                scales: scalesConfig
+            }
+        });
+        setupMacroSelection(canvas, panel);
+        canvas.onmouseleave = function() {
+            if (state.chart) {
+                state.chart._macroCrosshair = null;
+                state.chart.draw();
+            }
+        };
+        renderRangeLabels(cfg, state.chart);
+        setTimeout(function() {
+            if (state.key === key) renderRangeLabels(cfg, state.chart);
+        }, 260);
+    }
+
+    function setOpenCards(key, panelId) {
+        document.querySelectorAll('[data-macro-history]').forEach(function(card) {
+            const active = card.getAttribute('data-macro-history') === key;
+            card.classList.toggle('is-open', active);
+            card.setAttribute('aria-expanded', active ? 'true' : 'false');
+        });
+    }
+
+    function openMacroHistory(key, panelId) {
+        const panel = document.getElementById(panelId);
+        const series = MACRO_HISTORY[key];
+        const cfg = MACRO_CONFIG[key];
+        if (!panel || !series || !cfg) return;
+
+        PANEL_IDS.forEach(function(id) {
+            const other = document.getElementById(id);
+            if (other && other !== panel) other.hidden = true;
+        });
+        const previousPanel = state.panel;
+        if (previousPanel && previousPanel !== panel) {
+            const oldCanvas = previousPanel.querySelector('[data-macro-part="canvas"]');
+            if (oldCanvas) oldCanvas._macroSelectionBound = false;
+        }
+        state.key = key;
+        state.panel = panel;
+        state.waitAttempts = 0;
+        state.zoomRange = null;
+        state.fullRange = false;
+        panel.hidden = false;
+        setOpenCards(key, panelId);
+        const title = panel.querySelector('[data-macro-part="title"]');
+        if (title) title.textContent = series.overlay
+            ? series.title + ' · 指数点位' : series.title;
+        updateMacroHistoryMeta(key);
+        const source = panel.querySelector('[data-macro-part="source"]');
+        if (source) source.href = cfg.sourceUrl;
+        renderLegend(cfg, series, themeColors());
+        renderMacroHistory(key);
+        requestAnimationFrame(function() {
+            const behavior = window.matchMedia &&
+                window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                ? 'auto' : 'smooth';
+            panel.scrollIntoView({ behavior: behavior, block: 'nearest' });
+        });
+    }
+
+    function closeMacroHistory() {
+        const panel = state.panel;
+        if (panel) panel.hidden = true;
+        state.key = null;
+        state.panel = null;
+        state.zoomRange = null;
+        destroyChart();
+        setOpenCards(null);
+    }
+
+    function initMacroHistory() {
+        document.querySelectorAll('[data-macro-history]').forEach(function(card) {
+            const key = card.getAttribute('data-macro-history');
+            const panelId = card.getAttribute('data-macro-panel');
+            card.addEventListener('click', function(event) {
+                if (event.target.closest('a')) return;
+                if (state.key === key && state.panel && state.panel.id === panelId) closeMacroHistory();
+                else openMacroHistory(key, panelId);
+            });
+            card.addEventListener('keydown', function(event) {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                if (event.target.closest('a')) return;
+                event.preventDefault();
+                if (state.key === key && state.panel && state.panel.id === panelId) closeMacroHistory();
+                else openMacroHistory(key, panelId);
+            });
+        });
+
+        PANEL_IDS.forEach(function(panelId) {
+            const panel = document.getElementById(panelId);
+            if (!panel) return;
+            const close = panel.querySelector('[data-macro-part="close"]');
+            if (close) close.addEventListener('click', closeMacroHistory);
+            const reset = panel.querySelector('[data-macro-part="resetZoom"]');
+            if (reset) reset.addEventListener('click', resetMacroZoom);
+            const rangeToggle = panel.querySelector('[data-macro-part="rangeToggle"]');
+            if (rangeToggle) rangeToggle.addEventListener('click', function() {
+                if (!state.key) return;
+                state.fullRange = !state.fullRange;
+                state.zoomRange = null;
+                updateMacroHistoryMeta(state.key);
+                renderMacroHistory(state.key);
+            });
+        });
+
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && state.key) closeMacroHistory();
+        });
+
+        if (window.MutationObserver) {
+            new MutationObserver(function() {
+                if (!state.key) return;
+                renderLegend(
+                    MACRO_CONFIG[state.key], MACRO_HISTORY[state.key], themeColors()
+                );
+                renderMacroHistory(state.key);
+            }).observe(document.documentElement, {
+                attributes: true,
+                attributeFilter: ['data-theme']
+            });
+        }
+        window.addEventListener('resize', function() {
+            if (state.key && state.chart) {
+                const cfg = MACRO_CONFIG[state.key];
+                setTimeout(function() { renderRangeLabels(cfg, state.chart); }, 80);
+                const expectedTicks = window.innerWidth <= 480 ? 4 : (window.innerWidth <= 900 ? 6 : 10);
+                if (state.chart.options.scales.x.ticks.maxTicksLimit !== expectedTicks) {
+                    renderMacroHistory(state.key);
+                }
+            }
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initMacroHistory);
+    } else {
+        initMacroHistory();
+    }
+})();
+</script>
+""".replace("__MACRO_HISTORY_JSON__", macro_history_json)
+
+    # 对比弹窗的深度资料很小（≈100KB），直接内联，不必再拆一个 js 文件。
+    cmp_meta_json = json.dumps(cmp_meta, ensure_ascii=False, separators=(",", ":"))
+
+    # ===== 份额类别筛选按钮（A / C / E ... 按实际出现的情况动态生成）=====
+    _share_order = [k for k in ("A", "C", "E", "D", "I", "R", "Y", "B", "H", "O") if k in share_counts]
+    _share_order += sorted(k for k in share_counts if k not in _share_order and k != "none")
+    share_filter_btns_html = "".join(
+        f'<button class="cat-btn share-filter" data-share="{_k}" data-sub="all">{_k}类 {share_counts[_k]}</button>'
+        for _k in _share_order
+    )
+    if share_counts.get("none"):
+        share_filter_btns_html += (
+            f'<button class="cat-btn share-filter" data-share="none" data-sub="all" '
+            f'title="名称里没有 A/C/E 等份额标识的基金">无份额 {share_counts["none"]}</button>'
+        )
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>场外基金量化与资产配置看板</title>
+    <script async src="web/vendor/chart.umd.js?v=4.4.3" onerror="this.onerror=null;this.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';"></script>
+    <script defer src="{nav_data_asset}" onerror="window.__fundNavDataLoadFailed=true;"></script>
+    <style>
+        :root {{
+            --bg: #f8f9fa;
+            --text: #333;
+            --border: #e0e0e0;
+            --header-bg: #f1f3f4;
+            --header-text: #3c4043;
+            --hover-bg: #f8f9fa;
+            --table-bg: #fff;
+            --progress-track: #e5e7eb;
+            --footer-bg: #fff;
+            --footer-text: #70757a;
+            --btn-bg: #e8eaed;
+            --btn-text: #3c4043;
+            --btn-active-bg: #1a73e8;
+            --btn-active-text: #fff;
+            --input-bg: #fff;
+            --input-border: #ddd;
+            --card-bg: #f0f2f5;
+            --link-color: #1a73e8;
+            --card-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        [data-theme="dark"] {{
+            --bg: #1a1a1a;
+            --text: #e0e0e0;
+            --border: #444;
+            --header-bg: #2d2d2d;
+            --header-text: #ccc;
+            --hover-bg: #2a2a2a;
+            --table-bg: #252525;
+            --progress-track: #3a3a3a;
+            --footer-bg: #2d2d2d;
+            --footer-text: #aaa;
+            --btn-bg: #3d3d3d;
+            --btn-text: #ccc;
+            --btn-active-bg: #1a73e8;
+            --btn-active-text: #fff;
+            --input-bg: #333;
+            --input-border: #555;
+            --card-bg: #2a2a2a;
+            --link-color: #4a9eff;
+            --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }}
+        body {{
+            font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            transition: background-color 0.3s, color 0.3s;
+        }}
+
+        .main-navbar {{
+            background: var(--table-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 0 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            height: 52px;
+            flex-shrink: 0;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+            z-index: 100;
+        }}
+        .nav-brand {{
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--link-color);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .nav-tabs-group {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .nav-tab-btn {{
+            background: transparent;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            color: var(--header-text);
+            transition: all 0.2s;
+        }}
+        .nav-tab-btn:hover {{ background: var(--hover-bg); color: var(--link-color); }}
+        .nav-tab-btn.active {{ background: var(--btn-active-bg); color: #fff; }}
+        /* ★ 新增：外部跳转型导航按钮（<a> 标签与 <button> 视觉一致） */
+        a.nav-tab-btn.nav-tab-link {{
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            color: var(--header-text);
+        }}
+        a.nav-tab-btn.nav-tab-link:hover {{
+            background: var(--hover-bg);
+            color: var(--link-color);
+        }}
+        .nav-right-tools {{ display: flex; align-items: center; gap: 12px; }}
+        .theme-toggle {{
+            background: var(--header-bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 4px 10px;
+            font-size: 11px;
+            cursor: pointer;
+        }}
+
+        /* 独立的盘中实时页入口（live.html）：静态页，不进每晚重建 */
+        .nav-live-link {{
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(217, 48, 37, 0.10);
+            color: #d93025;
+            border: 1px solid rgba(217, 48, 37, 0.35);
+            border-radius: 16px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            text-decoration: none;
+            white-space: nowrap;
+        }}
+        .nav-live-link:hover {{
+            background: rgba(217, 48, 37, 0.18);
+            text-decoration: none;
+        }}
+
+        .views-container {{
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 12px 20px;
+        }}
+        .view-pane {{ display: none; flex-direction: column; height: 100%; min-height: 0; }}
+        .view-pane.active {{ display: flex; }}
+
+        /* ★ 新增：CFTC资产数据内嵌框架 */
+        #allAssetView,
+        #dualView {{
+            padding: 0;
+            overflow: hidden;
+        }}
+        .asset-iframe-wrap {{
+            flex: 1;
+            min-height: 0;
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: var(--card-shadow);
+            overflow: hidden;
+            position: relative;
+            display: flex;
+        }}
+        .asset-iframe-wrap iframe {{
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+            background: var(--table-bg);
+        }}
+        .asset-iframe-loading {{
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--footer-text);
+            font-size: 13px;
+            background: var(--table-bg);
+            z-index: 1;
+            pointer-events: none;
+        }}
+
+        /* ★ CFTC 内嵌面板顶部工具条（仅移动端显示） */
+        .asset-iframe-bar {{ display: none; }}
+        .asset-iframe-bar a {{
+            color: var(--link-color);
+            text-decoration: none;
+            font-weight: 600;
+            white-space: nowrap;
+        }}
+
+        /* ★ 移动端适配：CFTC 资产数据视图 */
+        @media (max-width: 992px) {{
+            /* 顶部 Tab 横向滑动，保证「CFTC资产数据」始终可点 */
+            .nav-tabs-group {{
+                order: 3;
+                width: 100%;
+                gap: 4px;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                overflow-y: hidden;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                padding: 2px 0;
+            }}
+            .nav-tabs-group::-webkit-scrollbar {{ display: none; }}
+            .nav-tab-btn .tab-ico {{ display: none; }}
+            .nav-tab-btn {{
+                flex: 0 0 auto;
+                padding: 6px 9px;
+                font-size: 12px;
+                white-space: nowrap;
+            }}
+
+            /* 内嵌面板：移动端改为纵向布局，iframe 撑满可视区域，避免高度塌陷 */
+            #allAssetView,
+            #dualView {{ overflow: visible; }}
+            .asset-iframe-wrap {{
+                flex: none;
+                flex-direction: column;
+                height: auto;
+                min-height: 0;
+            }}
+            .asset-iframe-bar {{
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                flex-shrink: 0;
+                padding: 6px 10px;
+                font-size: 12px;
+                color: var(--footer-text);
+                background: var(--hover-bg);
+                border-bottom: 1px solid var(--border);
+            }}
+            .asset-iframe-bar span {{
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }}
+            .asset-iframe-wrap iframe {{
+                flex: none;
+                height: calc(100vh - 150px);
+                height: calc(100dvh - 150px);
+                min-height: 420px;
+            }}
+            .asset-iframe-loading {{ font-size: 12px; }}
+        }}
+
+        .home-container {{
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            /* 原来是 1440px + 左右各 5%：2K/带鱼屏上两侧会空出 400px 以上。
+               现在内容随屏幕走（上限 2000），左右留 32px 呼吸位。 */
+            max-width: 2000px;
+            margin: 0 auto;
+            padding: 24px 32px;
+            width: 100%;
+            box-sizing: border-box;
+        }}
+
+        .macro-metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }}
+
+        /* 止盈信号面板专用样式 */
+        .stop-profit-grid {{
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }}
+        .stop-profit-item {{
+            background: var(--hover-bg);
+            border-radius: 8px;
+            padding: 14px;
+            border: 1px solid var(--border);
+            transition: transform 0.2s;
+        }}
+        .stop-profit-item:hover {{
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }}
+        .stop-profit-title {{
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: var(--text);
+            border-bottom: 1px dashed var(--border);
+            padding-bottom: 6px;
+        }}
+        .stop-profit-value {{
+            font-size: 24px;
+            font-weight: 800;
+            font-family: "SFMono-Regular", Consolas, monospace;
+            margin-bottom: 12px;
+            line-height: 1;
+        }}
+        .stop-profit-rules {{
+            font-size: 12px;
+            color: var(--footer-text);
+            line-height: 1.8;
+        }}
+        @media (max-width: 768px) {{
+            .stop-profit-grid {{ grid-template-columns: 1fr; }}
+        }}
+
+        .index-metrics-grid, .friend-links-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }}
+
+        .friend-category-block {{
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }}
+        .friend-category-title {{
+            margin: 8px 0 4px 0;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--header-text);
+            padding-left: 4px;
+            border-left: 3px solid var(--link-color);
+        }}
+        .friend-card-head {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px dashed var(--border);
+            padding-bottom: 6px;
+            margin-bottom: 6px;
+        }}
+        .friend-logo {{
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            flex-shrink: 0;
+            object-fit: contain;
+            background: var(--bg);
+        }}
+        .friend-name {{
+            color: var(--link-color);
+            font-size: 14px;
+            font-weight: 700;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .friend-arrow {{
+            color: var(--link-color);
+            flex-shrink: 0;
+        }}
+        /* ===== 盘中实时数据（data/live_quotes.json） ===== */
+        .live-meta {{ display: inline-flex; align-items: center; gap: 8px; }}
+        .live-badge {{
+            font-size: 11px; line-height: 1.6; padding: 1px 8px; border-radius: 9px;
+            color: #188038; background: rgba(24, 128, 56, 0.12); white-space: nowrap;
+        }}
+        .live-badge.is-stale {{ color: #b06000; background: rgba(176, 96, 0, 0.12); }}
+        [data-theme="dark"] .live-badge {{ color: #6fcf97; background: rgba(111, 207, 151, 0.16); }}
+        [data-theme="dark"] .live-badge.is-stale {{ color: #f6ae2d; background: rgba(246, 174, 45, 0.16); }}
+        .metric-value.is-live-stale {{ opacity: 0.55; }}
+
+        @media (max-width: 640px) {{
+            .live-meta {{ flex-wrap: wrap; justify-content: flex-end; gap: 4px; }}
+            .live-meta > span:first-child {{ font-size: 10px; }}
+        }}
+
+        .metric-card {{
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px 14px;
+            box-shadow: var(--card-shadow);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }}
+        .metric-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--header-text);
+        }}
+        .metric-body {{
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin: 8px 0;
+        }}
+        .metric-value {{
+            font-size: 26px;
+            font-weight: 800;
+            font-family: "SFMono-Regular", Consolas, monospace;
+            line-height: 1;
+        }}
+        .metric-tag {{
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+        }}
+        .metric-desc {{
+            font-size: 11px;
+            color: var(--footer-text);
+            line-height: 1.4;
+            border-top: 1px dashed var(--border);
+            padding-top: 6px;
+            margin-top: 4px;
+        }}
+        .metric-source-link {{
+            font-size: 11px;
+            color: var(--link-color);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            margin-top: 6px;
+            padding-top: 4px;
+            border-top: 1px solid var(--border);
+            word-break: break-all;
+        }}
+        .metric-source-link:hover {{ text-decoration: underline; }}
+
+        .fng-bar-track {{
+            height: 6px;
+            background: linear-gradient(to right, #d93025, #ea8600, #fbbc04, #34a853, #188038);
+            border-radius: 3px;
+            position: relative;
+            margin: 6px 0 2px 0;
+        }}
+        .fng-bar-pointer {{
+            width: 3px;
+            height: 10px;
+            background: #000;
+            position: absolute;
+            top: -2px;
+            transform: translateX(-50%);
+            border-radius: 1px;
+        }}
+        [data-theme="dark"] .fng-bar-pointer {{ background: #fff; }}
+
+        .metric-card-expandable {{
+            cursor: pointer;
+            transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+        }}
+        .metric-card-expandable:hover {{
+            border-color: var(--link-color);
+            box-shadow: 0 5px 14px rgba(0, 0, 0, 0.08);
+            transform: translateY(-1px);
+        }}
+        .metric-card-expandable:focus-visible {{
+            outline: 2px solid var(--link-color);
+            outline-offset: 2px;
+        }}
+        .metric-card-expandable.is-open {{
+            border-color: var(--link-color);
+            box-shadow: inset 0 0 0 1px var(--link-color);
+        }}
+        .metric-expand-hint {{
+            color: var(--link-color);
+            font-size: 10px;
+            font-weight: 700;
+            white-space: nowrap;
+        }}
+        .metric-expand-hint .chevron {{
+            display: inline-block;
+            transition: transform 0.18s ease;
+        }}
+        .metric-card-expandable.is-open .metric-expand-hint .chevron {{
+            transform: rotate(180deg);
+        }}
+
+        .macro-history-panel {{
+            grid-column: 1 / -1;
+            min-width: 0;
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px 16px 12px;
+            box-shadow: var(--card-shadow);
+        }}
+        .macro-history-panel[hidden] {{ display: none; }}
+        .macro-history-head {{
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 10px;
+        }}
+        .macro-history-title-wrap {{
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }}
+        .macro-history-title {{
+            color: var(--header-text);
+            font-size: 14px;
+            font-weight: 700;
+        }}
+        .macro-history-meta {{
+            color: var(--footer-text);
+            font-size: 11px;
+            line-height: 1.45;
+        }}
+        .macro-history-source {{
+            color: var(--link-color);
+            text-decoration: none;
+            margin-left: 6px;
+            white-space: nowrap;
+        }}
+        .macro-history-source:hover {{ text-decoration: underline; }}
+        .macro-history-controls {{
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .macro-history-close,
+        .macro-history-reset {{
+            flex: 0 0 auto;
+            width: 28px;
+            height: 28px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--hover-bg);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+        }}
+        .macro-history-close:hover,
+        .macro-history-reset:hover {{
+            border-color: var(--link-color);
+            color: var(--link-color);
+        }}
+        .macro-history-range-toggle {{
+            flex: 0 0 auto;
+            height: 28px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--hover-bg);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 12px;
+            line-height: 1;
+            white-space: nowrap;
+        }}
+        .macro-history-range-toggle:hover {{
+            border-color: var(--link-color);
+            color: var(--link-color);
+        }}
+        .macro-history-range-toggle[hidden] {{ display: none; }}
+        .macro-history-reset[hidden] {{ display: none; }}
+        .macro-history-chart-wrap {{
+            position: relative;
+            width: 100%;
+            height: clamp(300px, 40vh, 440px);
+            min-height: 300px;
+        }}
+        .macro-history-chart-wrap canvas {{
+            width: 100% !important;
+            height: 100% !important;
+            cursor: crosshair;
+            touch-action: pan-y;
+        }}
+        .macro-selection-box {{
+            position: absolute;
+            pointer-events: none;
+            background: rgba(26, 115, 232, 0.13);
+            border-left: 1px solid rgba(26, 115, 232, 0.75);
+            border-right: 1px solid rgba(26, 115, 232, 0.75);
+        }}
+        .macro-history-range-labels {{
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }}
+        .macro-range-tag {{
+            position: absolute;
+            right: 8px;
+            transform: translateY(-50%);
+            padding: 2px 7px;
+            border: 1px solid currentColor;
+            border-radius: 4px;
+            background: var(--table-bg);
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1.35;
+            white-space: nowrap;
+        }}
+        .macro-history-legend {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 15px;
+            margin-top: 8px;
+            color: var(--footer-text);
+            font-size: 11px;
+        }}
+        .macro-history-legend-item {{
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }}
+        .macro-history-legend-swatch {{
+            width: 9px;
+            height: 9px;
+            border-radius: 2px;
+            flex: 0 0 auto;
+        }}
+        .macro-history-empty {{
+            padding: 38px 12px;
+            text-align: center;
+            color: var(--footer-text);
+            font-size: 12px;
+        }}
+        @media (max-width: 768px) {{
+            .macro-history-panel {{ padding: 12px 10px 10px; }}
+            .macro-history-chart-wrap {{ height: 300px; min-height: 300px; }}
+            .macro-history-head {{ gap: 8px; }}
+        }}
+
+        /* Fed Monitor specific styles */
+        .fed-card {{
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: var(--card-shadow);
+            margin-bottom: 12px;
+        }}
+        .fed-title {{
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+            color: var(--header-text);
+        }}
+        .fed-info {{
+            font-size: 13px;
+            color: var(--text);
+            margin-bottom: 16px;
+            line-height: 1.6;
+        }}
+        .fed-bar-row {{
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }}
+        .fed-bar-label {{
+            width: 80px;
+            font-weight: 600;
+            color: var(--text);
+        }}
+        .fed-bar-track {{
+            flex: 1;
+            height: 24px;
+            background: var(--progress-track);
+            position: relative;
+            margin: 0 12px;
+        }}
+        .fed-bar-fill {{
+            height: 100%;
+            display: flex;
+            align-items: center;
+            padding-left: 8px;
+            color: #fff;
+            font-weight: bold;
+            font-size: 12px;
+            box-sizing: border-box;
+            border-radius: 2px;
+        }}
+        .fed-bar-fill.blue {{ background: #5c8bb5; }}
+        .fed-bar-fill.grey {{ background: #a6a6a6; }}
+        .fed-bar-pct {{
+            margin-left: 6px;
+            font-weight: 600;
+            color: var(--text);
+            font-size: 13px;
+        }}
+        .fed-table {{
+            width: 100%;
+            min-width: 0 !important;
+            max-width: 100%;
+            box-sizing: border-box;
+            border-collapse: collapse;
+            margin-top: 16px;
+            font-size: 13px;
+            text-align: right;
+            table-layout: fixed;
+        }}
+        .fed-table th,
+        .fed-table td {{
+            min-width: 0;
+            box-sizing: border-box;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .fed-table th, .fed-table td {{
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text);
+        }}
+        .fed-table th {{
+            color: var(--footer-text);
+            font-weight: 500;
+        }}
+        .fed-table td:first-child, .fed-table th:first-child {{
+            text-align: left;
+            font-weight: 600;
+        }}
+
+        .home-card-box {{
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            box-shadow: var(--card-shadow);
+        }}
+        .home-card-title {{
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--header-text);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }}
+        .home-card-body {{ font-size: 12px; color: var(--footer-text); line-height: 1.6; }}
+
+        .sub-filter-bar {{
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+            flex-shrink: 0;
+            box-sizing: border-box;
+        }}
+
+        /* 移动端折叠开关（桌面端默认隐藏） */
+        .mobile-filter-toggle,
+        .dca-toggle-btn,
+        .mobile-panel-switches {{
+            display: none;
+        }}
+
+        /* 桌面端：申购状态主行样式 */
+        .buy-status-main-row {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }}
+
+        /* 份额类别按钮组：桌面端跟在申购状态后面同一行，窄屏时整体换行 */
+        .share-group {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }}
+
+        /* 搜索框常驻在工具栏里（不再跟随悬停菜单隐藏） */
+        .buy-status-filter-card .search-box-wrap {{ width: 220px; }}
+
+        /* 工具栏里的分隔竖线 + 视图切换按钮（常驻，不随悬停菜单消失） */
+        .toolbar-sep {{
+            display: inline-block;
+            width: 1px;
+            height: 18px;
+            background: var(--border);
+            margin: 0 2px;
+            flex: none;
+        }}
+        .view-mode-row {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex: none;
+            padding-left: 6px;
+            border-left: 1px solid var(--border);
+        }}
+        .view-mode-row .view-mode-btn {{
+            font-weight: 600;
+        }}
+
+        /* ===== 桌面端：市场大类菜单改为悬停「基金量化看板」页签时浮出 ===== */
+        @media (min-width: 993px) {{
+            .dca-mobile-row {{ position: relative; }}
+            .dca-mobile-row .sub-filter-bar.menu-hover-only {{
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                order: 0;
+                margin: 0;
+                z-index: 600;
+                display: none;
+                flex-wrap: wrap;
+                box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
+            }}
+            .dca-mobile-row .sub-filter-bar.menu-hover-only.menu-hover-open {{
+                display: flex;
+                animation: filterBarDrop 0.14s ease;
+            }}
+            @keyframes filterBarDrop {{
+                from {{ opacity: 0; transform: translateY(-6px); }}
+                to {{ opacity: 1; transform: translateY(0); }}
+            }}
+        }}
+
+        /* 桌面端：sub-filter-bar 进入 dca-mobile-row 后占满整行 */
+        .dca-mobile-row .sub-filter-bar {{
+            flex: 0 0 100%;
+            order: -1;
+        }}
+
+        .category-nav {{ display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
+        .category-title {{ font-size: 11px; font-weight: 700; color: var(--footer-text); margin-right: 4px; }}
+        .cat-btn {{
+            background: var(--btn-bg);
+            color: var(--btn-text);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 3px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all .2s;
+            font-weight: 500;
+        }}
+        .cat-btn:hover {{ background: var(--btn-active-bg); color: var(--btn-active-text); }}
+        .cat-btn.active {{ background: var(--btn-active-bg); color: var(--btn-active-text); border-color: var(--btn-active-bg); }}
+        /* 当前筛选下该类数量为 0：按钮保留（方便切回），但视觉淡出 */
+        .cat-btn.zero-count {{ opacity: .45; }}
+        .cat-btn.fav-filter {{
+            background: rgba(230,126,34,0.15);
+            color: #e67e22;
+            border-color: #e67e22;
+            font-weight: 700;
+        }}
+        .cat-btn.fav-filter.active {{
+            background: #e67e22;
+            color: #fff;
+            border-color: #e67e22;
+        }}
+        .search-box-wrap {{ width: 260px; flex-shrink: 0; }}
+        .search-box-wrap input {{
+            width: 100%;
+            height: 28px;
+            padding: 4px 10px;
+            border-radius: 14px;
+            border: 1px solid #35a853;
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 12px;
+            outline: none;
+            box-sizing: border-box;
+        }}
+
+        .global-dca-filter-card {{
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 12px;
+            box-sizing: border-box;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+            font-size: 11px;
+            flex-shrink: 0;
+            transition: all 0.3s ease;
+        }}
+        .global-dca-filter-header {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            user-select: none;
+        }}
+        .global-dca-filter-title {{
+            font-weight: 700;
+            color: var(--link-color);
+        }}
+        #gDcaToggleIcon {{
+            font-size: 9px;
+            color: var(--footer-text);
+            transition: transform 0.2s;
+        }}
+        .global-dca-filter-body {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }}
+        .global-dca-filter-card.collapsed .global-dca-filter-body {{ display: flex; }}
+        .global-dca-filter-card select {{
+            padding: 3px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 11px;
+            outline: none;
+        }}
+        .global-dca-filter-card button {{
+            background: var(--btn-active-bg);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 3px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }}
+        .global-dca-filter-card button:hover {{ opacity: 0.9; }}
+
+        /* 定投窗口：起止日期选择（替代原来的「近半年/近一年…」下拉） */
+        .g-dca-window {{
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }}
+        .g-dca-window input[type="date"] {{
+            padding: 2px 4px;
+            border-radius: 6px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 11px;
+            outline: none;
+            /* 132px 才放得下「2026/11/18 + 日历图标」，再窄 Chrome 会把最后一位吃掉 */
+            width: 132px;
+            box-sizing: border-box;
+        }}
+        .g-dca-window input[type="date"]:focus {{ border-color: #35a853; }}
+        .g-dca-window-sep {{ color: var(--footer-text); font-size: 11px; }}
+
+        .table-container {{
+            width: 100%;
+            flex: 1 1 0;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            box-sizing: border-box;
+            background: var(--table-bg);
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+            padding: 8px;
+            border: 1px solid var(--border);
+            margin-bottom: 6px;
+        }}
+        #fundTable {{ width: 100%; min-width: 2820px; border-collapse: collapse; font-size: 12px; text-align: right; table-layout: fixed; }}
+        th, td {{ padding: 6px 8px; border-bottom: 1px solid var(--border); line-height: 1.4; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }}
+        #fundTable thead th {{ position: sticky; top: 0; z-index: 10; background-color: var(--header-bg); border-bottom: 2px solid var(--border); }}
+        th:nth-child(1), td:nth-child(1) {{ width: 45px; text-align: center; white-space: nowrap; }}
+        th:nth-child(2), td:nth-child(2) {{ width: 65px; text-align: left; white-space: nowrap; }}
+        th:nth-child(3), td:nth-child(3) {{ width: 250px; min-width: 200px; text-align: left; white-space: normal; word-break: break-word; vertical-align: middle; }}
+        th:nth-child(4), td:nth-child(4) {{ width: 80px; text-align: left; white-space: nowrap; }}
+        th:nth-child(5), td:nth-child(5) {{ width: 130px; text-align: left; white-space: normal; word-break: break-word; }}
+        th:nth-child(6), td:nth-child(6) {{ width: 70px; text-align: left; white-space: nowrap; }}
+        th:nth-child(7), td:nth-child(7) {{ width: 100px; text-align: left; white-space: nowrap; }}
+        th:nth-child(8), td:nth-child(8), th:nth-child(9), td:nth-child(9) {{ width: 128px; white-space: nowrap; }}
+        th:nth-child(10), td:nth-child(10) {{ width: 85px; white-space: nowrap; }}
+        th:nth-child(11), td:nth-child(11), th:nth-child(12), td:nth-child(12), th:nth-child(13), td:nth-child(13) {{ width: 300px; white-space: nowrap; }}
+        th:nth-child(14), td:nth-child(14) {{ width: 80px; white-space: nowrap; }}
+        th:nth-child(15), td:nth-child(15) {{ width: 155px; min-width: 90px; white-space: normal; }}
+        th:nth-child(16), td:nth-child(16), th:nth-child(17), td:nth-child(17), th:nth-child(18), td:nth-child(18), th:nth-child(19), td:nth-child(19), th:nth-child(20), td:nth-child(20), th:nth-child(21), td:nth-child(21), th:nth-child(22), td:nth-child(22), th:nth-child(23), td:nth-child(23), th:nth-child(24), td:nth-child(24), th:nth-child(25), td:nth-child(25) {{ width: 80px; white-space: nowrap; }}
+        th {{ background-color: var(--header-bg); color: var(--header-text); font-weight: 600; text-align: right; user-select: none; cursor: pointer; white-space: normal; word-break: keep-all; line-height: 1.25; height: 38px; vertical-align: middle; position: relative; }}
+        th:hover {{ background-color: #e4e7eb; }}
+        [data-theme="dark"] th:hover {{ background-color: #3d3d3d; }}
+        th:nth-child(1) {{ text-align: center; }}
+        th:nth-child(2), th:nth-child(3), th:nth-child(4), th:nth-child(5), th:nth-child(6), th:nth-child(7) {{ text-align: left; }}
+        tr:hover {{ background-color: var(--hover-bg); }}
+
+        .resizer {{
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 7px;
+            cursor: col-resize;
+            user-select: none;
+            touch-action: none;
+            z-index: 20;
+        }}
+        .resizer:hover, th.resizing .resizer {{
+            background-color: var(--link-color);
+        }}
+
+        .star-btn {{
+            background: transparent;
+            border: none;
+            font-size: 16px;
+            color: #aaa;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+            transition: all 0.2s;
+        }}
+        .star-btn:hover {{ transform: scale(1.2); color: #f39c12; }}
+        .star-btn.starred {{ color: #f39c12; font-weight: bold; text-shadow: 0 0 2px rgba(243,156,18,0.5); }}
+
+        .code {{ font-family: "SFMono-Regular", Consolas, monospace; font-weight: bold; color: #1a73e8; }}
+        .name a {{ font-weight: 500; color: #1a73e8; text-decoration: none; }}
+        .redemption-sub {{ font-size: 10px; color: var(--footer-text); margin-top: 2px; }}
+        .highlight-rate {{ color: #d93025; font-weight: bold; }}
+        .highlight-val {{ font-weight: 600; color: #e67e22; }}
+        .fee-sub {{ font-size: 10px; color: var(--footer-text); }}
+
+        .dca-btn {{
+            background: #e8f0fe;
+            color: #1a73e8;
+            border: 1px solid #dadce0;
+            border-radius: 10px;
+            padding: 1px 5px;
+            font-size: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+        }}
+        .dca-btn:hover {{
+            background: #1a73e8;
+            color: #fff;
+            border-color: #1a73e8;
+            transform: scale(1.05);
+        }}
+        [data-theme="dark"] .dca-btn {{
+            background: #2a3b50;
+            color: #8ab4f8;
+            border-color: #3c4043;
+        }}
+
+        /* --- 进度条样式 --- */
+        .progress-container {{
+            background-color: var(--progress-track);
+            border-radius: 6px;
+            overflow: hidden;
+            height: 20px;
+            width: 100%;
+            position: relative;
+            display: block;
+        }}
+        .progress-bar {{
+            height: 100%;
+            border-radius: 6px;
+            min-width: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 6px;
+            box-sizing: border-box;
+            transition: width .2s ease;
+        }}
+        .progress-bar span {{
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            text-shadow: 0 1px 1px rgba(0,0,0,.25);
+            white-space: nowrap;
+        }}
+        .bar-red {{ background-color: #d93025; }}
+        .bar-blue {{ background-color: #1a73e8; }}
+        .bar-green {{ background-color: #188038; }}
+        .metric-red {{ color: #d93025; font-weight: 600; }}
+        .metric-green {{ color: #188038; font-weight: 600; }}
+        .gain-positive {{ color: #d93025; font-weight: bold; }}
+        .gain-negative {{ color: #188038; font-weight: bold; }}
+        .gain-date {{ font-size: 10px; color: var(--footer-text); font-weight: normal; }}
+
+        /* --- 贵金属、加密货币等最新净值高亮 --- */
+        .highlight-special-nav {{
+            font-weight: bold;
+            color: #d93025;
+            background-color: rgba(217, 48, 37, 0.12);
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+        }}
+        [data-theme="dark"] .highlight-special-nav {{
+            color: #ff8a65;
+            background-color: rgba(255, 138, 101, 0.2);
+        }}
+
+        .fund-row {{ cursor: pointer; }}
+        /* ===== 基金简介卡片 ===== */
+        .fund-profile-card {{
+            width: 100%;
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 14px;
+            margin-bottom: 4px;
+            box-sizing: border-box;
+        }}
+        .fund-profile-tags {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 14px;
+            margin-bottom: 8px;
+        }}
+        .profile-tag {{
+            font-size: 12px;
+            color: var(--header-text);
+            background: var(--hover-bg);
+            padding: 2px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }}
+        .fund-profile-objective {{
+            font-size: 12px;
+            color: var(--text);
+            line-height: 1.6;
+            margin-bottom: 8px;
+            padding: 8px 10px;
+            background: var(--hover-bg);
+            border-radius: 6px;
+        }}
+        .profile-obj-label {{
+            color: var(--link-color);
+            font-weight: 600;
+            white-space: nowrap;
+        }}
+        .fund-profile-managers {{
+            border-top: 1px solid var(--border);
+            padding-top: 8px;
+        }}
+        .profile-managers-title {{
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--header-text);
+            margin-bottom: 6px;
+        }}
+        .profile-manager {{
+            padding: 6px 0;
+            border-bottom: 1px dashed var(--border);
+        }}
+        .profile-manager:last-child {{
+            border-bottom: none;
+        }}
+        .profile-manager-head {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 4px 12px;
+            margin-bottom: 4px;
+        }}
+        .profile-mgr-name {{
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--link-color);
+        }}
+        .profile-mgr-tag {{
+            font-size: 12px;
+            color: var(--footer-text);
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1px 6px;
+            white-space: nowrap;
+        }}
+        .profile-manager-returns {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 20px;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }}
+        .profile-ret-item {{
+            color: var(--footer-text);
+        }}
+        .profile-mgr-brief {{
+            font-size: 12px;
+            color: var(--footer-text);
+            line-height: 1.5;
+            margin-top: 4px;
+        }}
+        .profile-manager-empty {{
+            font-size: 12px;
+            color: var(--footer-text);
+            padding: 4px 0;
+        }}
+        /* 详情浮窗内部布局（宽度由浮窗决定，不再受表格列宽影响） */
+        .holdings-wrapper {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: stretch;
+            width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+        }}
+        /* 四张季度卡独占整行；折线图换行到下方全宽 */
+        .quarters-panel {{ flex: 1 1 100%; width: 100%; display: flex; flex-direction: column; gap: 8px; min-width: 0; }}
+        .right-chart-wrapper {{ flex: 1 1 100%; width: 100%; min-width: 0; min-height: 280px; }}
+        /* 季度条：容器放不下时横向滚动，右侧可继续看到更早的季度。
+           用 minmax(300px, 1fr) 而不是 minmax(0, 1fr)：
+           列数少时各列仍等比撑满（与原来观感一致），列数多时每列固定 300px、
+           超出部分横向滚动，不会把每列压到看不清。
+           注意：下方「年度收益率 + 折线图」在 .right-chart-wrapper 里，
+           是独立的 flex 行，这里的滚动条不会改变它的大小。 */
+        .holdings-container {{
+            display: grid;
+            grid-template-columns: repeat(var(--qcols, 3), minmax(300px, 1fr));
+            gap: 8px; align-items: stretch; min-width: 0;
+            overflow-x: auto; overflow-y: hidden;
+            padding: 4px 4px 8px;   /* 给卡片阴影和横向滚动条留空间 */
+            scrollbar-width: thin;
+        }}
+        /* 「加载更早季度」占位列（首屏 8 列之后按需加载） */
+        .quarter-more-col {{
+            display: flex; align-items: center; justify-content: center;
+            min-height: 140px;
+        }}
+        .quarter-more-btn {{
+            width: 100%; max-width: 190px; padding: 20px 10px;
+            border: 1px dashed var(--border); border-radius: 8px;
+            background: transparent; color: var(--link-color);
+            font-size: 12px; line-height: 1.7; cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+        }}
+        .quarter-more-btn:hover:not(:disabled) {{ border-color: var(--link-color); background: var(--hover-bg); }}
+        .quarter-more-btn:disabled {{ opacity: 0.6; cursor: default; }}
+        /* 每个季度列：上=持仓明细，下=左持有人 / 右国家地区 */
+        .quarter-column {{ min-width: 0; display: flex; flex-direction: column; gap: 8px; }}
+        /* 非 QDII：没有国家/地区配置，持有人饼图独占整列（更宽更大） */
+        .quarter-pies.single {{ grid-template-columns: minmax(0, 1fr); }}
+        .quarter-pies.single .pie-cell-canvas {{ height: 150px; }}
+        .quarter-pies.single .pie-cell-empty .pie-empty-body {{ min-height: 150px; }}
+        .quarter-pies {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }}
+        .pie-cell {{ min-width: 0; background: var(--card-bg); border-radius: 8px; padding: 5px 4px 4px; box-shadow: var(--card-shadow); display: flex; flex-direction: column; }}
+        .pie-mini-title {{ font-size: 10px; font-weight: 600; color: var(--header-text); text-align: center; padding-bottom: 3px; margin-bottom: 2px; border-bottom: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .pie-cell-canvas {{ position: relative; height: 108px; min-width: 0; }}
+        .pie-cell-date {{ display: flex; align-items: baseline; justify-content: center; gap: 3px; font-size: 10px; color: var(--footer-text); border-top: 1px dashed var(--border); padding-top: 3px; margin-top: 3px; }}
+        .pie-cell-date .pie-quarter {{ font-weight: 600; color: var(--header-text); }}
+        .pie-cell-date .pie-exact {{ font-size: 9px; opacity: .8; }}
+        .pie-cell-empty {{ align-items: stretch; justify-content: flex-start; color: var(--footer-text); font-size: 10px; }}
+        .pie-cell-empty .pie-empty-body {{ flex: 1; display: flex; align-items: center; justify-content: center; min-height: 108px; font-size: 10px; opacity: .75; }}
+        .quarter-card {{ min-width: 0; background: var(--card-bg); border-radius: 8px; padding: 10px 8px; box-shadow: var(--card-shadow); box-sizing: border-box; display: flex; flex-direction: column; }}
+        /* 幽灵卡：某列没有持仓数据时补位，撑满剩余高度让饼图行对齐 */
+        .quarter-card-ghost {{ flex: 1 1 auto; min-height: 0; padding: 0; background: transparent; box-shadow: none; }}
+        .empty-holdings-placeholder {{ grid-column: auto; }}
+        .quarter-label {{ font-weight: bold; font-size: 12px; margin-bottom: 8px; color: var(--header-text); border-bottom: 1px solid var(--border); padding-bottom: 4px; display: flex; justify-content: space-between; align-items: center; }}
+        .quarter-title {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }}
+        .quarter-end {{ font-size: 10px; color: var(--footer-text); }}
+        .quarter-label-right {{ display: flex; align-items: center; gap: 6px; flex: none; }}
+        .quarter-detail-btn {{
+            font-size: 10px; line-height: 1.7; padding: 0 7px; border-radius: 9px;
+            border: 1px solid var(--link-color); background: transparent; color: var(--link-color);
+            cursor: pointer; white-space: nowrap; flex: none; transition: background 0.15s, color 0.15s;
+        }}
+        .quarter-detail-btn:hover {{ background: var(--link-color); color: #fff; }}
+        .quarter-stocks {{ display: flex; flex-direction: column; gap: 4px; flex: 1; }}
+        .stock-item {{ display: grid; grid-template-columns: minmax(0, 1fr) 56px 62px; gap: 4px; font-size: 12px; align-items: center; }}
+        .stock-name {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }}
+        .stock-ratio {{ text-align: right; font-weight: 500; }}
+        .stock-change {{ text-align: right; font-size: 10px; white-space: nowrap; }}
+        .change-add {{ color: #d93025; }}
+        .change-sub {{ color: #188038; }}
+        .change-up {{ color: #d93025; }}
+        .change-down {{ color: #188038; }}
+        .change-new {{ color: #1a73e8; }}
+        .stock-total {{ margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); font-weight: 600; }}
+        .stock-total .stock-ratio {{ color: #e67e22; }}
+
+        .holder-card {{ display: flex; flex-direction: column; justify-content: space-between; }}
+        .holder-pie-wrapper {{ flex: 1; display: flex; align-items: center; justify-content: center; position: relative; min-height: 200px; max-height: 260px; padding: 4px 0; }}
+        .holder-date-sub {{ font-size: 10px; color: var(--footer-text); text-align: center; border-top: 1px dashed var(--border); padding-top: 6px; margin-top: 4px; }}
+
+        /* 右侧容器：两个饼图已移到左侧季度卡下方，这里只放折线图，占满右半区 */
+        .right-chart-wrapper {{
+            flex: 1 1 0;
+            width: auto;
+            display: flex;
+            align-items: stretch;
+            min-width: 0;
+        }}
+        .country-pie-wrapper {{
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            min-height: 200px;
+            max-height: 260px;
+            padding: 4px 0;
+        }}
+        .country-date-sub {{
+            font-size: 10px;
+            color: var(--footer-text);
+            text-align: center;
+            border-top: 1px dashed var(--border);
+            padding-top: 6px;
+            margin-top: 4px;
+        }}
+        .chart-container {{
+            flex: 1 1 100%;
+            width: auto;
+            min-width: 0;
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: var(--card-shadow);
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            min-height: 200px;
+        }}
+        /* ★ 新增：左侧年度收益面板 */
+        .chart-history-panel {{
+            flex: 1 1 50%;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px dashed var(--border);
+            padding-right: 8px;
+            overflow: hidden;
+        }}
+        .chart-history-header {{
+            font-size: 12px;
+            font-weight: bold;
+            color: var(--header-text);
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }}
+
+        /* ★ 年度收益率热力图网格 */
+        .fund-annual-heatmap-grid {{
+            flex: 1;
+            overflow-y: auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+            gap: 6px;
+            align-content: start;
+            min-height: 0;
+            padding: 2px;
+        }}
+        .fund-annual-heatmap-cell {{
+            border-radius: 4px;
+            padding: 6px 2px;
+            min-height: 52px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            cursor: default;
+            transition: transform 0.15s ease, outline 0.15s ease;
+            position: relative;
+            z-index: 1;
+        }}
+        .fund-annual-heatmap-cell:hover {{
+            transform: scale(1.10);
+            outline: 2px solid var(--link-color);
+            outline-offset: 1px;
+            z-index: 5;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }}
+        .fund-annual-year {{
+            font-size: 10px;
+            font-weight: 600;
+            color: #ffffff;
+            line-height: 1.1;
+        }}
+        .fund-annual-pct {{
+            font-size: 12px;
+            font-weight: 800;
+            color: #ffffff;
+            letter-spacing: 0.2px;
+            line-height: 1.1;
+        }}
+        .fund-annual-close {{
+            font-size: 9px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.92);
+            line-height: 1.1;
+            margin-top: 1px;
+            letter-spacing: 0.2px;
+        }}
+        .chart-history-empty {{
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--footer-text);
+            font-size: 11px;
+        }}
+        /* ★ 新增：右侧折线图面板 */
+        .chart-line-panel {{
+            flex: 1 1 50%;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }}
+        .chart-controls {{ display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }}
+        .chart-controls button {{ background: var(--btn-bg); border: 1px solid var(--border); border-radius: 12px; padding: 2px 8px; font-size: 10px; cursor: pointer; color: var(--btn-text); }}
+        .chart-controls button.active {{ background: var(--btn-active-bg); color: var(--btn-active-text); }}
+        .chart-line-panel canvas {{ width: 100% !important; height: auto !important; max-height: 200px; flex: 1; }}
+
+        .footer-note {{ font-size: 11px; color: var(--footer-text); background: var(--footer-bg); padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }}
+
+        /* ★ 基金年度收益统计栏 */
+        .fund-annual-stats-footer {{
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 8px 2px 2px 2px;
+            margin-top: 6px;
+            border-top: 1px solid var(--border);
+            flex-shrink: 0;
+        }}
+        .fund-annual-stat-item {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1px;
+            min-width: 46px;
+        }}
+        .fund-annual-stat-label {{
+            color: var(--footer-text);
+            font-size: 9px;
+            white-space: nowrap;
+        }}
+        .fund-annual-stat-value {{
+            font-weight: 700;
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-size: 11px;
+            color: var(--text);
+            line-height: 1.1;
+        }}
+        .fund-annual-stat-sub {{
+            font-size: 9px;
+            color: var(--footer-text);
+            font-weight: 500;
+            line-height: 1;
+        }}
+
+        /* 定投回测模态弹窗 */
+        .modal-overlay {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.45);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            backdrop-filter: blur(2px);
+        }}
+        .modal-overlay.show {{ display: flex; }}
+        .modal-card {{
+            background: var(--table-bg);
+            color: var(--text);
+            width: 92%;
+            max-width: 820px;
+            border-radius: 14px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            animation: modalFadeIn 0.2s ease;
+        }}
+        @keyframes modalFadeIn {{
+            from {{ transform: scale(0.96); opacity: 0; }}
+            to {{ transform: scale(1); opacity: 1; }}
+        }}
+        .modal-header {{
+            padding: 12px 18px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--header-bg);
+        }}
+        .modal-header h3 {{
+            margin: 0;
+            font-size: 15px;
+            color: var(--link-color);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .modal-close {{
+            background: transparent;
+            border: none;
+            font-size: 20px;
+            color: var(--footer-text);
+            cursor: pointer;
+            line-height: 1;
+        }}
+        .modal-close:hover {{ color: #d93025; }}
+        .modal-body {{
+            padding: 14px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }}
+        /* ===== 基金详情浮窗（宽版） ===== */
+        .modal-card.modal-card-wide {{
+            width: 94%;
+            max-width: 1400px;
+            max-height: 92vh;
+        }}        .modal-card-wide .modal-header h3 {{
+            font-size: 14px;
+            font-weight: 600;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .modal-card-wide .modal-body#fundDetailBody {{
+            padding: 10px 12px;
+            gap: 0;
+            max-height: calc(92vh - 52px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+        }}
+        /* 浮窗内无需 sticky 钉视口，宽度跟随浮窗而非整张超宽表格 */
+        #fundDetailModal .holdings-wrapper {{
+            position: static;
+            left: auto;
+            width: 100%;
+            max-width: 100%;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: stretch;
+        }}
+        #fundDetailModal .quarters-panel {{ flex: 1 1 100%; width: 100%; }}
+        #fundDetailModal .right-chart-wrapper {{ flex: 1 1 100%; width: 100%; min-height: 300px; }}
+        /* 桌面端浮窗更宽，饼图相应放大，避免环形过小看不清 */
+        @media (min-width: 993px) {{
+            #fundDetailModal .pie-cell-canvas {{ height: 136px; }}
+            #fundDetailModal .quarter-pies.single .pie-cell-canvas {{ height: 170px; }}
+            #fundDetailModal .quarter-pies.single .pie-cell-empty .pie-empty-body {{ min-height: 170px; }}
+            #fundDetailModal .pie-mini-title {{ font-size: 11px; padding-bottom: 4px; }}
+            #fundDetailModal .chart-container {{ min-height: 330px; }}
+        }}
+
+        /* ===== 全部持仓浮窗（二级浮窗，盖在基金详情之上） ===== */
+        .modal-overlay.modal-nested {{ z-index: 1100; }}
+        .modal-card.modal-card-mid {{
+            width: 90%;
+            max-width: 860px;
+            max-height: 88vh;
+        }}
+        .modal-card-mid .modal-header h3 {{
+            font-size: 14px; font-weight: 600;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }}
+        #holdingsDetailBody {{
+            padding: 10px 14px 14px;
+            gap: 10px;
+            max-height: calc(88vh - 52px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+        }}
+        /* 季度切换条：两侧翻页按钮 + 中间可横向滚动的 chips */
+        .hd-quarter-bar {{
+            display: flex; align-items: center; gap: 6px; padding: 2px 0 8px;
+            border-bottom: 1px solid var(--border); flex: none;
+        }}
+        .hd-nav {{
+            flex: none; width: 20px; height: 20px; padding: 0; line-height: 1;
+            border-radius: 50%; border: 1px solid var(--border);
+            background: transparent; color: var(--footer-text); cursor: pointer;
+            font-size: 13px; display: flex; align-items: center; justify-content: center;
+            transition: all 0.15s;
+        }}
+        .hd-nav:hover:not(:disabled) {{ border-color: var(--link-color); color: var(--link-color); }}
+        .hd-nav:disabled {{ opacity: 0.3; cursor: default; }}
+        .hd-chips {{
+            display: flex; gap: 6px; overflow-x: auto; flex: 1 1 auto;
+            /* flex 项的 min-width 默认是 auto（按内容撑开），不设 0 的话
+               chips 会把整行撑爆而不是在容器内横向滚动 */
+            min-width: 0;
+            scrollbar-width: thin; padding-bottom: 2px;
+        }}
+        .hd-quarter-chip {{
+            flex: none; font-size: 11px; line-height: 1.7; padding: 1px 9px;
+            border-radius: 11px; border: 1px solid var(--border);
+            background: transparent; color: var(--footer-text); cursor: pointer;
+            white-space: nowrap; transition: all 0.15s;
+        }}
+        .hd-quarter-chip:hover {{ border-color: var(--link-color); color: var(--link-color); }}
+        .hd-quarter-chip.active {{
+            background: var(--link-color); border-color: var(--link-color); color: #fff; font-weight: 600;
+        }}
+        .hd-summary {{
+            display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: baseline;
+            font-size: 11px; color: var(--footer-text); flex: none;
+        }}
+        .hd-summary b {{ color: var(--text); font-size: 12px; }}
+        /* 增减仓统计胶囊 */
+        .hd-stats {{ display: flex; flex-wrap: wrap; gap: 6px; flex: none; }}
+        .hd-stat {{
+            font-size: 10px; line-height: 1.8; padding: 0 7px; border-radius: 9px;
+            border: 1px solid var(--border); color: var(--footer-text); white-space: nowrap;
+        }}
+        .hd-stat b {{ font-weight: 600; font-size: 11px; }}
+        .hd-stat.s-new {{ border-color: #1a73e8; color: #1a73e8; }}
+        .hd-stat.s-up {{ border-color: #d93025; color: #d93025; }}
+        .hd-stat.s-down {{ border-color: #188038; color: #188038; }}
+        .hd-stat.s-flat {{ border-color: var(--border); color: var(--footer-text); }}
+        .hd-stat.s-sold {{ border-color: #e67e22; color: #e67e22; }}
+        /* 全部持仓表 */
+        /* 桌面端不建滚动容器，表头才能 sticky 到浮窗主体上 */
+        .hd-table-wrap {{ overflow: visible; width: 100%; flex: none; }}
+        .hd-table {{
+            width: 100%; border-collapse: separate; border-spacing: 0;
+            table-layout: fixed; font-size: 12px;
+        }}
+        .hd-table thead th {{
+            position: sticky; top: 0; z-index: 2; background: var(--table-bg);
+            padding: 6px 6px; text-align: left; font-weight: 600;
+            color: var(--footer-text); font-size: 11px;
+            border-bottom: 1px solid var(--border); white-space: nowrap;
+        }}
+        .hd-table thead th.hd-num {{ text-align: right; }}
+        /* 可点击排序的表头 */
+        .hd-table thead th.hd-sortable {{ cursor: pointer; user-select: none; }}
+        .hd-table thead th.hd-sortable:hover {{ color: var(--link-color); }}
+        .hd-table thead th.hd-sorted {{ color: var(--link-color); }}
+        .hd-sort-mark {{ font-size: 9px; margin-left: 2px; vertical-align: 1px; }}
+        /* 全局的 th:nth-child(N) 规则给每一列都设了宽度，fixed 布局会把多余空间
+           按比例摊到所有列上，导致 colgroup 的列宽被等比放大。这里统一重置，
+           让列宽只由 <colgroup> 决定（未设宽度的列自动吸收剩余空间）。 */
+        .hd-table th, .hd-table td {{ width: auto !important; }}
+        .hd-table col.hd-col-rank {{ width: 40px; }}
+        .hd-table col.hd-col-code {{ width: 84px; }}
+        .hd-table col.hd-col-prev {{ width: 68px; }}
+        .hd-table col.hd-col-ratio {{ width: 68px; }}
+        .hd-table col.hd-col-bar {{ width: 150px; }}
+        .hd-table col.hd-col-chg {{ width: 76px; }}
+        .hd-table thead th.hd-c-rank {{ text-align: center; }}
+        .hd-table thead th.hd-c-prev {{ text-align: right; }}
+        .hd-table thead th.hd-c-ratio {{ text-align: right; }}
+        .hd-table thead th.hd-c-chg {{ text-align: right; }}
+        .hd-table tbody td {{
+            padding: 4px 6px; border-bottom: 1px solid var(--border);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }}
+        .hd-table tbody tr:hover td {{ background: var(--hover-bg); }}
+        .hd-table td.hd-rank {{ text-align: center; color: var(--footer-text); font-size: 10px; }}
+        .hd-table td.hd-code {{ color: var(--footer-text); font-size: 11px; font-family: ui-monospace, Menlo, Consolas, monospace; }}
+        /* 上季占比：弱化显示，作为本季值的对照基准 */
+        .hd-table td.hd-prev {{ text-align: right; color: var(--footer-text); font-variant-numeric: tabular-nums; }}
+        .hd-table td.hd-ratio {{ text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }}
+        .hd-table td.hd-chg {{ text-align: right; font-size: 10px; font-variant-numeric: tabular-nums; }}
+        .hd-bar {{ height: 6px; border-radius: 3px; background: var(--hover-bg); overflow: hidden; }}
+        .hd-bar i {{ display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #7bb0f5, #1a73e8); }}
+        .hd-table tfoot td {{
+            padding: 7px 6px; font-weight: 600; font-size: 11px;
+            border-top: 2px solid var(--border); color: var(--text);
+        }}
+        .hd-table tfoot td.hd-ratio {{ color: #e67e22; }}
+        /* 本季退出披露名单的持仓 */
+        .hd-sold {{
+            margin-top: 2px; padding-top: 8px; border-top: 1px dashed var(--border);
+            flex: none;
+        }}
+        .hd-sold-head {{
+            display: flex; align-items: baseline; gap: 8px; font-size: 11px;
+            color: var(--footer-text); cursor: pointer; user-select: none;
+        }}
+        .hd-sold-head b {{ color: #e67e22; font-size: 12px; }}
+        .hd-sold-hint {{ font-size: 10px; color: var(--footer-text); opacity: 0.85; }}
+        .hd-sold-toggle {{ margin-left: auto; color: var(--link-color); white-space: nowrap; }}
+        .hd-sold-list {{ display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }}
+        .hd-sold-list.collapsed {{ display: none; }}
+        .hd-sold-item {{
+            font-size: 10px; line-height: 1.8; padding: 0 7px; border-radius: 9px;
+            background: var(--hover-bg); color: var(--text); white-space: nowrap;
+        }}
+        .hd-sold-item i {{ font-style: normal; color: var(--footer-text); margin-left: 4px; }}
+        .hd-empty {{ padding: 40px 0; text-align: center; color: var(--footer-text); font-size: 12px; }}
+        @media (max-width: 992px) {{
+            .modal-card.modal-card-mid {{ width: 96%; max-height: 90vh; }}
+            #holdingsDetailBody {{ padding: 8px 10px 12px; max-height: calc(90vh - 48px); }}
+            .hd-table-wrap {{ overflow-x: auto; }}
+            .hd-table {{ font-size: 11px; min-width: 400px; }}
+            /* 窄屏列宽由 JS 决定（≤520px 不渲染「占比」条列）：
+               表格里给单元格加 display:none 会让后续单元格整体左移一格，
+               落进宽度为 0 的列而消失，所以只能在渲染时少生成一列。 */
+            .hd-table col.hd-col-rank {{ width: 26px; }}
+            .hd-table col.hd-col-code {{ width: 54px; }}
+            .hd-table col.hd-col-prev {{ width: 50px; }}
+            .hd-table col.hd-col-ratio {{ width: 50px; }}
+            .hd-table col.hd-col-chg {{ width: 50px; }}
+            .hd-quarter-chip {{ font-size: 10px; padding: 1px 7px; }}
+            .hd-nav {{ width: 18px; height: 18px; font-size: 12px; }}
+            .hd-summary {{ font-size: 10px; gap: 4px 10px; }}
+            .hd-stats {{ gap: 4px; }}
+            .hd-stat {{ font-size: 9px; padding: 0 5px; }}
+            .hd-stat b {{ font-size: 10px; }}
+            .hd-sold-head {{ font-size: 10px; gap: 6px; }}
+            .hd-sold-hint {{ display: none; }}
+            /* 窄屏标题放不下「代码 + 全名 + 季度」，隐去全名保证季度可见 */
+            .hd-tname {{ display: none; }}
+            .modal-card-mid .modal-header h3 {{ font-size: 12px; }}
+        }}
+        .holding-detail-loading {{
+            padding: 64px 0;
+            text-align: center;
+            color: var(--footer-text);
+            font-size: 13px;
+        }}
+        .dca-controls {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+            background: var(--card-bg);
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }}
+        .dca-field {{
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 11px;
+            font-weight: 500;
+        }}
+        .dca-field select, .dca-field input {{
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 12px;
+            outline: none;
+        }}
+        /* 快捷窗口按钮组：点一下即把起止日期填成对应区间 */
+        .dca-preset-field {{ grid-column: 1 / -1; }}
+        .dca-presets {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+        }}
+        .dca-presets button {{
+            flex: 0 1 auto;
+            min-width: 64px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }}
+        .dca-presets button:hover {{ border-color: var(--btn-active-bg); color: var(--btn-active-bg); }}
+        .dca-presets button.active {{
+            background: var(--btn-active-bg);
+            border-color: var(--btn-active-bg);
+            color: #fff;
+            font-weight: 600;
+        }}
+        .dca-run-btn {{
+            grid-column: 1 / -1;
+            background: var(--btn-active-bg);
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+            margin-top: 2px;
+        }}
+        .dca-run-btn:hover {{ opacity: 0.9; }}
+
+        .dca-results-grid {{
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 8px;
+        }}
+        .dca-result-card {{
+            background: var(--hover-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 10px;
+            text-align: center;
+        }}
+        .dca-result-title {{
+            font-size: 10px;
+            color: var(--footer-text);
+            margin-bottom: 2px;
+        }}
+        .dca-result-value {{
+            font-size: 14px;
+            font-weight: 700;
+            font-family: "SFMono-Regular", Consolas, monospace;
+        }}
+        .dca-chart-box {{
+            height: 230px;
+            width: 100%;
+            position: relative;
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 8px;
+            border: 1px solid var(--border);
+            box-sizing: border-box;
+        }}
+
+        /* ===== QDII 监控视图（表格风格） ===== */
+        /* 子标签页：现有监控 / QDII 基金对比 */
+        .qdii-subtabs {{
+            display: flex;
+            gap: 8px;
+            padding: 10px 1.5% 0;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }}
+        .qdii-subtab {{
+            border: 1px solid var(--border);
+            background: var(--table-bg);
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 600;
+            font-family: inherit;
+            padding: 7px 16px;
+            border-radius: 8px 8px 0 0;
+            cursor: pointer;
+            transition: all .16s ease;
+            white-space: nowrap;
+        }}
+        .qdii-subtab:hover {{ color: var(--link-color); border-color: var(--link-color); }}
+        .qdii-subtab.active {{
+            background: var(--btn-active-bg);
+            border-color: var(--btn-active-bg);
+            color: #fff;
+        }}
+        .qdii-subpane {{ display: none; flex: 1; min-height: 0; flex-direction: column; }}
+        .qdii-subpane.active {{ display: flex; }}
+
+        /* ===== QDII 年化收益排行 ===== */
+        .qdii-annual-wrap {{ max-height: calc(100vh - 300px); overflow: auto; }}
+        .qdii-year-select {{
+            padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--table-bg); color: var(--text); font-size: 12px;
+            font-family: inherit; cursor: pointer;
+        }}
+        .qdii-range-sep {{ color: var(--footer-text); font-size: 12px; padding: 0 2px; }}
+        .qdii-th-sort {{ cursor: pointer; user-select: none; white-space: nowrap; }}
+        .qdii-th-sort:hover {{ color: var(--link-color); }}
+        .qdii-beat-tag {{
+            display: inline-block; padding: 2px 7px; border-radius: 4px;
+            background: rgba(232,113,10,0.14); color: #e8710a;
+            font-size: 11px; font-weight: 700; white-space: nowrap;
+        }}
+        .qdii-lag-tag {{
+            display: inline-block; padding: 2px 7px; border-radius: 4px;
+            background: rgba(95,99,104,0.10); color: var(--footer-text);
+            font-size: 11px; white-space: nowrap;
+        }}
+        /* 跑赢纳指的主动基金整行淡淡高亮，一眼扫得出来 */
+        #qdiiAnnualTable tbody tr.qdii-beat-row td {{ background: rgba(232,113,10,0.045); }}
+        .qdii-annual-foot {{
+            padding: 10px 14px; font-size: 12px; color: var(--footer-text);
+            border-top: 1px solid var(--border); flex-shrink: 0;
+        }}
+        .qdii-span-hint {{
+            display: block; font-size: 10px; color: var(--footer-text);
+            font-weight: 400; margin-top: 1px; white-space: nowrap;
+        }}
+
+        /* ===== QDII 对比表 ===== */
+        .cmp-block-title {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--header-text);
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, var(--hover-bg), transparent);
+            flex-shrink: 0;
+        }}
+        .cmp-block-title .cmp-block-sub {{
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--footer-text);
+        }}
+        .cmp-hint {{ font-size: 11px; color: var(--footer-text); }}
+        /* 对比页两张表按内容高度铺开，由 .qdii-container 整体滚动；
+           否则卡片在 flex 容器里会被压扁成几行。
+           每张表内部限高并独立滚动，配合 sticky 表头 / sticky 首列才好对比 */
+        .qdii-table-card.cmp-card {{ flex: none; }}
+        .qdii-table-wrap.cmp-scroll {{ max-height: 58vh; overflow: auto; }}
+        .cmp-table {{
+            border-collapse: separate;
+            border-spacing: 0;
+            table-layout: fixed;
+            width: 100%;
+            min-width: 900px;
+            font-size: 12px;
+        }}
+        .cmp-table th, .cmp-table td {{
+            border-bottom: 1px solid var(--border);
+            padding: 7px 8px;
+            vertical-align: top;
+            text-align: left;
+        }}
+        .cmp-table thead th {{
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            background: var(--table-bg);
+            color: var(--header-text);
+            font-size: 11px;
+            font-weight: 700;
+            white-space: nowrap;
+            padding: 9px 8px;
+            border-bottom: 2px solid var(--link-color);
+        }}
+        .cmp-table th.cmp-q-head {{
+            cursor: pointer;
+            text-align: center;
+            user-select: none;
+        }}
+        .cmp-table th.cmp-q-head:hover {{ color: var(--link-color); background: var(--hover-bg); }}
+        /* 最新季度列淡色高亮，一眼看出哪列是最新 */
+        .cmp-table th.cmp-q-head.cmp-latest {{
+            color: var(--link-color);
+            background: rgba(26, 115, 232, 0.07);
+        }}
+        .cmp-table td.cmp-cell.cmp-latest-col {{ background: rgba(26, 115, 232, 0.035); }}
+        .cmp-table th.cmp-code, .cmp-table td.cmp-code {{
+            width: 66px;
+            position: sticky;
+            left: 0;
+            z-index: 2;
+            background: var(--table-bg);
+        }}
+        .cmp-table thead th.cmp-code {{ z-index: 4; }}
+        .cmp-table thead th.cmp-name {{ z-index: 4; }}
+        .cmp-table th.cmp-name, .cmp-table td.cmp-name {{
+            width: 180px;
+            max-width: 180px;
+            position: sticky;
+            left: 66px;
+            z-index: 2;
+            background: var(--table-bg);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .cmp-table th.cmp-group {{ width: 82px; }}
+        .cmp-table th.cmp-scale, .cmp-table td.cmp-scale {{ width: 78px; white-space: nowrap; }}
+        .cmp-table tbody tr:hover td {{ background: var(--hover-bg); }}
+        .cmp-cell {{ text-align: right; word-break: break-word; }}
+        .cmp-cell-na {{ color: var(--footer-text); font-size: 11px; text-align: center; vertical-align: middle; }}
+        .cmp-sum {{
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--header-text);
+            white-space: nowrap;
+            line-height: 1.2;
+        }}
+        .cmp-delta {{
+            font-size: 10px;
+            margin-left: 5px;
+            font-weight: 700;
+            padding: 1px 4px;
+            border-radius: 4px;
+            vertical-align: 2px;
+        }}
+        .cmp-up {{ color: #d93025; background: rgba(217, 48, 37, 0.1); }}
+        .cmp-down {{ color: #188038; background: rgba(24, 128, 56, 0.1); }}
+        /* 持仓集中度进度条：以 60% 为满格 */
+        .cmp-meter {{
+            height: 5px;
+            border-radius: 3px;
+            background: var(--hover-bg);
+            overflow: hidden;
+            margin: 5px 0 4px;
+        }}
+        .cmp-meter i {{
+            display: block;
+            height: 100%;
+            border-radius: 3px;
+            background: linear-gradient(90deg, #7bb0f5, #1a73e8);
+        }}
+        .cmp-tags {{
+            font-size: 10px;
+            color: var(--footer-text);
+            line-height: 1.4;
+            min-height: 28px;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            text-align: left;
+        }}
+        /* 国家/地区：第一大国家 + 堆叠条 + 其余国家 */
+        .cmp-lead {{
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 4px;
+            font-size: 11px;
+            line-height: 1.2;
+            margin-bottom: 4px;
+        }}
+        .cmp-lead b {{ color: var(--header-text); font-weight: 700; }}
+        .cmp-lead span {{ color: var(--link-color); font-weight: 700; font-size: 12px; }}
+        .cmp-bar {{
+            display: flex;
+            height: 10px;
+            width: 100%;
+            border-radius: 5px;
+            overflow: hidden;
+            background: var(--hover-bg);
+            margin-bottom: 4px;
+        }}
+        .cmp-bar i {{ display: block; height: 100%; }}
+        .cmp-bar i + i {{ box-shadow: inset 1px 0 0 rgba(255,255,255,.55); }}
+
+        /* ★ 滚动容器铺满整个视图宽度。
+           注意：容器曾经写过 max-width:1440px + margin:0 auto，宽屏下滚动条就停在
+           1440px 处，两侧留出大片空白；鼠标移到空白区滚轮不生效，必须先把指针
+           挪进容器内才能滚动。所以限宽交给子元素去做，容器本身始终整宽负责滚动。 */
+        .qdii-container {{
+            flex: 1;
+            overflow-y: auto;
+            width: 100%;
+            /* 与基金量化页 (#fundView) 完全同一套留白：桌面左右各 32px */
+            padding: 0 32px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            scrollbar-gutter: stable;
+        }}
+        /* 内容限宽 = #fundView 的 2000px 上限减掉左右留白，超宽屏下两页右边界仍然对齐 */
+        .qdii-container > * {{
+            width: 100%;
+            max-width: 1936px;
+            margin-left: auto;
+            margin-right: auto;
+            box-sizing: border-box;
+        }}
+        .qdii-filter-bar {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 16px;
+            align-items: center;
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 14px;
+            box-shadow: var(--card-shadow);
+            flex-shrink: 0;
+        }}
+        .qdii-filter-group {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }}
+        .qdii-filter-label {{
+            font-size: 12px;
+            color: var(--footer-text);
+            font-weight: 600;
+            margin-right: 2px;
+        }}
+        .qdii-chip {{
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 3px 12px;
+            font-size: 12px;
+            color: var(--text);
+            cursor: pointer;
+            transition: all 0.18s ease;
+            font-weight: 500;
+            white-space: nowrap;
+            font-family: inherit;
+        }}
+        .qdii-chip:hover {{
+            border-color: var(--link-color);
+            color: var(--link-color);
+        }}
+        .qdii-chip.active {{
+            background: var(--link-color);
+            color: #fff;
+            border-color: var(--link-color);
+            font-weight: 600;
+        }}
+        .qdii-search-wrap {{
+            margin-left: auto;
+            flex-shrink: 0;
+        }}
+        .qdii-search-wrap input {{
+            width: 220px;
+            height: 30px;
+            padding: 4px 14px;
+            border-radius: 15px;
+            border: 1px solid var(--input-border);
+            background: var(--input-bg);
+            color: var(--text);
+            font-size: 12px;
+            outline: none;
+            box-sizing: border-box;
+        }}
+        .qdii-search-wrap input:focus {{
+            border-color: var(--link-color);
+        }}
+
+        .qdii-table-card {{
+            background: var(--table-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: var(--card-shadow);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }}
+        .qdii-table-wrap {{
+            overflow-x: auto;
+            overflow-y: auto;
+            max-height: calc(100vh - 220px);
+        }}
+        #qdiiTable {{
+            width: 100%;
+            /* 列变多（收益 5 档 + 运作费），给一个下限宽度，不够就横向滚动 */
+            min-width: 1600px;
+            border-collapse: collapse;
+            font-size: 12px;
+            table-layout: fixed;
+        }}
+        #qdiiTable thead th {{
+            position: sticky;
+            top: 0;
+            background: var(--header-bg);
+            color: var(--footer-text);
+            font-size: 11px;
+            font-weight: 600;
+            text-align: left;
+            padding: 12px 10px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            letter-spacing: 0.3px;
+            z-index: 2;
+        }}
+        #qdiiTable tbody td {{
+            padding: 12px 10px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            vertical-align: middle;
+        }}
+        #qdiiTable tbody tr {{
+            transition: background 0.15s ease;
+        }}
+        #qdiiTable tbody tr:hover {{
+            background: var(--hover-bg);
+        }}
+        #qdiiTable tbody tr:last-child td {{
+            border-bottom: none;
+        }}
+
+        .qdii-code-cell a {{
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-weight: 700;
+            color: var(--footer-text);
+            text-decoration: none;
+            font-size: 12px;
+            letter-spacing: 0.3px;
+        }}
+        .qdii-code-cell a:hover {{
+            color: var(--link-color);
+        }}
+        .qdii-name-cell a {{
+            color: var(--text);
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 13px;
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .qdii-name-cell a:hover {{
+            color: var(--link-color);
+        }}
+        .qdii-track-tag {{
+            display: inline-block;
+            padding: 3px 10px;
+            font-size: 11px;
+            border-radius: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+            border: 1px solid transparent;
+        }}
+        /* ★ 跟踪标的按分类着色 */
+        .qdii-track-tag[data-g="us_active"] {{
+            background: rgba(156, 39, 176, 0.12);
+            color: #9c27b0;
+            border-color: rgba(156, 39, 176, 0.35);
+        }}
+        .qdii-track-tag[data-g="ndx_passive"] {{
+            background: rgba(26, 115, 232, 0.12);
+            color: #1a73e8;
+            border-color: rgba(26, 115, 232, 0.35);
+        }}
+        .qdii-track-tag[data-g="spx_passive"] {{
+            background: rgba(24, 128, 56, 0.12);
+            color: #188038;
+            border-color: rgba(24, 128, 56, 0.35);
+        }}
+        .qdii-track-tag[data-g="emerging"] {{
+            background: rgba(230, 126, 34, 0.12);
+            color: #e67e22;
+            border-color: rgba(230, 126, 34, 0.35);
+        }}
+        .qdii-track-tag[data-g="other"] {{
+            background: rgba(112, 117, 122, 0.12);
+            color: #70757a;
+            border-color: rgba(112, 117, 122, 0.35);
+        }}
+        [data-theme="dark"] .qdii-track-tag[data-g="us_active"] {{
+            background: rgba(206, 147, 216, 0.18); color: #ce93d8; border-color: rgba(206, 147, 216, 0.4);
+        }}
+        [data-theme="dark"] .qdii-track-tag[data-g="ndx_passive"] {{
+            background: rgba(138, 180, 248, 0.18); color: #8ab4f8; border-color: rgba(138, 180, 248, 0.4);
+        }}
+        [data-theme="dark"] .qdii-track-tag[data-g="spx_passive"] {{
+            background: rgba(129, 201, 149, 0.18); color: #81c995; border-color: rgba(129, 201, 149, 0.4);
+        }}
+        [data-theme="dark"] .qdii-track-tag[data-g="emerging"] {{
+            background: rgba(252, 183, 120, 0.18); color: #fcb778; border-color: rgba(252, 183, 120, 0.4);
+        }}
+        [data-theme="dark"] .qdii-track-tag[data-g="other"] {{
+            background: rgba(180, 180, 180, 0.18); color: #b0b0b0; border-color: rgba(180, 180, 180, 0.4);
+        }}
+
+        /* ★ 申购状态胶囊标签（与跟踪标的同风格） */
+        .qdii-badge {{
+            display: inline-block;
+            padding: 3px 10px;
+            font-size: 11px;
+            border-radius: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+            border: 1px solid transparent;
+        }}
+        .qdii-badge-open {{
+            background: rgba(24, 128, 56, 0.12);
+            color: #188038;
+            border-color: rgba(24, 128, 56, 0.35);
+        }}
+        .qdii-badge-limited {{
+            background: rgba(230, 126, 34, 0.12);
+            color: #e67e22;
+            border-color: rgba(230, 126, 34, 0.35);
+        }}
+        .qdii-badge-paused {{
+            background: rgba(112, 117, 122, 0.12);
+            color: #70757a;
+            border-color: rgba(112, 117, 122, 0.35);
+        }}
+
+        /* 暗色模式下的柔和色 */
+        [data-theme="dark"] .qdii-badge-open {{
+            background: rgba(129, 201, 149, 0.18);
+            color: #81c995;
+            border-color: rgba(129, 201, 149, 0.4);
+        }}
+        [data-theme="dark"] .qdii-badge-limited {{
+            background: rgba(252, 183, 120, 0.18);
+            color: #fcb778;
+            border-color: rgba(252, 183, 120, 0.4);
+        }}
+        [data-theme="dark"] .qdii-badge-paused {{
+            background: rgba(180, 180, 180, 0.18);
+            color: #b0b0b0;
+            border-color: rgba(180, 180, 180, 0.4);
+        }}
+
+        /* ★ 年化跟踪误差单元格 */
+        .qdii-te-cell {{
+            text-align: right !important;
+        }}
+
+        .qdii-peer-cell {{
+            text-align: right !important;
+        }}
+        .qdii-peer-num {{
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-weight: 700;
+            color: #1a73e8;
+            font-size: 12px;
+        }}
+
+        /* ★ 夏普比率单元格（纵向三行：近1/2/3年） */
+        .qdii-sharp-cell {{
+            text-align: right !important;
+            padding-top: 6px !important;
+            padding-bottom: 6px !important;
+        }}
+        .qdii-sharp-inner {{
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            align-items: flex-end;
+        }}
+        .qdii-sharp-row {{
+            display: flex;
+            align-items: baseline;
+            gap: 4px;
+            font-size: 10px;
+            white-space: nowrap;
+            line-height: 1.3;
+        }}
+        .qdii-sharp-label {{
+            color: var(--footer-text);
+            font-size: 9px;
+            min-width: 26px;
+            text-align: left;
+        }}
+        .qdii-sharp-num {{
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-weight: 700;
+            color: #9c27b0;
+            font-size: 11px;
+        }}
+
+        .qdii-te-num {{
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-weight: 700;
+            color: #e67e22;
+            font-size: 12px;
+        }}
+        /* 运作费：上行合计，下行「管 / 托 / 销」三项明细 */
+        .qdii-opfee {{
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            line-height: 1.25;
+        }}
+        .qdii-opfee-total {{
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-weight: 700;
+            font-size: 12px;
+            color: var(--text);
+        }}
+        .qdii-opfee-sub {{
+            font-size: 10px;
+            color: var(--footer-text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        /* ★ 表头可排序 */
+        #qdiiTable thead th[data-sort] {{
+            cursor: pointer;
+            user-select: none;
+        }}
+        #qdiiTable thead th[data-sort]:hover {{
+            background: var(--hover-bg);
+            color: var(--link-color);
+        }}
+        #qdiiTable thead th .sort-icon {{
+            font-size: 10px;
+            color: var(--footer-text);
+            margin-left: 2px;
+            opacity: 0.7;
+        }}
+        #qdiiTable thead th.sorted {{
+            color: var(--link-color);
+        }}
+        #qdiiTable thead th.sorted .sort-icon {{
+            color: var(--link-color);
+            opacity: 1;
+        }}
+
+        /* ===== QDII 表头排序 ===== */
+        #qdiiTable thead th[data-sort] {{
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.15s ease, color 0.15s ease;
+        }}
+        #qdiiTable thead th[data-sort]:hover {{
+            background: var(--hover-bg);
+            color: var(--link-color);
+        }}
+        #qdiiTable thead th .sort-icon {{
+            display: inline-block;
+            font-size: 10px;
+            color: var(--footer-text);
+            opacity: 0.6;
+            margin-left: 2px;
+            transition: opacity 0.15s, color 0.15s;
+        }}
+        #qdiiTable thead th:hover .sort-icon {{
+            opacity: 1;
+        }}
+        #qdiiTable thead th.sorted {{
+            color: var(--link-color);
+        }}
+        #qdiiTable thead th.sorted .sort-icon {{
+            color: var(--link-color);
+            opacity: 1;
+            font-weight: bold;
+        }}
+
+        @media (max-width: 1200px) {{
+            .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(3, 1fr); }}
+        }}
+        @media (max-width: 992px) {{
+            body {{
+                height: auto;
+                min-height: 100dvh;
+                overflow-y: auto;
+                overflow-x: hidden;
+                padding: 0;
+            }}
+            .main-navbar {{
+                padding: 10px 12px;
+                height: auto;
+                flex-wrap: wrap;
+                gap: 8px;
+            }}
+            .nav-brand {{ font-size: 15px; }}
+            .views-container {{ padding: 8px 10px; height: auto; overflow: visible; }}
+            .view-pane {{ height: auto; overflow: visible; }}
+
+            .home-container {{ padding: 10px 16px; gap: 10px; }}
+            .macro-metrics-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+            .index-metrics-grid, .friend-links-grid {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+
+            /* 移动端留白沿用桌面端 32px（与 #fundView 一致，那边窄屏也是 32px） */
+            .qdii-container {{ gap: 16px; }}
+            .qdii-cards-grid {{ grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }}
+            .qdii-nav {{ font-size: 18px; }}
+
+            .qdii-container {{ gap: 10px; }}
+            .qdii-filter-bar {{ padding: 8px 10px; gap: 8px; }}
+            .qdii-search-wrap {{ margin-left: 0; width: 100%; }}
+            .qdii-search-wrap input {{ width: 100%; }}
+            .qdii-table-wrap {{ max-height: none; }}
+            #qdiiTable {{ min-width: 1020px; font-size: 11px; }}
+            #qdiiTable thead th,
+            #qdiiTable tbody td {{ padding: 8px 8px; }}
+
+            .home-grid-section {{ grid-template-columns: 1fr; gap: 10px; }}
+            /* ===== 移动端：申购状态栏作为统一工具栏（一行布局） ===== */
+            .dca-mobile-row {{
+                flex-direction: column;
+                gap: 8px;
+            }}
+
+            /* 申购状态栏：两行布局 —— 第一行申购状态+面板按钮，第二行视图切换+搜索框 */
+            .dca-mobile-row .buy-status-filter-card {{
+                order: 1;
+                width: 100%;
+                flex-basis: 100%;
+                flex-direction: row !important;
+                align-items: center !important;
+                justify-content: flex-start !important;
+                flex-wrap: wrap !important;
+                gap: 6px !important;
+                padding: 5px 8px !important;
+                min-height: 36px !important;
+                overflow: visible;
+            }}
+
+            /* 左侧：申购状态组 */
+            .dca-mobile-row .buy-status-main-row {{
+                display: flex;
+                align-items: center;
+                gap: 3px;
+                flex-wrap: nowrap;
+                flex: 1 1 100%;
+                min-width: 0;
+                order: 1;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                padding-bottom: 0;
+                border-bottom: none;
+                scrollbar-width: none;
+            }}
+            .dca-mobile-row .buy-status-main-row::-webkit-scrollbar {{
+                display: none;
+            }}
+
+            /* 份额类别按钮：移动端独占第二行并可换行，
+               否则会和申购状态挤在同一条 nowrap 横向滚动条里，「份额:」标签还会被下面的 rule 隐藏掉 */
+            .dca-mobile-row .buy-status-main-row {{
+                flex-wrap: wrap;
+                overflow-x: visible;
+            }}
+            .dca-mobile-row .share-group {{
+                flex: 1 1 100%;
+                margin-top: 2px;
+            }}
+            /* 特异性要压过下面「移动端隐藏申购状态标签」的 .buy-status-main-row .category-title */
+            .dca-mobile-row .buy-status-main-row .share-group .category-title {{
+                display: inline;
+            }}
+            .dca-mobile-row .share-group .toolbar-sep {{
+                display: none;
+            }}
+
+            /* 移动端隐藏"申购状态:"文字标签，节省横向空间 */
+            .dca-mobile-row .buy-status-main-row .category-title {{
+                display: none;
+            }}
+
+            /* 申购状态按钮压缩到最小 */
+            .dca-mobile-row .buy-status-main-row .cat-btn {{
+                padding: 2px 7px;
+                font-size: 10px;
+                flex-shrink: 0;
+                line-height: 1.4;
+                border-radius: 10px;
+            }}
+
+            /* 右侧：面板切换按钮组 */
+            .mobile-panel-switches {{
+                display: flex;
+                gap: 4px;
+                flex-shrink: 0;
+                width: auto;
+                order: 2;
+            }}
+
+            /* 第二行：视图切换（常驻，不再藏进悬停菜单） */
+            .dca-mobile-row .view-mode-row {{
+                order: 3;
+                flex: 0 0 auto;
+                padding-left: 0;
+                border-left: none;
+                gap: 3px;
+            }}
+            .dca-mobile-row .view-mode-row .view-mode-btn {{
+                padding: 2px 7px;
+                font-size: 10px;
+                flex-shrink: 0;
+                line-height: 1.4;
+                border-radius: 10px;
+            }}
+            .dca-mobile-row .view-mode-row .view-mode-label {{
+                display: none;
+            }}
+            /* 第二行：搜索框自适应剩余宽度 */
+            .dca-mobile-row .buy-status-filter-card .search-box-wrap {{
+                order: 4;
+                flex: 1 1 100px;
+                width: auto;
+                min-width: 70px;
+            }}
+
+            .mobile-panel-switches .mobile-filter-toggle,
+            .mobile-panel-switches .dca-toggle-btn {{
+                flex: none;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 3px;
+                padding: 4px 7px;
+                font-size: 10px;
+                font-weight: 600;
+                line-height: 1.4;
+                color: var(--btn-text);
+                background: var(--btn-bg);
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                cursor: pointer;
+                box-sizing: border-box;
+                -webkit-tap-highlight-color: transparent;
+                user-select: none;
+                white-space: nowrap;
+                transition: background 0.15s, color 0.15s, border-color 0.15s;
+            }}
+
+            .mobile-panel-switches .mobile-filter-toggle:active,
+            .mobile-panel-switches .dca-toggle-btn:active {{
+                background: rgba(26,115,232,0.12);
+            }}
+
+            .mobile-panel-switches .mobile-filter-toggle.expanded,
+            .mobile-panel-switches .dca-toggle-btn.active {{
+                background: var(--btn-active-bg);
+                color: #fff;
+                border-color: var(--btn-active-bg);
+            }}
+
+            .mobile-panel-switches .mobile-filter-current {{
+                color: var(--link-color);
+                font-weight: 700;
+                max-width: 44px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 10px;
+            }}
+
+            .mobile-panel-switches .mobile-filter-toggle.expanded .mobile-filter-current {{
+                color: #fff;
+            }}
+
+            .mobile-panel-switches .mobile-filter-arrow,
+            .mobile-panel-switches #dcaToggleArrow {{
+                font-size: 8px;
+                transition: transform 0.2s;
+            }}
+
+            /* 市场大类面板 */
+            .dca-mobile-row .sub-filter-bar {{
+                order: 2;
+                display: none;
+                margin-bottom: 0;
+                max-height: 55vh;
+                overflow-y: auto;
+            }}
+            .dca-mobile-row .sub-filter-bar.mobile-expanded {{
+                display: flex;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 8px;
+                animation: mobileFilterSlide 0.18s ease;
+            }}
+
+            /* 定投参数面板 */
+            .dca-mobile-row .global-dca-filter-card {{
+                order: 3;
+                display: none;
+            }}
+            .dca-mobile-row .global-dca-filter-card.mobile-expanded {{
+                display: flex;
+                animation: mobileFilterSlide 0.18s ease;
+            }}
+
+            @keyframes mobileFilterSlide {{
+                from {{ opacity: 0; transform: translateY(-6px); }}
+                to   {{ opacity: 1; transform: translateY(0); }}
+            }}
+
+            .search-box-wrap {{ width: 100%; }}
+            .search-box-wrap input {{ height: 32px; font-size: 13px; }}
+            .global-dca-filter-card {{ flex-direction: column; align-items: stretch; padding: 10px; gap: 8px; }}
+            .buy-status-filter-card {{ width: 100%; flex-basis: 100%; }}
+            .global-dca-filter-body {{ flex-direction: column; align-items: stretch; width: 100%; }}
+            .global-dca-filter-card select, .global-dca-filter-card button, .global-dca-filter-card input[type="date"] {{ width: 100%; height: 32px; font-size: 12px; }}
+            /* 起止日期并排：用 flex 等分，避免上面 width:100% 把第二个挤出行外 */
+            .global-dca-filter-card .g-dca-window {{ display: flex; width: 100%; gap: 6px; }}
+            .global-dca-filter-card .g-dca-window input[type="date"] {{ flex: 1 1 0; width: auto; min-width: 0; }}
+            .table-container {{ height: auto; flex: none; max-height: 70vh; padding: 4px; }}
+
+            /* ===== 移动端：详情浮窗内纵向堆叠，避免 4 列 × 2 饼图被挤爆 ===== */
+            .holdings-wrapper {{
+                flex-direction: column;
+                flex-wrap: wrap;
+                gap: 10px;
+                align-items: stretch;
+                width: 100%;
+                max-width: 100%;
+                box-sizing: border-box;
+            }}
+            .quarters-panel {{
+                flex: 1 1 auto;
+                width: 100%;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                min-width: 0;
+            }}
+            /* 手机：季度条同样横向滚动，一屏一列并露出下一列，
+               避免 8 个季度纵向堆叠把「年度收益率 / 折线图」顶到很远的地方 */
+            .holdings-container {{
+                display: grid;
+                grid-template-columns: repeat(var(--qcols), minmax(78vw, 1fr));
+                gap: 8px;
+                align-items: stretch;
+                min-width: 0;
+                overflow-x: auto;
+                overflow-y: hidden;
+                padding: 2px 2px 6px;
+                scrollbar-width: thin;
+                -webkit-overflow-scrolling: touch;
+            }}
+            .quarter-column {{
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                min-width: 0;
+            }}
+            .quarter-pies {{
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                gap: 8px;
+                min-width: 0;
+            }}
+            /* 单列堆叠时不需要幽灵卡撑高 */
+            .quarter-card-ghost {{ display: none; }}
+            .pie-cell-canvas {{ height: 104px; }}
+            .pie-cell-empty .pie-empty-body {{ min-height: 104px; }}
+            .stock-item {{ grid-template-columns: minmax(0, 1fr) 52px 58px; }}
+            .right-chart-wrapper {{
+                flex: 1 1 auto;
+                width: 100%;
+                align-items: stretch;
+                min-width: 0;
+            }}
+            .chart-container {{ flex: 1 1 100%; width: auto; min-width: 0; min-height: 240px; }}
+
+            /* ===== 移动端：QDII 对比页 ===== */
+            .qdii-subtabs {{ padding: 8px 3% 0; gap: 6px; }}
+            .qdii-subtab {{ font-size: 12px; padding: 6px 12px; }}
+            .cmp-table {{ min-width: 700px; font-size: 11px; }}
+            .cmp-table th.cmp-code, .cmp-table td.cmp-code {{ width: 56px; }}
+            .cmp-table th.cmp-name, .cmp-table td.cmp-name {{
+                width: 118px; max-width: 118px; left: 56px;
+            }}
+            .cmp-table th.cmp-group {{ width: 72px; }}
+            .cmp-table th.cmp-scale, .cmp-table td.cmp-scale {{ width: 68px; }}
+            .cmp-sum {{ font-size: 12px; }}
+            .cmp-delta {{ font-size: 9px; margin-left: 3px; padding: 0 3px; }}
+            .cmp-block-title {{ font-size: 12px; padding: 8px 10px; flex-wrap: wrap; gap: 4px; }}
+            .cmp-block-title .cmp-block-sub {{ font-size: 10px; }}
+
+            /* 年化排行：手机宽度放不下 8 列，隐藏「序号 / 类型 / 成立日期」，
+               把空间让给真正要看的年化、超额和标记，避免关键数据被挤到屏幕外。
+               注意：隐藏列后必须改用 table-layout:auto —— fixed 下隐藏列会让
+               剩余列宽塌陷，基金名列直接变 0 宽。 */
+            #qdiiAnnualTable {{ min-width: 0; table-layout: auto; font-size: 10px; }}
+            #qdiiAnnualTable th.cmp-code, #qdiiAnnualTable td.cmp-code {{ display: none; }}
+            .qdii-col-secondary {{ display: none; }}
+            /* 手机上再省一列：纳指的绝对水平可以省略，超额已经表达了对比结果 */
+            .qdii-col-bench {{ display: none; }}
+            #qdiiAnnualTable th.cmp-name, #qdiiAnnualTable td.cmp-name {{
+                width: auto; max-width: 116px; position: static; left: auto;
+                white-space: normal;
+            }}
+            #qdiiAnnualTable th, #qdiiAnnualTable td {{ padding: 5px 3px; }}
+            /* 基金名里已经带代码，移动端不再重复显示，并限制两行避免行高过大 */
+            #qdiiAnnualTable td.cmp-name .etf-code {{ display: none; }}
+            #qdiiAnnualTable td.cmp-name .etf-cell strong {{
+                display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+                overflow: hidden; line-height: 1.35;
+            }}
+            #qdiiAnnualTable .qdii-span-hint {{ display: none; }}
+            /* 手机端标记列只留图标，文字太宽会把整列挤出屏幕 */
+            #qdiiAnnualTable .qdii-beat-tag, #qdiiAnnualTable .qdii-lag-tag {{
+                font-size: 0; padding: 2px 3px; text-align: center;
+            }}
+            #qdiiAnnualTable .qdii-beat-tag::before {{ content: "🏆"; font-size: 13px; }}
+            #qdiiAnnualTable .qdii-lag-tag::before {{ content: "—"; font-size: 12px; }}
+            .qdii-annual-wrap {{ max-height: calc(100vh - 250px); }}
+            .qdii-year-select {{ font-size: 11px; padding: 3px 6px; }}
+            .qdii-annual-foot {{ font-size: 11px; padding: 8px 10px; }}
+
+            .modal-card {{ width: 95%; max-height: 90vh; }}
+            .modal-body {{ padding: 10px 12px; }}
+            .dca-controls {{ grid-template-columns: 1fr; }}
+            .dca-results-grid {{ grid-template-columns: repeat(2, 1fr); }}
+            .dca-result-card:last-child {{ grid-column: span 2; }}
+            .footer-note {{ flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 12px; }}
+            .annual-card-grid {{ grid-template-columns: 1fr !important; }}
+
+            /* ===== 简洁模式：移动端列宽优化（仅窄屏生效） ===== */
+            #fundView.simple-mode {{
+                padding-left: 2%;
+                padding-right: 2%;
+            }}
+            #fundView.simple-mode .table-container {{
+                padding: 4px 6px;
+                overflow-x: auto;
+            }}
+            #fundView.simple-mode #fundTable {{
+                min-width: 720px !important;
+                table-layout: fixed !important;
+                font-size: 11px;
+            }}
+            #fundView.simple-mode #fundTable th,
+            #fundView.simple-mode #fundTable td {{
+                padding: 4px 2px !important;
+                font-size: 10px !important;
+                line-height: 1.3;
+            }}
+
+            /* 收藏列 */
+            #fundView.simple-mode #fundTable th:nth-child(1),
+            #fundView.simple-mode #fundTable td:nth-child(1) {{
+                width: 40px !important;
+                min-width: 40px !important;
+            }}
+
+            /* 代码列 */
+            #fundView.simple-mode #fundTable th:nth-child(2),
+            #fundView.simple-mode #fundTable td:nth-child(2) {{
+                width: 62px !important;
+                min-width: 62px !important;
+                font-size: 10px !important;
+            }}
+
+            /* 名称列 */
+            #fundView.simple-mode #fundTable th:nth-child(3),
+            #fundView.simple-mode #fundTable td:nth-child(3) {{
+                width: 130px !important;
+                min-width: 130px !important;
+                white-space: normal !important;
+                word-break: break-word !important;
+                font-size: 10px !important;
+            }}
+
+            /* 规模列 */
+            #fundView.simple-mode #fundTable th:nth-child(4),
+            #fundView.simple-mode #fundTable td:nth-child(4) {{
+                width: 60px !important;
+                min-width: 60px !important;
+                font-size: 10px !important;
+            }}
+
+            /* 状态列（宽度与近一周一致） */
+            #fundView.simple-mode #fundTable th:nth-child(7),
+            #fundView.simple-mode #fundTable td:nth-child(7) {{
+                width: 62px !important;
+                min-width: 62px !important;
+                white-space: normal !important;
+                font-size: 10px !important;
+            }}
+
+            /* 9 个数值列（近一周 … 近十年） */
+            #fundView.simple-mode #fundTable th:nth-child(16),
+            #fundView.simple-mode #fundTable td:nth-child(16),
+            #fundView.simple-mode #fundTable th:nth-child(17),
+            #fundView.simple-mode #fundTable td:nth-child(17),
+            #fundView.simple-mode #fundTable th:nth-child(18),
+            #fundView.simple-mode #fundTable td:nth-child(18),
+            #fundView.simple-mode #fundTable th:nth-child(19),
+            #fundView.simple-mode #fundTable td:nth-child(19),
+            #fundView.simple-mode #fundTable th:nth-child(20),
+            #fundView.simple-mode #fundTable td:nth-child(20),
+            #fundView.simple-mode #fundTable th:nth-child(21),
+            #fundView.simple-mode #fundTable td:nth-child(21),
+            #fundView.simple-mode #fundTable th:nth-child(22),
+            #fundView.simple-mode #fundTable td:nth-child(22),
+            #fundView.simple-mode #fundTable th:nth-child(23),
+            #fundView.simple-mode #fundTable td:nth-child(23),
+            #fundView.simple-mode #fundTable th:nth-child(24),
+            #fundView.simple-mode #fundTable td:nth-child(24) {{
+                width: 62px !important;
+                min-width: 62px !important;
+                font-size: 10px !important;
+            }}
+        }}
+        @media (max-width: 480px) {{
+            .macro-metrics-grid {{ grid-template-columns: 1fr; }}
+            .index-metrics-grid, .friend-links-grid {{ grid-template-columns: 1fr; }}
+            .qdii-cards-grid {{ grid-template-columns: 1fr; }}
+        }}
+
+        /* ===== 指数历年回报表格/卡片样式 ===== */
+        .annual-card-grid {{
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }}
+        .annual-year-row {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 4px;
+            border-bottom: 1px dashed var(--border);
+            font-size: 12px;
+            transition: background 0.2s;
+            cursor: default;
+        }}
+        .annual-year-row:hover {{
+            background: var(--hover-bg);
+            box-shadow: inset 3px 0 0 var(--link-color);
+        }}
+        .annual-year-col {{
+            width: 12%;
+            font-weight: 600;
+            color: var(--header-text);
+            text-align: left;
+        }}
+        .annual-points-col {{
+            width: 28%;
+            text-align: right;
+            font-family: "SFMono-Regular", Consolas, monospace;
+            color: var(--text);
+        }}
+        .annual-pct-col {{
+            width: 20%;
+            text-align: right;
+            font-weight: 600;
+        }}
+        .annual-bar-col {{
+            width: 40%;
+            position: relative;
+            height: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .annual-zero-line {{
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 1px;
+            background: var(--border);
+            z-index: 2;
+        }}
+        .annual-bar-fill {{
+            position: absolute;
+            height: 10px;
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }}
+        @media (max-width: 992px) {{
+            .index-annual-grid {{
+                grid-template-columns: 1fr !important;
+            }}
+        }}
+
+        /* 指数历年回报模式切换按钮 */
+        .mode-toggle-btn {{
+            background: var(--btn-bg);
+            color: var(--btn-text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }}
+        .mode-toggle-btn.active {{
+            background: var(--btn-active-bg);
+            color: var(--btn-active-text);
+            border-color: var(--btn-active-bg);
+        }}
+        /* ===== 指数历年回报统计信息条 ===== */
+        .annual-stats-footer {{
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 10px 4px 2px 4px;
+            margin-top: 10px;
+            border-top: 1px solid var(--border);
+        }}
+        .annual-stat-item {{
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            min-width: 60px;
+        }}
+        .annual-stat-label {{
+            color: var(--footer-text);
+            font-size: 10px;
+        }}
+        .annual-stat-value {{
+            font-weight: 700;
+            font-family: "SFMono-Regular", Consolas, monospace;
+            font-size: 13px;
+            color: var(--text);
+        }}
+        .annual-stat-sub {{
+            font-size: 10px;
+            color: var(--footer-text);
+            font-weight: 500;
+            line-height: 1;
+            margin-top: 1px;
+        }}
+        .annual-mode-content {{
+            padding-top: 4px;
+        }}
+        /* ===== 指数历年回报 - 年内最大回撤视图 ===== */
+        /* 回撤视图保持与卡片/热力图/柱状图同宽（不再切视图时撑满整行），
+           其余三个视图切回来时卡片宽度也就不会跳变。 */
+        .annual-dd-stats {{
+            margin-top: 6px;
+        }}
+        .annual-dd-stats .annual-stat-value {{
+            font-variant-numeric: tabular-nums;
+        }}
+        .annual-dd-note {{
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed var(--border);
+            font-size: 10.5px;
+            line-height: 1.65;
+            color: var(--footer-text);
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px 10px;
+        }}
+        .annual-dd-note b {{ color: var(--text); }}
+        .annual-dd-legend {{
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            white-space: nowrap;
+        }}
+        .annual-dd-legend i {{
+            display: inline-block;
+            width: 9px;
+            height: 9px;
+            border-radius: 2px;
+            margin-left: 4px;
+        }}
+        .annual-dd-src {{ margin-left: auto; white-space: nowrap; }}
+        .annual-dd-empty {{
+            padding: 28px 0;
+            text-align: center;
+            font-size: 12px;
+            color: var(--footer-text);
+        }}
+
+        /* ===== 指数历年回报 - 热力图单格悬停高亮 ===== */
+        .annual-heatmap-cell {{
+            transition: transform 0.15s ease, outline 0.15s ease;
+            position: relative;
+            z-index: 1;
+        }}
+        .annual-heatmap-cell:hover {{
+            transform: scale(1.10);
+            outline: 2px solid var(--link-color);
+            outline-offset: 1px;
+            z-index: 5;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }}
+
+        /* ===== 基金看板：默认 / 简洁 视图模式 ===== */
+        .view-mode-btn.active {{
+            background: #e67e22 !important;
+            color: #fff !important;
+            border-color: #e67e22 !important;
+            font-weight: 700;
+        }}
+
+        /* ===== 简洁模式：表头精简 ===== */
+        .th-simple {{ display: none; }}
+        #fundView.simple-mode .th-full {{ display: none; }}
+        #fundView.simple-mode .th-simple {{ display: inline; }}
+
+        /* 简洁模式：隐藏「动态定投参数配置」卡片，只在详细视图出现 */
+        #fundView.simple-mode #gDcaCard {{ display: none !important; }}
+        /* 简洁模式下移动端「📊 定投」开关一并隐藏，避免点开一个不存在的面板 */
+        #fundView.simple-mode .mobile-panel-switches .dca-toggle-btn {{ display: none !important; }}
+
+        /* 简洁模式：与首页同一套留白规则（左右 32px，上限 2000） */
+        #fundView.simple-mode {{
+            padding-left: 32px;
+            padding-right: 32px;
+            box-sizing: border-box;
+            max-width: 2000px;
+            margin: 0 auto;
+            width: 100%;
+        }}
+
+        /* 详细模式也跟首页对齐留白（默认模式由上面的 simple-mode 规则控制） */
+        @media (min-width: 993px) {{
+            #fundView:not(.simple-mode) {{
+                padding-left: 32px;
+                padding-right: 32px;
+                box-sizing: border-box;
+                max-width: 2000px;
+                margin: 0 auto;
+                width: 100%;
+            }}
+        }}
+
+        /* 简洁模式：搜索栏缩短（仅桌面端，移动端由工具栏自适应） */
+        @media (min-width: 993px) {{
+            #fundView.simple-mode .search-box-wrap {{
+                width: 180px;
+            }}
+        }}
+
+        /* 简洁模式：隐藏不需要的列（保留 1,2,3,4,7,16~23） */
+        #fundView.simple-mode #fundTable th:nth-child(5),
+        #fundView.simple-mode #fundTable th:nth-child(6),
+        #fundView.simple-mode #fundTable th:nth-child(8),
+        #fundView.simple-mode #fundTable th:nth-child(9),
+        #fundView.simple-mode #fundTable th:nth-child(10),
+        #fundView.simple-mode #fundTable th:nth-child(11),
+        #fundView.simple-mode #fundTable th:nth-child(12),
+        #fundView.simple-mode #fundTable th:nth-child(13),
+        #fundView.simple-mode #fundTable th:nth-child(14),
+        #fundView.simple-mode #fundTable th:nth-child(15),
+        #fundView.simple-mode #fundTable th:nth-child(25),
+        #fundView.simple-mode #fundTable td:nth-child(5),
+        #fundView.simple-mode #fundTable td:nth-child(6),
+        #fundView.simple-mode #fundTable td:nth-child(8),
+        #fundView.simple-mode #fundTable td:nth-child(9),
+        #fundView.simple-mode #fundTable td:nth-child(10),
+        #fundView.simple-mode #fundTable td:nth-child(11),
+        #fundView.simple-mode #fundTable td:nth-child(12),
+        #fundView.simple-mode #fundTable td:nth-child(13),
+        #fundView.simple-mode #fundTable td:nth-child(14),
+        #fundView.simple-mode #fundTable td:nth-child(15),
+        #fundView.simple-mode #fundTable td:nth-child(25) {{
+            display: none !important;
+        }}
+
+        /* 简洁模式：表头固定布局、解除 min-width、按比例分配列宽 */
+        #fundView.simple-mode #fundTable {{
+            min-width: 0 !important;
+            table-layout: fixed !important;
+            width: 100%;
+        }}
+
+        /* 简洁模式：收藏列（窄） */
+        #fundView.simple-mode #fundTable th:nth-child(1),
+        #fundView.simple-mode #fundTable td:nth-child(1) {{
+            width: 5%;
+            min-width: 40px;
+            text-align: center;
+        }}
+
+        /* 简洁模式：代码列（窄） */
+        #fundView.simple-mode #fundTable th:nth-child(2),
+        #fundView.simple-mode #fundTable td:nth-child(2) {{
+            width: 7%;
+            min-width: 65px;
+            text-align: left;
+        }}
+
+        /* 简洁模式：基金名称列（宽，主信息） */
+        #fundView.simple-mode #fundTable th:nth-child(3),
+        #fundView.simple-mode #fundTable td:nth-child(3) {{
+            width: 22%;
+            min-width: 150px;
+            text-align: left;
+            white-space: normal;
+            word-break: break-word;
+        }}
+
+        /* 简洁模式：最新规模列 */
+        #fundView.simple-mode #fundTable th:nth-child(4),
+        #fundView.simple-mode #fundTable td:nth-child(4) {{
+            width: 8%;
+            min-width: 70px;
+            text-align: left;
+        }}
+
+        /* 简洁模式：申购状态/限额列（宽度与近一周一致） */
+        #fundView.simple-mode #fundTable th:nth-child(7),
+        #fundView.simple-mode #fundTable td:nth-child(7) {{
+            width: 8.5%;
+            min-width: 80px;
+            text-align: left;
+        }}
+
+        /* 简洁模式：近一周/近一月/近三月/近半年/今年内/近一年/近三年/近五年（8 个数值列，统一宽度） */
+        #fundView.simple-mode #fundTable th:nth-child(16),
+        #fundView.simple-mode #fundTable td:nth-child(16),
+        #fundView.simple-mode #fundTable th:nth-child(17),
+        #fundView.simple-mode #fundTable td:nth-child(17),
+        #fundView.simple-mode #fundTable th:nth-child(18),
+        #fundView.simple-mode #fundTable td:nth-child(18),
+        #fundView.simple-mode #fundTable th:nth-child(19),
+        #fundView.simple-mode #fundTable td:nth-child(19),
+        #fundView.simple-mode #fundTable th:nth-child(20),
+        #fundView.simple-mode #fundTable td:nth-child(20),
+        #fundView.simple-mode #fundTable th:nth-child(21),
+        #fundView.simple-mode #fundTable td:nth-child(21),
+        #fundView.simple-mode #fundTable th:nth-child(22),
+        #fundView.simple-mode #fundTable td:nth-child(22),
+        #fundView.simple-mode #fundTable th:nth-child(23),
+        #fundView.simple-mode #fundTable td:nth-child(23) {{
+            width: 6.2%;
+            min-width: 62px;
+            text-align: right;
+        }}
+
+        /* ===== 基金对比（前缀 fcmp-：不与 QDII 对比页的 .cmp-* 冲突） ===== */
+        :root {{ --cmp-sel-bg: rgba(26, 115, 232, 0.10); }}
+        [data-theme="dark"] {{ --cmp-sel-bg: rgba(138, 180, 248, 0.14); }}
+
+        /* 首列：星标 + 对比勾选竖排（列宽 45px，横排会溢出） */
+        .fav-tools {{
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1px;
+            line-height: 1;
+        }}
+        .cmp-check {{
+            width: 12px;
+            height: 12px;
+            margin: 0;
+            padding: 0;
+            cursor: pointer;
+            accent-color: var(--link-color);
+        }}
+        .cmp-check:focus-visible {{ outline: 2px solid var(--link-color); outline-offset: 1px; }}
+
+        /* 对比选择是「按需打开」的：默认首列只放自选星标，
+           点工具栏的「⚖ 基金对比」后才把星标换成勾选框（两者只显示一个），
+           避免每行常驻一个方框，把收藏列的视觉噪音拉满。 */
+        .fav-tools .cmp-check {{ display: none; }}
+        #fundView.cmp-mode .fav-tools .cmp-check {{ display: inline-block; }}
+        #fundView.cmp-mode .fav-tools .star-btn {{ display: none; }}
+
+        .cmp-head-cmp {{ display: none; }}
+        #fundView.cmp-mode .cmp-head-normal {{ display: none; }}
+        #fundView.cmp-mode .cmp-head-cmp {{ display: inline; }}
+
+        /* 工具栏上的对比开关：未开启时描边按钮，开启后实心，状态一眼可辨 */
+        #cmpToggleBtn.cmp-toggle-btn {{
+            background: transparent;
+            color: var(--link-color);
+            border: 1px solid var(--link-color);
+            font-weight: 600;
+        }}
+        #cmpToggleBtn.cmp-toggle-btn:hover {{ background: var(--hover-bg); }}
+        #cmpToggleBtn.cmp-toggle-btn.active {{
+            background: var(--link-color);
+            color: #fff;
+            border-color: var(--link-color);
+        }}
+
+        /* 选中行：背景打在 td 上，才能压过 tr:hover */
+        #fundTable tbody tr.cmp-selected > td {{ background-color: var(--cmp-sel-bg); }}
+        #fundTable tbody tr.cmp-selected > td:first-child {{ box-shadow: inset 3px 0 0 var(--link-color); }}
+
+        /* 底部浮条 */
+        .fcmp-bar {{
+            position: fixed;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: 14px;
+            z-index: 900;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            max-width: min(1100px, calc(100vw - 32px));
+            padding: 8px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: var(--table-bg);
+            color: var(--text);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+            font-size: 12px;
+        }}
+        .fcmp-bar[hidden] {{ display: none; }}
+        .fcmp-bar-count {{ white-space: nowrap; font-weight: 600; color: var(--link-color); }}
+        .fcmp-bar-chips {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            overflow-x: auto;
+            max-width: 60vw;
+            scrollbar-width: thin;
+        }}
+        .fcmp-bar-actions {{ display: flex; align-items: center; gap: 6px; margin-left: auto; }}
+        .fcmp-bar-hint {{
+            position: absolute;
+            top: -22px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: #d93025;
+            white-space: nowrap;
+        }}
+        .fcmp-bar-hint[hidden] {{ display: none; }}
+        .fcmp-chip {{
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            white-space: nowrap;
+            background: var(--hover-bg);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 2px 4px 2px 8px;
+            font-size: 11px;
+        }}
+        .fcmp-chip-x {{
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            color: var(--footer-text);
+            font-size: 12px;
+            line-height: 1;
+            padding: 0 2px;
+        }}
+        .fcmp-chip-x:hover {{ color: #d93025; }}
+        .fcmp-btn-primary {{
+            background: var(--btn-active-bg);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 6px 14px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }}
+        .fcmp-btn-primary:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+        .fcmp-btn-ghost {{
+            background: transparent;
+            color: var(--footer-text);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }}
+        .fcmp-btn-ghost:hover {{ color: var(--text); border-color: var(--footer-text); }}
+        #fundView.cmp-bar-on .table-container {{ padding-bottom: 64px; }}
+
+        /* 对比弹窗 */
+        #cmpBody {{
+            padding: 10px 12px;
+            gap: 10px;
+            max-height: calc(92vh - 52px);
+            overflow-y: auto;
+            overscroll-behavior: contain;
+        }}
+        .fcmp-controls {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+        .fcmp-periods {{ display: flex; gap: 6px; flex-wrap: wrap; }}
+        .fcmp-period-btn {{
+            border: 1px solid var(--border);
+            background: var(--btn-bg);
+            color: var(--btn-text);
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 11px;
+            cursor: pointer;
+        }}
+        .fcmp-period-btn.active {{
+            background: var(--btn-active-bg);
+            color: var(--btn-active-text);
+            border-color: transparent;
+        }}
+        .fcmp-chart-box {{ position: relative; height: 320px; min-height: 240px; }}
+        .fcmp-empty {{
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 0 20px;
+            font-size: 12px;
+            color: var(--footer-text);
+            background: var(--table-bg);
+        }}
+        .fcmp-empty[hidden] {{ display: none; }}
+        .fcmp-table-wrap {{
+            overflow: auto;
+            max-height: 46vh;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }}
+        .fcmp-table {{
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 12px;
+            min-width: 720px;
+            width: 100%;
+        }}
+        .fcmp-table th,
+        .fcmp-table td {{
+            border-bottom: 1px solid var(--border);
+            padding: 6px 8px;
+            vertical-align: middle;
+            text-align: right;
+            white-space: nowrap;
+        }}
+        .fcmp-table thead th {{
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            background: var(--table-bg);
+            font-weight: 600;
+            color: var(--header-text);
+            vertical-align: top;
+        }}
+        .fcmp-table th:first-child,
+        .fcmp-table td.fcmp-label {{
+            position: sticky;
+            left: 0;
+            z-index: 2;
+            background: var(--table-bg);
+            text-align: left;
+            min-width: 132px;
+            max-width: 132px;
+            white-space: normal;
+        }}
+        .fcmp-table thead th:first-child {{ z-index: 4; }}
+        .fcmp-table tr.fcmp-group td {{
+            background: var(--hover-bg);
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--header-text);
+            text-align: left;
+        }}
+        .fcmp-table tr:last-child td {{ border-bottom: none; }}
+        .fcmp-val {{ font-variant-numeric: tabular-nums; }}
+        .fcmp-col-head {{ display: block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+        .fcmp-col-code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--footer-text); }}
+        .fcmp-col-x {{
+            float: right;
+            border: none;
+            background: transparent;
+            color: var(--footer-text);
+            cursor: pointer;
+            font-size: 13px;
+            line-height: 1;
+            padding: 0 0 0 4px;
+        }}
+        .fcmp-col-x:hover {{ color: #d93025; }}
+        .fcmp-sub {{ font-size: 10px; color: var(--footer-text); font-weight: 400; }}
+        .fcmp-note {{ font-size: 11px; color: var(--footer-text); line-height: 1.7; }}
+        .fcmp-group-hint {{
+            margin-left: 8px;
+            font-size: 10px;
+            font-weight: 400;
+            color: var(--footer-text);
+        }}
+        /* 本行更优：琥珀色底 + 左侧竖条，和涨跌红绿区分开，不抢主表色语义 */
+        .fcmp-table td.fcmp-best {{
+            background: rgba(249, 171, 0, 0.16);
+            box-shadow: inset 2px 0 0 #f9ab00;
+            font-weight: 700;
+        }}
+        [data-theme="dark"] .fcmp-table td.fcmp-best {{
+            background: rgba(249, 171, 0, 0.22);
+        }}
+        /* 「优」角标：光靠底色在暗色主题/低亮度屏上不好认，补一个文字标记 */
+        .fcmp-best-tag {{
+            display: inline-block;
+            margin-right: 3px;
+            padding: 0 3px;
+            border-radius: 3px;
+            background: #f9ab00;
+            color: #3d2b00;
+            font-size: 9px;
+            font-style: normal;
+            font-weight: 800;
+            line-height: 13px;
+            vertical-align: 1px;
+            letter-spacing: 0;
+        }}
+        [data-theme="dark"] .fcmp-best-tag {{
+            background: #ffc14d;
+            color: #2b1d00;
+        }}
+        .fcmp-legend {{
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--footer-text);
+        }}
+        .fcmp-legend i {{
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            background: rgba(249, 171, 0, 0.16);
+            box-shadow: inset 2px 0 0 #f9ab00;
+        }}
+        /* 资产配置 / 持有人 的堆叠条 */
+        /* 用 td.xxx 提高优先级：上面 .fcmp-table td 的 text-align:right 会盖掉单类名规则 */
+        .fcmp-table td.fcmp-alloc-cell {{ text-align: left; white-space: normal; min-width: 132px; }}
+        .fcmp-alloc-bar {{
+            display: flex;
+            width: 100%;
+            height: 7px;
+            min-width: 96px;
+            border-radius: 4px;
+            overflow: hidden;
+            background: var(--border);
+        }}
+        .fcmp-alloc-bar span {{ display: block; height: 100%; }}
+        .fcmp-alloc-legend {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2px 8px;
+            margin-top: 3px;
+            font-size: 10px;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+        }}
+        .fcmp-alloc-key {{ white-space: nowrap; }}
+        .fcmp-alloc-key i {{
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            margin-right: 3px;
+            border-radius: 50%;
+            vertical-align: middle;
+        }}
+        /* 十大重仓 */
+        .fcmp-table td.fcmp-top-cell {{ text-align: left; white-space: normal; min-width: 138px; }}
+        .fcmp-top-item {{
+            display: flex;
+            align-items: baseline;
+            gap: 3px;
+            font-size: 11px;
+            line-height: 1.55;
+        }}
+        .fcmp-top-rank {{
+            color: var(--footer-text);
+            font-size: 9px;
+            min-width: 9px;
+            text-align: right;
+        }}
+        .fcmp-top-name {{
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .fcmp-top-ratio {{
+            color: var(--footer-text);
+            font-variant-numeric: tabular-nums;
+        }}
+        .fcmp-shared {{ color: #e8710a; font-size: 9px; line-height: 1; }}
+        .fcmp-shared-off {{ color: transparent; }}
+        /* 申购状态胶囊 */
+        .fcmp-table td.fcmp-buy-cell {{ text-align: left; white-space: normal; }}
+        .fcmp-buy {{
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 9px;
+            font-size: 10px;
+            font-weight: 600;
+            line-height: 1.6;
+        }}
+        .fcmp-buy-open {{ color: #188038; background: rgba(24, 128, 56, 0.12); }}
+        .fcmp-buy-limited {{ color: #b06000; background: rgba(232, 113, 10, 0.14); }}
+        .fcmp-buy-paused {{ color: #d93025; background: rgba(217, 48, 37, 0.12); }}
+        [data-theme="dark"] .fcmp-buy-open {{ color: #6fcf97; background: rgba(111, 207, 151, 0.16); }}
+        [data-theme="dark"] .fcmp-buy-limited {{ color: #f6ae2d; background: rgba(246, 174, 45, 0.16); }}
+        [data-theme="dark"] .fcmp-buy-paused {{ color: #f28b82; background: rgba(242, 139, 130, 0.16); }}
+
+        @media (max-width: 992px) {{
+            .fcmp-bar {{
+                left: 8px;
+                right: 8px;
+                bottom: 8px;
+                transform: none;
+                max-width: none;
+                flex-wrap: wrap;
+                gap: 6px;
+                padding: 8px;
+            }}
+            .fcmp-bar-chips {{ order: 3; flex-basis: 100%; max-width: 100%; }}
+            .fcmp-bar-hint {{ position: static; transform: none; order: 4; flex-basis: 100%; }}
+            #fundView.cmp-bar-on .table-container {{ padding-bottom: 96px; }}
+            .fcmp-chart-box {{ height: 240px; }}
+            .fcmp-table {{ min-width: 640px; }}
+            .fcmp-table th:first-child,
+            .fcmp-table td.fcmp-label {{ min-width: 104px; max-width: 104px; font-size: 11px; }}
+        }}
+    </style>
+</head>
+<body>
+    <header class="main-navbar">
+        <div class="nav-brand">
+            <span>📈 资产量化与策略看板</span>
+            {mode_badge}
+        </div>
+        <div class="nav-tabs-group">
+            <button class="nav-tab-btn active" data-view="homeView"><span class="tab-ico">🏠</span>首页概览</button>
+            <button class="nav-tab-btn" data-view="fundView"><span class="tab-ico">📊</span>基金量化看板</button>
+            <button class="nav-tab-btn" data-view="qdiiView"><span class="tab-ico">🌐</span>QDII 监控</button>
+            <button class="nav-tab-btn" data-view="allAssetView"><span class="tab-ico">📊</span>CFTC资产数据</button>
+            <button class="nav-tab-btn" data-view="dualView"><span class="tab-ico">📈</span>ETF份额看板</button>
+        </div>
+        <div class="nav-right-tools">
+            <a class="nav-live-link" href="live.html"
+               title="A股宽基 ETF 与美股主动 QDII 的盘中实时页（交易时段 30 秒刷新）">⚡ 实时</a>
+            <button class="theme-toggle" id="themeToggle">🌓 切换主题</button>
+        </div>
+    </header>
+
+    <main class="views-container">
+        <!-- 视图 1：首页 -->
+        <section id="homeView" class="view-pane active">
+            <div class="home-container">
+
+                <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 12px; flex-wrap: wrap; gap: 6px;">
+                    <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🌐 核心宏观风向标</h3>
+                    <span class="live-meta">
+                        <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                        <span class="live-badge" data-live-badge hidden></span>
+                    </span>
+                </div>
+                <div class="macro-metrics-grid">
+                    <div{_macro_history_attrs('cnn', 'macroHistoryPanelCore')}>
+                        <div class="metric-header">
+                            <span>CNN 恐慌贪婪指数</span>
+                            {_macro_history_hint('cnn')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#1a73e8;" data-live-key="fng">{fng['score']}</span>
+                            <span class="metric-tag" style="background:rgba(26,115,232,0.12); color:#1a73e8;" data-live-tag="fng">{fng['rating']}</span>
+                        </div>
+                        <div class="fng-bar-track">
+                            <div class="fng-bar-pointer" style="left: {fng['score']}%;"></div>
+                        </div>
+                        <div class="metric-desc">
+                            0~25 极恐 | 26~45 恐惧 | 46~54 中性 | 55~75 贪婪 | 76~100 极贪
+                        </div>
+                        <a href="{fng['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {fng['source']} ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('vix', 'macroHistoryPanelCore')}>
+                        <div class="metric-header">
+                            <span>VIX 恐慌指数</span>
+                            {_macro_history_hint('vix')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#d93025;" data-live-key="vix">{vix['val']}</span>
+                            <span class="metric-tag" style="background:rgba(217,48,37,0.12); color:#d93025;" data-live-tag="vix">{vix['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            &lt;15 平稳低波 | 15~20 正常震荡 | 20~30 警惕波动 | &gt;30 极度恐慌
+                        </div>
+                        <a href="{vix['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: CBOE 官方 (_VIX) ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('vxsmh', 'macroHistoryPanelCore')}>
+                        <div class="metric-header">
+                            <span>VXSMH 半导体波动率</span>
+                            {_macro_history_hint('vxsmh')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#9334e6;" data-live-key="vxsmh">{vxsmh['val']}</span>
+                            <span class="metric-tag" style="background:rgba(147,52,230,0.12); color:#9334e6;" data-live-tag="vxsmh">{vxsmh['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            &lt;38 平稳低波 | 38~45 正常震荡 | 45~55 警惕波动 | &gt;55 半导体极恐
+                        </div>
+                        <a href="{vxsmh['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: CBOE 官方 (VXSMH) ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('vxn', 'macroHistoryPanelCore')}>
+                        <div class="metric-header">
+                            <span>VXN 纳指波动率</span>
+                            {_macro_history_hint('vxn')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#34a853;" data-live-key="vxn">{vxn['val']}</span>
+                            <span class="metric-tag" style="background:rgba(52,168,83,0.12); color:#34a853;" data-live-tag="vxn">波动平缓</span>
+                        </div>
+                        <div class="metric-desc">
+                            纳斯达克100期权隐波，监测科技成长股杀估值抛压
+                        </div>
+                        <a href="{vxn['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: CBOE 官方 (_VXN) ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('usdcny', 'macroHistoryPanelCore')}>
+                        <div class="metric-header">
+                            <span>USD/CNY 汇率</span>
+                            {_macro_history_hint('usdcny')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#188038;" data-live-key="usdcny">{usdcny['val']}</span>
+                            <span class="metric-tag" style="background:rgba(24,128,56,0.12); color:#188038;" data-live-tag="usdcny">{usdcny['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            美元兑人民币汇率，QDII换汇成本及折溢价关键锚
+                        </div>
+                        <a href="{usdcny['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: 新浪外汇 (实时) ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('skew', 'macroHistoryPanelCore')}>
+                        <div class="metric-header">
+                            <span>SKEW 黑天鹅偏斜</span>
+                            {_macro_history_hint('skew')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#e67e22;" data-live-key="skew">{skew['val']}</span>
+                            <span class="metric-tag" style="background:rgba(230,126,34,0.12); color:#e67e22;" data-live-tag="skew">尾部黑天鹅预警</span>
+                        </div>
+                        <div class="metric-desc">
+                            基准100。&gt;135提示期权市场尾部极度对冲成本升高
+                        </div>
+                        <a href="{skew['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: CBOE 官方 (_SKEW) ↗
+                        </a>
+                    </div>
+
+                    <!-- 【新增】止盈三信号面板（默认折叠） -->
+                    {stop_profit_html}
+
+                    {core_history_panel_html}
+                </div>
+
+                <!-- ===== 大宗商品风向标 ===== -->
+                <div style="display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 6px;">
+                    <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🛢️ 大宗商品风向标</h3>
+                    <span class="live-meta">
+                        <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                        <span class="live-badge" data-live-badge hidden></span>
+                    </span>
+                </div>
+                <div class="macro-metrics-grid">
+                    <div{_macro_history_attrs('gold_london', 'macroHistoryPanelCommodity')}>
+                        <div class="metric-header">
+                            <span>伦敦金 (XAU/USD)</span>
+                            {_macro_history_hint('gold_london')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#f39c12;" data-live-key="gold_london">{gold_london['val']}</span>
+                            <span class="metric-tag" style="background:rgba(243,156,18,0.12); color:{gold_tag_color};" data-live-tag="gold_london">{gold_london['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {gold_london['desc']}
+                        </div>
+                        <a href="{gold_london['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {gold_london['source']} ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('gold_shfe', 'macroHistoryPanelCommodity')}>
+                        <div class="metric-header">
+                            <span>沪金主连 (AUM / AU0)</span>
+                            {_macro_history_hint('gold_shfe')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#e67e22;" data-live-key="gold_shfe">{gold_shfe['val']}</span>
+                            <span class="metric-tag" style="background:rgba(230,126,34,0.12); color:{gold_shfe_tag_color};" data-live-tag="gold_shfe">{gold_shfe['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {gold_shfe['desc']}
+                        </div>
+                        <a href="{gold_shfe['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {gold_shfe['source']} ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('silver_london', 'macroHistoryPanelCommodity')}>
+                        <div class="metric-header">
+                            <span>伦敦银 (XAG/USD)</span>
+                            {_macro_history_hint('silver_london')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#95a5a6;" data-live-key="silver_london">{silver_london['val']}</span>
+                            <span class="metric-tag" style="background:rgba(149,165,166,0.12); color:{silver_tag_color};" data-live-tag="silver_london">{silver_london['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {silver_london['desc']}
+                        </div>
+                        <a href="{silver_london['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {silver_london['source']} ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('copper_lme', 'macroHistoryPanelCommodity')}>
+                        <div class="metric-header">
+                            <span>COMEX 铜</span>
+                            {_macro_history_hint('copper_lme')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#b87333;" data-live-key="copper_lme">{copper_lme['val']}</span>
+                            <span class="metric-tag" style="background:rgba(184,115,51,0.12); color:{copper_tag_color};" data-live-tag="copper_lme">{copper_lme['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {copper_lme['desc']}
+                        </div>
+                        <a href="{copper_lme['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {copper_lme['source']} ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('brent', 'macroHistoryPanelCommodity')}>
+                        <div class="metric-header">
+                            <span>布伦特原油 (BZ=F)</span>
+                            {_macro_history_hint('brent')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#2c3e50;" data-live-key="brent">{brent['val']}</span>
+                            <span class="metric-tag" style="background:rgba(44,62,80,0.12); color:{brent_tag_color};" data-live-tag="brent">{brent['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {brent['desc']}
+                        </div>
+                        <a href="{brent['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {brent['source']} ↗
+                        </a>
+                    </div>
+
+                    <div{_macro_history_attrs('btc', 'macroHistoryPanelCommodity')}>
+                        <div class="metric-header">
+                            <span>比特币 (BTC/USDT)</span>
+                            {_macro_history_hint('btc')}
+                        </div>
+                        <div class="metric-body">
+                            <span class="metric-value" style="color:#f7931a;" data-live-key="btc">{btc['val']}</span>
+                            <span class="metric-tag" style="background:rgba(247,147,26,0.12); color:{btc_tag_color};" data-live-tag="btc">{btc['status']}</span>
+                        </div>
+                        <div class="metric-desc">
+                            {btc['desc']}
+                        </div>
+                        <a href="{btc['url']}" target="_blank" class="metric-source-link" title="点击跳转至源数据官方网页">
+                            🔗 来源: {btc['source']} ↗
+                        </a>
+                    </div>
+                </div>
+                {commodity_history_panel_html}
+
+                <!-- ===== 宽基指数估值 ===== -->
+                <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                    <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">📊 宽基指数估值 {index_source_link_html}</h3>
+                    <span style="font-size: 12px; color: var(--footer-text);">更新时间: {update_time_str}</span>
+                </div>
+                <div class="index-metrics-grid">
+                    {index_cards_html}
+                </div>
+                {index_history_panel_html}
+
+                {index_annual_html}
+
+                <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🏛️ 美联储利率观测器</h3>
+                {fed_monitor_html}
+
+                <h3 style="margin: 0; font-size: 16px; color: var(--header-text); border-left: 4px solid var(--link-color); padding-left: 8px;">🔗 研投工具导航</h3>
+                {friend_cards_html}
+            </div>
+        </section>
+
+        <!-- 视图 2：基金量化看板 -->
+        <section id="fundView" class="view-pane">
+            <div class="dca-mobile-row" style="display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; align-items: stretch;">
+
+                <!-- 申购状态栏（移动端同时作为统一工具栏） -->
+                <div class="buy-status-filter-card" style="background: var(--table-bg); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; display: flex; align-items: center; gap: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.03); flex-wrap: wrap; min-height: 42px; box-sizing: border-box; align-self: stretch;">
+                    <div class="buy-status-main-row">
+                        <span class="category-title" style="margin-right: 4px;">申购状态:</span>
+                        <button class="cat-btn buy-filter active" data-buy="all">全部</button>
+                        <button class="cat-btn buy-filter" data-buy="open">仅开放申购</button>
+                        <button class="cat-btn buy-filter" data-buy="closed">暂停申购</button>
+
+                        <!-- 份额类别筛选：按名称末尾的 A / C / E 等标识筛；
+                             ETF / 商品 / 指数等非基金品种不含份额类别，选具体类别时不参与 -->
+                        <span class="share-group">
+                            <span class="toolbar-sep" style="margin: 0 4px;"></span>
+                            <span class="category-title" style="margin-right: 2px;">份额:</span>
+                            <button class="cat-btn share-filter active" data-share="all">全部</button>
+                            {share_filter_btns_html}
+                        </span>
+                    </div>
+
+                    <!-- 视图切换：常驻显示（原来在悬停菜单里，鼠标移开就看不到了） -->
+                    <div class="view-mode-row">
+                        <span class="category-title view-mode-label" style="margin-right: 2px;">视图:</span>
+                        <button class="cat-btn view-mode-btn active" data-view-mode="simple" title="简洁模式：精简列 + 仅折线图">⚡ 默认</button>
+                        <button class="cat-btn view-mode-btn" data-view-mode="default" title="详细模式：完整列 + 持仓/持有人/国家/图表">📋 详细</button>
+                    </div>
+
+                    <!-- 搜索框：常驻显示，不再放在悬停菜单里 -->
+                    <div class="search-box-wrap">
+                        <input type="text" id="searchInput" placeholder="🔍 搜索代码或名称...">
+                    </div>
+
+                    <!-- 移动端专用：面板切换按钮（桌面端隐藏） -->
+                    <div class="mobile-panel-switches">
+                        <button type="button" class="mobile-filter-toggle" id="mobileFilterToggle" title="展开/收起市场大类">
+                            <span>📂 大类</span>
+                            <span class="mobile-filter-current" id="mobileFilterCurrent">全部</span>
+                            <span class="mobile-filter-arrow">▼</span>
+                        </button>
+                        <button type="button" class="dca-toggle-btn" id="dcaToggleBtn" title="展开/收起定投参数">
+                            <span>📊 定投</span>
+                            <span id="dcaToggleArrow">▼</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 市场大类面板（移动端默认隐藏，桌面端占满整行显示） -->
+                <div class="sub-filter-bar" id="subFilterBar" style="margin-bottom: 0;">
+                    <div class="category-nav">
+                        <button class="cat-btn macro-filter fav-filter" data-macro="favorites" data-sub="favorites">⭐ 我的自选</button>
+                        <span class="category-title" style="margin-left: 6px;">市场大类:</span>
+                        <button class="cat-btn macro-filter active" data-macro="all" data-sub="all">全部展示</button>
+
+                        <span class="category-title" style="margin-left: 8px;">美股:</span>
+                        <button class="cat-btn macro-filter" data-macro="us_share" data-sub="all">美股全量</button>
+                        <button class="cat-btn macro-filter" data-macro="us_share" data-sub="us_active">美股主动</button>
+                        <button class="cat-btn macro-filter" data-macro="us_share" data-sub="ndx_passive">纳指被动</button>
+                        <button class="cat-btn macro-filter" data-macro="us_share" data-sub="spx_passive">标普被动</button>
+                        <button class="cat-btn macro-filter" data-macro="us_share" data-sub="us_etf">美股ETF</button>   <!-- ★ 新增 -->
+
+                        <span class="category-title" style="margin-left: 8px;">A股板块:</span>
+                        <button class="cat-btn macro-filter" data-macro="a_share" data-sub="all">A股全量</button>
+                        <button class="cat-btn macro-filter" data-macro="a_share" data-sub="cpo">CPO</button>
+                        <button class="cat-btn macro-filter" data-macro="a_share" data-sub="storage">存储芯片</button>
+                        <button class="cat-btn macro-filter" data-macro="a_share" data-sub="semiconductor">半导体材料</button>
+                        <button class="cat-btn macro-filter" data-macro="a_share" data-sub="ai">人工智能</button>
+                        <button class="cat-btn macro-filter" data-macro="a_share" data-sub="grid">电网设备</button>
+                        <button class="cat-btn macro-filter" data-macro="a_share" data-sub="robot">机器人</button>
+
+                        <span class="category-title" style="margin-left: 8px;">其他:</span>
+                        <button class="cat-btn macro-filter" data-macro="other" data-sub="commodities">大宗商品</button>
+                        <button class="cat-btn macro-filter" data-macro="other" data-sub="crypto">加密货币</button>
+                        <button class="cat-btn macro-filter" data-macro="other" data-sub="index">主流指数</button>
+                    </div>
+                </div>
+
+                <!-- 定投参数面板（移动端默认隐藏，桌面端与原申购状态并排） -->
+                <div class="global-dca-filter-card" id="gDcaCard" style="margin-bottom: 0; flex: 1; min-width: 320px; align-self: stretch;">
+                    <div class="global-dca-filter-header" style="cursor: default;">
+                        <span class="global-dca-filter-title">📊 动态定投参数配置</span>
+                    </div>
+                    <div class="global-dca-filter-body" id="gDcaBody">
+                        <select id="gDcaFreq">
+                            <option value="daily">每日定投</option>
+                            <option value="weekly">每周定投</option>
+                            <option value="biweekly">双周定投</option>
+                            <option value="monthly" selected>每月定投</option>
+                        </select>
+                        <select id="gDcaDaySelect"></select>
+                        <span class="g-dca-window" title="定投起始 / 结束日期（含首尾，按净值交易日就近取）">
+                            <input type="date" id="gDcaStart" aria-label="定投起始日期">
+                            <span class="g-dca-window-sep">→</span>
+                            <input type="date" id="gDcaEnd" aria-label="定投结束日期">
+                        </span>
+                        <button id="gDcaApplyBtn">计算并刷新排序</button>
+                        <button id="cmpToggleBtn" type="button" class="cmp-toggle-btn" aria-pressed="false" title="进入对比选择：首列由「自选星标」切换为「勾选框」，最多选 6 只">⚖ 基金对比</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <table id="fundTable">
+                    <thead>
+                        <tr>
+                            <th data-col="0" title="☆ 点击加入自选；点「⚖ 基金对比」后可勾选加入对比（最多 6 只）" onclick="handleHeaderClick(0)"><span class="th-full cmp-head-normal">收藏</span><span class="th-simple cmp-head-normal">★</span><span class="cmp-head-cmp">对比</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="1" onclick="handleHeaderClick(1)"><span class="th-full">代码</span><span class="th-simple">代码</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="2" onclick="handleHeaderClick(2)"><span class="th-full">基金名称 / 赎回费率阶梯</span><span class="th-simple">名称</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="3" onclick="handleHeaderClick(3)"><span class="th-full">最新规模</span><span class="th-simple">规模</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="4" onclick="handleHeaderClick(4)">运作费(管/托/销) <span class="sort-icon">⇅</span></th>
+                            <th data-col="5" onclick="handleHeaderClick(5)">申购费率 <span class="sort-icon">⇅</span></th>
+                            <th data-col="6" onclick="handleHeaderClick(6)"><span class="th-full">申购状态/限额</span><span class="th-simple">状态</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="7" onclick="handleHeaderClick(7)">最高净值 <span class="sort-icon">⇅</span></th>
+                            <th data-col="8" onclick="handleHeaderClick(8)">最低净值 <span class="sort-icon">⇅</span></th>
+                            <th data-col="9" onclick="handleHeaderClick(9)">最新净值 <span class="sort-icon">⇅</span></th>
+                            <th data-col="10" onclick="handleHeaderClick(10)">最大回撤 <span class="sort-icon">⇅</span></th>
+                            <th data-col="11" onclick="handleHeaderClick(11)">自低点反弹 <span class="sort-icon">⇅</span></th>
+                            <th data-col="12" onclick="handleHeaderClick(12)">修复程度 <span class="sort-icon">⇅</span></th>
+                            <th data-col="13" onclick="handleHeaderClick(13)">修复时间 <span class="sort-icon">⇅</span></th>
+                            <th data-col="14" onclick="handleHeaderClick(14)">{col_today_title} <span class="sort-icon">⇅</span></th>
+                            <th data-col="15" onclick="handleHeaderClick(15)"><span class="th-full">近一周</span><span class="th-simple">近一周</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="16" onclick="handleHeaderClick(16)"><span class="th-full">近一月</span><span class="th-simple">近一月</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="17" onclick="handleHeaderClick(17)"><span class="th-full">近三月</span><span class="th-simple">近三月</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="18" onclick="handleHeaderClick(18)"><span class="th-full">近半年</span><span class="th-simple">近半年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="19" onclick="handleHeaderClick(19)"><span class="th-full">今年内</span><span class="th-simple">今年内</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="20" onclick="handleHeaderClick(20)"><span class="th-full">近一年</span><span class="th-simple">近一年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="21" onclick="handleHeaderClick(21)"><span class="th-full">近三年</span><span class="th-simple">近三年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="22" onclick="handleHeaderClick(22)"><span class="th-full">近五年</span><span class="th-simple">近五年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="23" onclick="handleHeaderClick(23)"><span class="th-full">近十年</span><span class="th-simple">近十年</span> <span class="sort-icon">⇅</span></th>
+                            <th data-col="24" onclick="handleHeaderClick(24)"><span class="th-full"><span id="dcaHeaderTitle">月定投</span>收益</span><span class="th-simple">定投</span> <span class="sort-icon">⇅</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                        {empty_row}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="footer-note">
+                <div class="footer-left">
+                    <span>💡 <strong>使用提示：</strong> 点击首列 ☆ 添加自选；点工具栏「<strong>⚖ 基金对比</strong>」后首列切换成勾选框（此时自选星标隐藏），勾选最多 6 只，底部浮条点「开始对比」即可看归一化净值曲线与指标横向对比（含资产配置、持股集中度、十大重仓、持有人结构、申购限额，每行更优值标「<strong>优</strong>」）；点击行内「📊 定投」呼出单只回测小工具；点击基金行弹出详情浮窗：上方是最近 8 个季度的前十大持仓 + 持有人结构饼图（QDII 基金另附国家/地区配置），<strong>季度条可横向滚动</strong>，滚到最右侧点「<strong>加载更早季度</strong>」即可回溯该基金全部历史季度；下方依次为年度收益率与双轴走势图。每个季度卡片右上角的「<strong>详细</strong>」可查看该季度<strong>全部持仓</strong>，浮窗内「上季 / 本季」两列并排对照、点表头可按占净值或环比变化量排序、底部可展开本季退出披露名单的个股；季度切换支持 chips 与 ‹ › 翻页。浮窗内按 <strong>Esc</strong> 或点击遮罩即可关闭。</span>
+                </div>
+                <div class="footer-right">
+                    <span>⏱️ 统计更新于: <strong>{update_time_str}</strong></span>
+                </div>
+            </div>
+
+            <!-- 对比选择浮条：放在 #fundView 内部，切到其它视图时随父级 display:none 一起隐藏 -->
+            <div class="fcmp-bar" id="cmpBar" hidden>
+                <span class="fcmp-bar-count" id="cmpBarCount">已选 0 只</span>
+                <div class="fcmp-bar-chips" id="cmpBarChips"></div>
+                <div class="fcmp-bar-actions">
+                    <button type="button" class="fcmp-btn-ghost" id="cmpClearBtn">清空</button>
+                    <button type="button" class="fcmp-btn-primary" id="cmpStartBtn" disabled>开始对比</button>
+                </div>
+                <div class="fcmp-bar-hint" id="cmpBarHint" hidden></div>
+            </div>
+        </section>
+
+        <!-- 视图 3：QDII 监控 -->
+        <section id="qdiiView" class="view-pane">
+            {qdii_sections_html}
+        </section>
+
+        <!-- ★ 新增 视图 4：CFTC资产数据（iframe 内嵌同目录下的 CFTC 面板） -->
+        <section id="allAssetView" class="view-pane">
+            <div class="asset-iframe-wrap">
+                <div class="asset-iframe-bar">
+                    <span>📱 面板可上下滑动查看，图表可双指缩放</span>
+                    <a href="{CFTC_DASHBOARD_FILE}" target="_blank" rel="noopener">新窗口打开 ↗</a>
+                </div>
+                <div class="asset-iframe-loading" id="assetIframeLoading">⏳ 正在加载CFTC资产数据面板...</div>
+                <iframe
+                    id="cftcFrame"
+                    data-src="{CFTC_DASHBOARD_FILE}"
+                    title="CFTC CFTC资产数据面板"
+                    loading="lazy"
+                    referrerpolicy="no-referrer"
+                    sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                ></iframe>
+            </div>
+        </section>
+
+        <!-- ★ 视图 5：沪深宽基 ETF 份额（dual 脚本生成的看板，内嵌进主页面） -->
+        <section id="dualView" class="view-pane">
+            <div class="asset-iframe-wrap">
+                <div class="asset-iframe-bar">
+                    <span>📱 面板可上下滑动查看，图表可双指缩放</span>
+                    <a href="{DUAL_DASHBOARD_FILE}" target="_blank" rel="noopener">新窗口打开 ↗</a>
+                </div>
+                <div class="asset-iframe-loading" id="dualIframeLoading">⏳ 正在加载沪深宽基 ETF 份额看板...</div>
+                <iframe
+                    id="dualFrame"
+                    data-src="{DUAL_DASHBOARD_FILE}"
+                    title="沪深宽基 ETF 份额看板"
+                    loading="lazy"
+                    referrerpolicy="no-referrer"
+                    sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                ></iframe>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- 基金详情浮窗：持仓 / 持有人结构 / 国家地区 / 年度收益 / 走势图 -->
+    <div class="modal-overlay" id="fundDetailModal">
+        <div class="modal-card modal-card-wide">
+            <div class="modal-header">
+                <h3 id="fundDetailTitle">📈 基金详情</h3>
+                <button class="modal-close" id="closeFundDetailModal" title="关闭">&times;</button>
+            </div>
+            <div class="modal-body" id="fundDetailBody"></div>
+        </div>
+    </div>
+
+    <!-- 全部持仓浮窗：某季度全部持仓（按占比降序），可切换该基金所有历史季度 -->
+    <div class="modal-overlay modal-nested" id="holdingsDetailModal">
+        <div class="modal-card modal-card-mid">
+            <div class="modal-header">
+                <h3 id="holdingsDetailTitle">📦 全部持仓</h3>
+                <button class="modal-close" id="closeHoldingsDetailModal" title="关闭">&times;</button>
+            </div>
+            <div class="modal-body" id="holdingsDetailBody"></div>
+        </div>
+    </div>
+
+    <!-- 定投独立测算弹窗 -->
+    <div class="modal-overlay" id="dcaModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="dcaModalTitle">📊 智能定投/回测测算小工具</h3>
+                <button class="modal-close" id="closeDcaModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="dca-controls">
+                    <div class="dca-field">
+                        <label>定投频次</label>
+                        <select id="dcaFreq">
+                            <option value="daily">每日定投</option>
+                            <option value="weekly">每周定投</option>
+                            <option value="biweekly">每两周定投</option>
+                            <option value="monthly" selected>每月定投</option>
+                        </select>
+                    </div>
+                    <div class="dca-field" id="dcaDayField">
+                        <label id="dcaDayLabel">扣款日 (每月几号)</label>
+                        <select id="dcaDaySelect"></select>
+                    </div>
+                    <div class="dca-field">
+                        <label>每期金额 (元)</label>
+                        <input type="number" id="dcaAmount" value="1000" min="10" step="100">
+                    </div>
+                    <div class="dca-field">
+                        <label>定投起始日期</label>
+                        <input type="date" id="dcaStart">
+                    </div>
+                    <div class="dca-field">
+                        <label>定投结束日期</label>
+                        <input type="date" id="dcaEnd">
+                    </div>
+                    <div class="dca-field dca-preset-field">
+                        <label>快捷窗口</label>
+                        <div class="dca-presets" id="dcaPresets">
+                            <button type="button" data-months="6">近半年</button>
+                            <button type="button" data-months="12">近一年</button>
+                            <button type="button" data-months="36">近三年</button>
+                            <button type="button" data-months="60">近五年</button>
+                            <button type="button" data-months="0">全部</button>
+                        </div>
+                    </div>
+                    <button class="dca-run-btn" id="dcaRunBtn">🚀 刷新测算图表</button>
+                </div>
+
+                <div class="dca-results-grid">
+                    <div class="dca-result-card">
+                        <div class="dca-result-title">累计投入期数 / 本金</div>
+                        <div class="dca-result-value" id="resTotalInvest">--</div>
+                    </div>
+                    <div class="dca-result-card">
+                        <div class="dca-result-title">定投期末总资产</div>
+                        <div class="dca-result-value" id="resTotalAsset" style="color: var(--link-color);">--</div>
+                    </div>
+                    <div class="dca-result-card">
+                        <div class="dca-result-title">总收益额 (元)</div>
+                        <div class="dca-result-value" id="resProfit">--</div>
+                    </div>
+                    <div class="dca-result-card">
+                        <div class="dca-result-title">定投总收益率</div>
+                        <div class="dca-result-value" id="resReturnRate">--</div>
+                    </div>
+                    <div class="dca-result-card">
+                        <div class="dca-result-title">持仓均价 / 最新价</div>
+                        <div class="dca-result-value" id="resAvgPrice">--</div>
+                    </div>
+                </div>
+
+                <div class="dca-chart-box">
+                    <canvas id="dcaChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 基金对比浮窗：归一化净值曲线 + 指标横向对比 -->
+    <div class="modal-overlay" id="cmpModal">
+        <div class="modal-card modal-card-wide">
+            <div class="modal-header">
+                <h3 id="cmpTitle">⚖ 基金对比</h3>
+                <button class="modal-close" id="cmpCloseBtn" title="关闭">&times;</button>
+            </div>
+            <div class="modal-body" id="cmpBody">
+                <div class="fcmp-controls">
+                    <span class="fcmp-sub">对比区间</span>
+                    <div class="fcmp-periods" id="cmpPeriods">
+                        <button type="button" class="fcmp-period-btn" data-period="month">近1月</button>
+                        <button type="button" class="fcmp-period-btn active" data-period="quarter">近3月</button>
+                        <button type="button" class="fcmp-period-btn" data-period="half">近6月</button>
+                        <button type="button" class="fcmp-period-btn" data-period="ytd">今年内</button>
+                        <button type="button" class="fcmp-period-btn" data-period="year">近1年</button>
+                        <button type="button" class="fcmp-period-btn" data-period="3y">近3年</button>
+                        <button type="button" class="fcmp-period-btn" data-period="5y">近5年</button>
+                        <button type="button" class="fcmp-period-btn" data-period="10y">近10年</button>
+                        <button type="button" class="fcmp-period-btn" data-period="all">全区间</button>
+                    </div>
+                    <span class="fcmp-note" id="cmpAnchorNote"></span>
+                    <span class="fcmp-legend"><i></i>底色 = 本行更优</span>
+                </div>
+                <div class="fcmp-chart-box">
+                    <canvas id="cmpChartCanvas"></canvas>
+                    <div class="fcmp-empty" id="cmpChartEmpty" hidden></div>
+                </div>
+                <div class="fcmp-table-wrap" id="cmpTableWrap"></div>
+                <div class="fcmp-note" id="cmpFoot"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>window.__FUND_CMP_META__={cmp_meta_json};</script>
+    <script>
+        var fundNavData = window.__FUND_NAV_DATA__ || {{}};
+        var fundNames = {json.dumps(fund_names_json, ensure_ascii=False)};
+        var fundParsedDates = {{}};
+        var cmpMetaData = window.__FUND_CMP_META__ || {{}};
+        var holdingDetailHtml = window.__FUND_HOLDING_DETAILS__ || {{}};
+        var fullHoldingsData = window.__FUND_FULL_HOLDINGS__ || {{}};
+        var detailMoreData = window.__FUND_DETAIL_MORE__ || {{}};
+        var qdiiAnnualData = {qdii_annual_payload};
+        var holdingDetailPromise = null;
+        var fullHoldingsPromise = null;
+        var detailMorePromise = null;
+
+        document.addEventListener('DOMContentLoaded', function() {{
+            fundNavData = window.__FUND_NAV_DATA__ || fundNavData || {{}};
+            window.__FUND_NAV_DATA__ = null;
+            window.__FUND_HOLDING_DETAILS__ = null;
+            if (window.__fundNavDataLoadFailed && Object.keys(fundNavData).length === 0) {{
+                console.error('fund_dashboard_data.js 加载失败，请刷新页面。');
+            }}
+        }}, {{ once: true }});
+
+        function loadHoldingDetails() {{
+            if (Object.keys(holdingDetailHtml).length > 0) return Promise.resolve();
+            if (holdingDetailPromise) return holdingDetailPromise;
+            holdingDetailPromise = new Promise(resolve => {{
+                const script = document.createElement('script');
+                script.src = {json.dumps(holding_detail_asset)};
+                script.onload = () => {{
+                    holdingDetailHtml = window.__FUND_HOLDING_DETAILS__ || {{}};
+                    window.__FUND_HOLDING_DETAILS__ = null;
+                    resolve();
+                }};
+                script.onerror = () => {{
+                    script.remove();
+                    holdingDetailPromise = null;
+                    resolve();
+                }};
+                document.body.appendChild(script);
+            }});
+            return holdingDetailPromise;
+        }}
+
+        // 全历史持仓数据体积较大，只在点「详细」时按需加载
+        function loadFullHoldings() {{
+            if (Object.keys(fullHoldingsData).length > 0) return Promise.resolve();
+            if (fullHoldingsPromise) return fullHoldingsPromise;
+            fullHoldingsPromise = new Promise(resolve => {{
+                const script = document.createElement('script');
+                script.src = {json.dumps(full_holdings_asset)};
+                script.onload = () => {{
+                    fullHoldingsData = window.__FUND_FULL_HOLDINGS__ || {{}};
+                    window.__FUND_FULL_HOLDINGS__ = null;
+                    resolve();
+                }};
+                script.onerror = () => {{
+                    script.remove();
+                    fullHoldingsPromise = null;
+                    resolve();
+                }};
+                document.body.appendChild(script);
+            }});
+            return fullHoldingsPromise;
+        }}
+
+        // 更早季度（首屏 8 列之外）同样体积较大，只在点「加载更早季度」时拉
+        function loadDetailMore() {{
+            if (Object.keys(detailMoreData).length > 0) return Promise.resolve();
+            if (detailMorePromise) return detailMorePromise;
+            detailMorePromise = new Promise(resolve => {{
+                const script = document.createElement('script');
+                script.src = {json.dumps(detail_more_asset)};
+                script.onload = () => {{
+                    detailMoreData = window.__FUND_DETAIL_MORE__ || {{}};
+                    window.__FUND_DETAIL_MORE__ = null;
+                    resolve();
+                }};
+                script.onerror = () => {{
+                    script.remove();
+                    detailMorePromise = null;
+                    resolve();
+                }};
+                document.body.appendChild(script);
+            }});
+            return detailMorePromise;
+        }}
+
+        // ★ 内嵌面板（CFTC / 沪深宽基ETF）懒加载 + 主题联动
+        const EMBED_FRAMES = {{
+            allAssetView: {{ frameId: 'cftcFrame', loadingId: 'assetIframeLoading' }},
+            dualView:     {{ frameId: 'dualFrame', loadingId: 'dualIframeLoading' }}
+        }};
+        function iframeThemedSrc(frameId) {{
+            const frame = document.getElementById(frameId);
+            if (!frame) return '';
+            const base = (frame.getAttribute('data-src') || '').split('?')[0];
+            const theme = document.documentElement.getAttribute('data-theme') || 'light';
+            return base + '?theme=' + encodeURIComponent(theme);
+        }}
+        function syncIframeTheme(frameId, theme) {{
+            const frame = document.getElementById(frameId);
+            if (!frame || frame.dataset.loaded !== '1' || !frame.contentWindow) return;
+            try {{
+                frame.contentWindow.postMessage({{ type: 'cftc-theme', theme: theme || 'light' }}, '*');
+            }} catch (e) {{}}
+        }}
+        function syncAllEmbedIframes(theme) {{
+            Object.values(EMBED_FRAMES).forEach(cfg => syncIframeTheme(cfg.frameId, theme));
+        }}
+
+        // Tab 切换
+        document.querySelectorAll('.nav-tab-btn').forEach(btn => {{
+            btn.addEventListener('click', function() {{
+                document.querySelectorAll('.nav-tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.view-pane').forEach(p => p.classList.remove('active'));
+                this.classList.add('active');
+                const targetView = document.getElementById(this.dataset.view);
+                if (targetView) targetView.classList.add('active');
+
+                // ★ 懒加载内嵌 iframe（仅首次进入该视图时真正加载外部 HTML）
+                const embed = EMBED_FRAMES[this.dataset.view];
+                if (embed) {{
+                    const frame = document.getElementById(embed.frameId);
+                    const loadingTip = document.getElementById(embed.loadingId);
+                    if (frame && !frame.dataset.loaded) {{
+                        frame.dataset.loaded = '1';
+                        if (loadingTip) loadingTip.style.display = 'flex';
+                        frame.addEventListener('load', function() {{
+                            if (loadingTip) loadingTip.style.display = 'none';
+                            // 双保险：加载完成后再同步一次主题（防止 query 参数被浏览器丢弃）
+                            syncIframeTheme(embed.frameId, document.documentElement.getAttribute('data-theme'));
+                        }}, {{ once: true }});
+                        frame.src = iframeThemedSrc(embed.frameId);
+                    }} else if (loadingTip) {{
+                        loadingTip.style.display = 'none';
+                    }}
+                }}
+            }});
+        }});
+
+        // ===== 市场大类菜单：桌面端仅在悬停「基金量化看板」页签时浮出 =====
+        // 移动端仍沿用原有的「📂 大类」折叠按钮（mobile-expanded），这里不干预。
+        (function() {{
+            const bar = document.getElementById('subFilterBar');
+            const fundTab = document.querySelector('.nav-tab-btn[data-view="fundView"]');
+            if (!bar || !fundTab) return;
+            bar.classList.add('menu-hover-only');
+
+            let hideTimer = null;
+            const openBar = function() {{
+                clearTimeout(hideTimer);
+                const view = document.getElementById('fundView');
+                // 只有当前停在基金看板视图时才浮出
+                if (!view || !view.classList.contains('active')) return;
+                bar.classList.add('menu-hover-open');
+            }};
+            const closeBar = function(delay) {{
+                clearTimeout(hideTimer);
+                hideTimer = setTimeout(function() {{
+                    bar.classList.remove('menu-hover-open');
+                }}, delay == null ? 280 : delay);
+            }};
+
+            fundTab.addEventListener('mouseenter', openBar);
+            fundTab.addEventListener('mouseleave', function() {{ closeBar(320); }});
+            bar.addEventListener('mouseenter', openBar);
+            bar.addEventListener('mouseleave', function() {{ closeBar(280); }});
+
+            // 切走页签时立刻收起
+            document.querySelectorAll('.nav-tab-btn').forEach(function(btn) {{
+                btn.addEventListener('click', function() {{ closeBar(0); }});
+            }});
+        }})();
+
+        // 主题切换
+        (function() {{
+            const toggle = document.getElementById('themeToggle');
+            const currentTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', currentTheme);
+            toggle.textContent = currentTheme === 'dark' ? '☀️ 亮色' : '🌓 暗色';
+            toggle.addEventListener('click', function() {{
+                const current = document.documentElement.getAttribute('data-theme');
+                const next = current === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+                toggle.textContent = next === 'dark' ? '☀️ 亮色' : '🌓 暗色';
+                window._crosshairLineColor = null;
+                // ★ 同步所有内嵌面板（CFTC / 沪深宽基ETF）主题
+                syncAllEmbedIframes(next);
+            }});
+        }})();
+
+        // 【新增】美股止盈三信号面板折叠切换
+        (function() {{
+            const header = document.getElementById('stopProfitHeader');
+            const body = document.getElementById('stopProfitBody');
+            const icon = document.getElementById('stopProfitToggleIcon');
+            if (header && body && icon) {{
+                header.addEventListener('click', function() {{
+                    const isCollapsed = body.style.display === 'none';
+                    body.style.display = isCollapsed ? 'block' : 'none';
+                    icon.textContent = isCollapsed ? '▼' : '▶';
+                }});
+            }}
+        }})();
+
+        // 【改造】指数历年回报视图模式切换 + 柱状图支持
+        function toggleAnnualView(idxName, mode) {{
+            const container = document.getElementById('annual-view-' + idxName);
+            if (!container) return;
+            const cardView = document.getElementById('annual-card-' + idxName);
+            const heatmapView = document.getElementById('annual-heatmap-' + idxName);
+            const barView = document.getElementById('annual-bar-' + idxName);
+            const buttons = container.parentElement.querySelectorAll('.mode-toggle-btn');
+
+            buttons.forEach(btn => {{
+                if (btn.getAttribute('data-mode') === mode) {{
+                    btn.classList.add('active');
+                }} else {{
+                    btn.classList.remove('active');
+                }}
+            }});
+
+            if (cardView) cardView.style.display = (mode === 'card') ? 'block' : 'none';
+            if (heatmapView) heatmapView.style.display = (mode === 'heatmap') ? 'block' : 'none';
+            if (barView) barView.style.display = (mode === 'bar') ? 'block' : 'none';
+            const ddView = document.getElementById('annual-dd-' + idxName);
+            if (ddView) ddView.style.display = (mode === 'dd') ? 'block' : 'none';
+            // 说明：不再给卡片加 annual-card-wide —— 回撤视图与其它三个视图保持同宽，
+            // 切视图时卡片不会突然撑满整行、再缩回去。
+
+            if (mode === 'bar') {{
+                setTimeout(() => initAnnualBarChart(idxName), 60);
+            }} else if (mode === 'dd') {{
+                setTimeout(() => initAnnualDDChart(idxName), 60);
+            }}
+        }}
+
+        // 【新增】柱状图初始化（参考 Yahoo Finance 风格）
+        function initAnnualBarChart(idxName) {{
+            const canvas = document.getElementById('annual-bar-chart-' + idxName);
+            if (!canvas) return;
+            if (canvas._chartInstance) {{
+                try {{ canvas._chartInstance.destroy(); }} catch(e) {{}}
+                canvas._chartInstance = null;
+            }}
+
+            let data = [];
+            try {{
+                data = JSON.parse(canvas.getAttribute('data-bar')) || [];
+            }} catch(e) {{ return; }}
+            if (!data.length) return;
+
+            const labels = data.map(d => String(d.year));
+            const values = data.map(d => d.pct);
+            const closes = data.map(d => d.close);
+            const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+            const avgLinePlugin = {{
+                id: 'avgLinePlugin_' + idxName,
+                afterDatasetsDraw(chart) {{
+                    const ctx = chart.ctx;
+                    const chartArea = chart.chartArea;
+                    const yScale = chart.scales.y;
+                    if (!yScale || !chartArea) return;
+                    const yPos = yScale.getPixelForValue(avg);
+                    if (yPos < chartArea.top || yPos > chartArea.bottom) return;
+
+                    ctx.save();
+                    ctx.strokeStyle = '#f39c12';
+                    ctx.setLineDash([5, 4]);
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(chartArea.left, yPos);
+                    ctx.lineTo(chartArea.right, yPos);
+                    ctx.stroke();
+                    ctx.restore();
+
+                    ctx.save();
+                    ctx.fillStyle = '#f39c12';
+                    ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText(`均值 ${{avg >= 0 ? '+' : ''}}${{avg.toFixed(2)}}%`, chartArea.left + 6, yPos - 3);
+                    ctx.restore();
+                }}
+            }};
+
+            const ctx = canvas.getContext('2d');
+            canvas._chartInstance = new Chart(ctx, {{
+                type: 'bar',
+                data: {{
+                    labels: labels,
+                    datasets: [{{
+                        label: '年度收益',
+                        data: values,
+                        backgroundColor: values.map(v => v >= 0 ? 'rgba(38, 166, 154, 0.85)' : 'rgba(239, 83, 80, 0.85)'),
+                        borderColor: values.map(v => v >= 0 ? '#26a69a' : '#ef5350'),
+                        borderWidth: 1,
+                        borderRadius: 2,
+                        barPercentage: 0.75,
+                        categoryPercentage: 0.9
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {{ mode: 'index', intersect: false }},
+                    plugins: {{
+                        legend: {{ display: false }},
+                        tooltip: {{
+                            backgroundColor: 'rgba(30, 30, 30, 0.92)',
+                            padding: 10,
+                            cornerRadius: 6,
+                            callbacks: {{
+                                title: (items) => `年份: ${{items[0].label}}`,
+                                label: (c) => {{
+                                    const val = c.parsed.y;
+                                    const sign = val >= 0 ? '+' : '';
+                                    return [
+                                        `涨跌幅: ${{sign}}${{val.toFixed(2)}}%`,
+                                        `年末收盘: ${{closes[c.dataIndex] != null ? Number(closes[c.dataIndex]).toLocaleString() : '--'}}`
+                                    ];
+                                }}
+                            }}
+                        }}
+                    }},
+                    scales: {{
+                        x: {{
+                            ticks: {{ font: {{ size: 9 }}, maxRotation: 0, autoSkip: true, maxTicksLimit: 20 }},
+                            grid: {{ display: false }}
+                        }},
+                        y: {{
+                            ticks: {{
+                                font: {{ size: 9 }},
+                                callback: (v) => v + '%'
+                            }},
+                            grid: {{ color: 'rgba(0,0,0,0.05)' }}
+                        }}
+                    }}
+                }},
+                plugins: [avgLinePlugin]
+            }});
+        }}
+
+        {ANNUAL_DD_JS}
+
+        // 自选管理模块 (Local Storage)
+        const FavManager = {{
+            STORAGE_KEY: 'fav_funds_list',
+            getFavs: function() {{
+                try {{
+                    return JSON.parse(localStorage.getItem(this.STORAGE_KEY)) || [];
+                }} catch (e) {{
+                    return [];
+                }}
+            }},
+            isFav: function(code) {{
+                return this.getFavs().includes(code);
+            }},
+            toggleFav: function(code) {{
+                let favs = this.getFavs();
+                if (favs.includes(code)) {{
+                    favs = favs.filter(c => c !== code);
+                }} else {{
+                    favs.push(code);
+                }}
+                localStorage.setItem(this.STORAGE_KEY, JSON.stringify(favs));
+                return favs.includes(code);
+            }}
+        }};
+
+        // ===== 定投窗口：起始/结束日期（YYYY-MM-DD）工具 =====
+
+        // 本地日期 → YYYY-MM-DD（不能用 toISOString()，那是 UTC，东八区会差一天）
+        function fmtDateInput(d) {{
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return y + '-' + m + '-' + day;
+        }}
+
+        // 解析 YYYY-MM-DD 为本地时区 Date（new Date('2026-01-01') 会按 UTC 解析）
+        function parseDateInput(s) {{
+            const p = String(s || '').split('-');
+            if (p.length !== 3) return null;
+            const d = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+            return isNaN(d.getTime()) ? null : d;
+        }}
+
+        function shiftDateStr(s, months) {{
+            const d = parseDateInput(s);
+            if (!d) return '';
+            const day = d.getDate();
+            d.setDate(1);
+            d.setMonth(d.getMonth() - months);
+            // 月末溢出保护：3-31 往前一月应是 2-28/29，而不是 3-02
+            const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+            d.setDate(Math.min(day, lastDay));
+            return fmtDateInput(d);
+        }}
+
+        // 全量净值数据的整体日期边界（给 date input 设 min/max 与默认窗口）
+        let navDateBoundsCache = null;
+        function getNavDateBounds() {{
+            if (navDateBoundsCache) return navDateBoundsCache;
+            let lo = '', hi = '';
+            Object.keys(fundNavData).forEach(code => {{
+                const arr = fundNavData[code] && fundNavData[code].dates;
+                if (!arr || !arr.length) return;
+                if (!lo || arr[0] < lo) lo = arr[0];
+                const last = arr[arr.length - 1];
+                if (!hi || last > hi) hi = last;
+            }});
+            // 数据还没加载时不要把空结果缓存住
+            if (!lo || !hi) return {{ min: lo, max: hi }};
+            navDateBoundsCache = {{ min: lo, max: hi }};
+            return navDateBoundsCache;
+        }}
+
+        // 某只基金自己的净值日期边界
+        function getFundDateBounds(code) {{
+            const arr = fundNavData[code] && fundNavData[code].dates;
+            if (!arr || !arr.length) return {{ min: '', max: '' }};
+            return {{ min: arr[0], max: arr[arr.length - 1] }};
+        }}
+
+        // 给一对 date input 设定可选范围 + 默认窗口（默认：结束=最晚，开始=往前 1 年）
+        function setupDateRange(startId, endId, minDate, maxDate, forceDefault) {{
+            const sEl = document.getElementById(startId);
+            const eEl = document.getElementById(endId);
+            if (!sEl || !eEl) return;
+            if (minDate) {{ sEl.min = minDate; eEl.min = minDate; }}
+            if (maxDate) {{ sEl.max = maxDate; eEl.max = maxDate; }}
+            if (forceDefault || !eEl.value) eEl.value = maxDate || eEl.value || '';
+            if (forceDefault || !sEl.value) {{
+                const base = eEl.value || maxDate;
+                sEl.value = base ? (shiftDateStr(base, 12) || minDate || '') : (minDate || '');
+            }}
+            // 夹紧到可选范围内
+            if (minDate && sEl.value && sEl.value < minDate) sEl.value = minDate;
+            if (maxDate && eEl.value && eEl.value > maxDate) eEl.value = maxDate;
+            if (maxDate && sEl.value && sEl.value > maxDate) sEl.value = maxDate;
+            if (minDate && eEl.value && eEl.value < minDate) eEl.value = minDate;
+        }}
+
+        // 读取一对 date input 的值，顺序反了自动交换
+        function readDcaWindow(startId, endId) {{
+            const sEl = document.getElementById(startId);
+            const eEl = document.getElementById(endId);
+            let start = (sEl && sEl.value) || '';
+            let end = (eEl && eEl.value) || '';
+            if (start && end && start > end) {{ const t = start; start = end; end = t; }}
+            return {{ start: start, end: end }};
+        }}
+
+        // 定投回测计算核心函数
+        // 窗口由「起始日期 / 结束日期」显式给出（空值则取全序列），
+        // 直接按 ISO 字符串比较，避免 Date 解析的时区偏移。
+        function computeDCA(code, freq, targetDay, perAmount, startStr, endStr) {{
+            const raw = fundNavData[code];
+            if (!raw || !raw.dates || raw.dates.length < 2) return null;
+
+            const allDates = raw.dates;
+            const allNavs = raw.navs;
+
+            let parsedDates = fundParsedDates[code];
+            if (!parsedDates || parsedDates.length !== allDates.length) {{
+                parsedDates = allDates.map(d => new Date(d));
+                fundParsedDates[code] = parsedDates;
+            }}
+
+            let winStart = startStr || allDates[0];
+            let winEnd = endStr || allDates[allDates.length - 1];
+            if (winStart > winEnd) {{ const t = winStart; winStart = winEnd; winEnd = t; }}
+
+            const filtered = [];
+            for (let i = 0; i < allDates.length; i++) {{
+                const ds = allDates[i];
+                if (ds < winStart || ds > winEnd) continue;
+                filtered.push({{ date: ds, dt: parsedDates[i], nav: allNavs[i] }});
+            }}
+
+            if (filtered.length < 2) return null;
+
+            let totalInvest = 0;
+            let totalShares = 0;
+            let investCount = 0;
+            let lastInvestKey = '';
+
+            const timelineDates = [];
+            const timelineCost = [];
+            const timelineValue = [];
+
+            filtered.forEach(item => {{
+                let shouldBuy = false;
+                const dayOfWeek = item.dt.getDay();
+                const dayOfMonth = item.dt.getDate();
+
+                if (freq === 'daily') {{
+                    shouldBuy = true;
+                }} else if (freq === 'weekly') {{
+                    const oneJan = new Date(item.dt.getFullYear(), 0, 1);
+                    const weekNum = Math.ceil((((item.dt - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
+                    const weekKey = `${{item.dt.getFullYear()}}-W${{weekNum}}`;
+                    if (dayOfWeek >= targetDay && lastInvestKey !== weekKey) {{
+                        shouldBuy = true;
+                        lastInvestKey = weekKey;
+                    }}
+                }} else if (freq === 'biweekly') {{
+                    const oneJan = new Date(item.dt.getFullYear(), 0, 1);
+                    const weekNum = Math.ceil((((item.dt - oneJan) / 86400000) + oneJan.getDay() + 1) / 7);
+                    const biweekBlock = Math.floor(weekNum / 2);
+                    const biweekKey = `${{item.dt.getFullYear()}}-BW${{biweekBlock}}`;
+                    if (dayOfWeek >= targetDay && lastInvestKey !== biweekKey) {{
+                        shouldBuy = true;
+                        lastInvestKey = biweekKey;
+                    }}
+                }} else {{
+                    const monthKey = `${{item.dt.getFullYear()}}-${{item.dt.getMonth() + 1}}`;
+                    if (dayOfMonth >= targetDay && lastInvestKey !== monthKey) {{
+                        shouldBuy = true;
+                        lastInvestKey = monthKey;
+                    }}
+                }}
+
+                if (shouldBuy) {{
+                    const buyShares = perAmount / item.nav;
+                    totalShares += buyShares;
+                    totalInvest += perAmount;
+                    investCount++;
+                }}
+
+                const currentVal = totalShares * item.nav;
+                timelineDates.push(item.date);
+                timelineCost.push(Number(totalInvest.toFixed(2)));
+                timelineValue.push(Number(currentVal.toFixed(2)));
+            }});
+
+            const latestItem = filtered[filtered.length - 1];
+            const finalAsset = totalShares * latestItem.nav;
+            const profit = finalAsset - totalInvest;
+            const returnRate = totalInvest > 0 ? (profit / totalInvest) * 100 : 0;
+            const avgPrice = totalShares > 0 ? totalInvest / totalShares : 0;
+
+            return {{
+                investCount, totalInvest, finalAsset, profit, returnRate, avgPrice,
+                latestNav: latestItem.nav, timelineDates, timelineCost, timelineValue
+            }};
+        }}
+
+        function buildDayOptions(freqSelectId, daySelectId, labelId) {{
+            const freq = document.getElementById(freqSelectId).value;
+            const daySelect = document.getElementById(daySelectId);
+            const label = labelId ? document.getElementById(labelId) : null;
+
+            daySelect.innerHTML = '';
+            if (freq === 'daily') {{
+                if (label) label.parentElement.style.display = 'none';
+                else daySelect.style.display = 'none';
+            }} else if (freq === 'weekly' || freq === 'biweekly') {{
+                if (label) {{
+                    label.parentElement.style.display = 'flex';
+                    label.textContent = freq === 'weekly' ? '扣款日 (每周几)' : '扣款日 (每两周周几)';
+                }} else {{
+                    daySelect.style.display = 'inline-block';
+                }}
+                const weeks = ['周一', '周二', '周三', '周四', '周五'];
+                weeks.forEach((w, i) => {{
+                    const opt = document.createElement('option');
+                    opt.value = i + 1; opt.textContent = w;
+                    if (i === 0) opt.selected = true;
+                    daySelect.appendChild(opt);
+                }});
+            }} else {{
+                if (label) {{
+                    label.parentElement.style.display = 'flex';
+                    label.textContent = '扣款日 (每月几号)';
+                }} else {{
+                    daySelect.style.display = 'inline-block';
+                }}
+                for (let i = 1; i <= 28; i++) {{
+                    const opt = document.createElement('option');
+                    opt.value = i; opt.textContent = i + ' 号';
+                    if (i === 1) opt.selected = true;
+                    daySelect.appendChild(opt);
+                }}
+            }}
+        }}
+
+        function updateTableDca() {{
+            const freq = document.getElementById('gDcaFreq').value;
+            const targetDay = parseInt(document.getElementById('gDcaDaySelect').value) || 1;
+            const win = readDcaWindow('gDcaStart', 'gDcaEnd');
+
+            const headerTitle = document.getElementById('dcaHeaderTitle');
+            if (headerTitle) {{
+                const map = {{'daily':'日','weekly':'周','biweekly':'双周','monthly':'月'}};
+                headerTitle.textContent = (map[freq] || '') + '定投';
+            }}
+
+            document.querySelectorAll('#fundTable tbody tr.fund-row').forEach(row => {{
+                const code = row.getAttribute('data-code');
+                const res = computeDCA(code, freq, targetDay, 1000, win.start, win.end);
+                const dcaCell = row.querySelector('.dca-col');
+
+                if (dcaCell) {{
+                    if (res && res.returnRate !== undefined) {{
+                        const rate = res.returnRate;
+                        dcaCell.setAttribute('data-val', rate);
+                        const sign = rate > 0 ? '+' : '';
+                        const colorClass = rate > 0 ? 'gain-positive' : (rate < 0 ? 'gain-negative' : '');
+                        dcaCell.className = `dca-col ${{colorClass}}`;
+                        dcaCell.innerHTML = `${{sign}}${{rate.toFixed(2)}}%`;
+                    }} else {{
+                        dcaCell.setAttribute('data-val', -9999);
+                        dcaCell.className = 'dca-col';
+                        dcaCell.innerHTML = '--';
+                    }}
+                }}
+            }});
+
+            if (currentSortCol === 23) {{
+                isAscending = !isAscending;
+                sortTable(23);
+            }}
+        }}
+
+        let currentDcaCode = null;
+        let dcaChartInstance = null;
+
+        (function() {{
+            const modal = document.getElementById('dcaModal');
+            const closeBtn = document.getElementById('closeDcaModal');
+            const modalTitle = document.getElementById('dcaModalTitle');
+            const freqSelect = document.getElementById('dcaFreq');
+            const runBtn = document.getElementById('dcaRunBtn');
+
+            buildDayOptions('dcaFreq', 'dcaDaySelect', 'dcaDayLabel');
+            freqSelect.addEventListener('change', () => buildDayOptions('dcaFreq', 'dcaDaySelect', 'dcaDayLabel'));
+
+            buildDayOptions('gDcaFreq', 'gDcaDaySelect', null);
+            document.getElementById('gDcaFreq').addEventListener('change', () => buildDayOptions('gDcaFreq', 'gDcaDaySelect', null));
+            document.getElementById('gDcaApplyBtn').addEventListener('click', updateTableDca);
+            // 改完日期即时重算，不必每次都点按钮
+            ['gDcaStart', 'gDcaEnd'].forEach(id => {{
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', updateTableDca);
+            }});
+
+            window.openDcaModal = function(code) {{
+                currentDcaCode = code;
+                const name = fundNames[code] || code;
+                modalTitle.textContent = `📊 定投测算: [${{code}}] ${{name}}`;
+                // 日期可选范围收窄到这只基金自己的净值区间，并重置为近一年
+                const b = getFundDateBounds(code);
+                if (b.max) setupDateRange('dcaStart', 'dcaEnd', b.min, b.max, true);
+                modal.classList.add('show');
+                runBacktestModal();
+            }};
+
+            // 快捷窗口：以「结束日期」往前推 N 个月；0 = 全部（用该基金最早净值日）
+            (function initDcaPresets() {{
+                const box = document.getElementById('dcaPresets');
+                if (!box) return;
+                box.addEventListener('click', (e) => {{
+                    const btn = e.target.closest('button[data-months]');
+                    if (!btn) return;
+                    const months = parseInt(btn.getAttribute('data-months'), 10) || 0;
+                    const b = getFundDateBounds(currentDcaCode);
+                    const eEl = document.getElementById('dcaEnd');
+                    const sEl = document.getElementById('dcaStart');
+                    if (!eEl || !sEl) return;
+                    eEl.value = b.max || eEl.value;
+                    sEl.value = months > 0
+                        ? (shiftDateStr(eEl.value, months) || b.min || '')
+                        : (b.min || '');
+                    box.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === btn));
+                    runBacktestModal();
+                }});
+            }})();
+
+            closeBtn.addEventListener('click', () => modal.classList.remove('show'));
+            modal.addEventListener('click', (e) => {{ if (e.target === modal) modal.classList.remove('show'); }});
+            runBtn.addEventListener('click', runBacktestModal);
+
+            // 手改日期后直接回车也重算（同时取消快捷按钮的高亮）
+            ['dcaStart', 'dcaEnd'].forEach(id => {{
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('change', () => {{
+                    const box = document.getElementById('dcaPresets');
+                    if (box) box.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+                    runBacktestModal();
+                }});
+            }});
+
+            function runBacktestModal() {{
+                if (!currentDcaCode) return;
+                const freq = freqSelect.value;
+                const targetDay = parseInt(document.getElementById('dcaDaySelect').value) || 1;
+                const perAmount = parseFloat(document.getElementById('dcaAmount').value) || 1000;
+                const win = readDcaWindow('dcaStart', 'dcaEnd');
+
+                const res = computeDCA(currentDcaCode, freq, targetDay, perAmount, win.start, win.end);
+                if (!res) return;
+
+                document.getElementById('resTotalInvest').innerHTML = `${{res.investCount}} 期 / <strong>${{res.totalInvest.toLocaleString()}}</strong> 元`;
+                document.getElementById('resTotalAsset').innerHTML = `<strong>${{res.finalAsset.toFixed(2)}}</strong> 元`;
+
+                const profitElem = document.getElementById('resProfit');
+                profitElem.textContent = `${{res.profit >= 0 ? '+' : ''}}${{res.profit.toFixed(2)}}`;
+                profitElem.style.color = res.profit >= 0 ? '#d93025' : '#188038';
+
+                const rateElem = document.getElementById('resReturnRate');
+                rateElem.textContent = `${{res.returnRate >= 0 ? '+' : ''}}${{res.returnRate.toFixed(2)}}%`;
+                rateElem.style.color = res.returnRate >= 0 ? '#d93025' : '#188038';
+
+                document.getElementById('resAvgPrice').innerHTML = `${{res.avgPrice.toFixed(4)}} / ${{res.latestNav.toFixed(4)}}`;
+
+                const ctx = document.getElementById('dcaChart').getContext('2d');
+                if (dcaChartInstance) dcaChartInstance.destroy();
+
+                dcaChartInstance = new Chart(ctx, {{
+                    type: 'line',
+                    data: {{
+                        labels: res.timelineDates,
+                        datasets: [
+                            {{ label: '总资产 (元)', data: res.timelineValue, borderColor: '#1a73e8', backgroundColor: 'rgba(26, 115, 232, 0.08)', fill: true, pointRadius: 0, borderWidth: 2, tension: 0.1 }},
+                            {{ label: '累计本金 (元)', data: res.timelineCost, borderColor: '#e67e22', borderDash: [4, 4], pointRadius: 0, borderWidth: 1.5, fill: false }}
+                        ]
+                    }},
+                    options: {{
+                        responsive: true, maintainAspectRatio: false, interaction: {{ mode: 'index', intersect: false }},
+                        plugins: {{ legend: {{ display: true, position: 'top', labels: {{ font: {{ size: 10 }}, boxWidth: 12 }} }} }},
+                        scales: {{
+                            x: {{ ticks: {{ maxTicksLimit: 8, font: {{ size: 9 }} }}, grid: {{ display: false }} }},
+                            y: {{ ticks: {{ font: {{ size: 9 }} }}, grid: {{ color: 'rgba(0,0,0,0.05)' }} }}
+                        }}
+                    }}
+                }});
+            }}
+        }})();
+
+        document.addEventListener('DOMContentLoaded', function() {{
+            const macroBtns = document.querySelectorAll('.macro-filter');
+            const buyBtns = document.querySelectorAll('.buy-filter');
+            const shareBtns = document.querySelectorAll('.share-filter');
+            const searchInput = document.getElementById('searchInput');
+            const emptyRow = document.getElementById('empty-row');
+            const allRows = document.querySelectorAll('#fundTable tbody tr:not(#empty-row)');
+
+            let currentMacro = 'all';
+            let currentSub = 'all';
+            let currentBuyStatus = 'all';
+            let currentShare = 'all';
+            let searchKeyword = '';
+
+            // 全局面板日期范围要等净值数据加载完（fundNavData 在 DOMContentLoaded 后才可靠）
+            const gb = getNavDateBounds();
+            if (gb.max) setupDateRange('gDcaStart', 'gDcaEnd', gb.min, gb.max, true);
+            setTimeout(updateTableDca, 100);
+
+            function syncFavDisplay() {{
+                document.querySelectorAll('.star-btn').forEach(btn => {{
+                    const code = btn.getAttribute('data-code');
+                    const isF = FavManager.isFav(code);
+                    const td = btn.closest('td');
+                    if (isF) {{
+                        btn.classList.add('starred');
+                        btn.textContent = '★';
+                        if (td) td.setAttribute('data-val', '1');
+                    }} else {{
+                        btn.classList.remove('starred');
+                        btn.textContent = '☆';
+                        if (td) td.setAttribute('data-val', '0');
+                    }}
+                }});
+            }}
+            syncFavDisplay();
+
+            // 首屏跑一次：把份额按钮上的数字刷成当前筛选口径下的数量
+            applyFilters();
+
+            document.getElementById('fundTable').addEventListener('click', function(e) {{
+                const starBtn = e.target.closest('.star-btn');
+                if (starBtn) {{
+                    e.stopPropagation();
+                    const code = starBtn.getAttribute('data-code');
+                    FavManager.toggleFav(code);
+                    syncFavDisplay();
+                    if (currentMacro === 'favorites') {{
+                        applyFilters();
+                    }}
+                }}
+            }});
+
+            // 份额按钮上的数字 = 当前筛选（市场大类 / 申购状态 / 搜索）下的数量，
+            // 不是全站总数；切大类时数字会跟着变，避免拿全局数去猜当前分类。
+            function refreshShareCounts(baseCount, counts) {{
+                shareBtns.forEach(btn => {{
+                    const key = btn.dataset.share;
+                    const n = (key === 'all') ? baseCount : (counts[key] || 0);
+                    const label = (key === 'all') ? '全部' : (key === 'none' ? '无份额' : key + '类');
+                    btn.textContent = label + ' ' + n;
+                    if (key !== 'all') btn.classList.toggle('zero-count', n === 0);
+                }});
+            }}
+
+            function applyFilters() {{
+                let hasVisible = false;
+                let baseCount = 0;
+                const shareCounts = {{}};
+                const keyword = searchKeyword.trim().toLowerCase();
+                const favList = FavManager.getFavs();
+
+                allRows.forEach(row => {{
+                    const macro = row.getAttribute('data-macro');
+                    const sub = row.getAttribute('data-group');
+                    const buyStatus = row.getAttribute('data-buy-status') || '';
+                    const nameCell = row.querySelector('.name a');
+                    const name = nameCell ? nameCell.textContent.toLowerCase() : '';
+                    const codeCell = row.querySelector('.code');
+                    const code = codeCell ? codeCell.textContent.toLowerCase() : '';
+
+                    let matchCategory = false;
+                    if (currentMacro === 'favorites') {{
+                        matchCategory = favList.includes(code.toUpperCase()) || favList.includes(code.toLowerCase());
+                    }} else if (currentMacro === 'all') {{
+                        matchCategory = true;
+                    }} else if (currentSub === 'all') {{
+                        matchCategory = (macro === currentMacro);
+                    }} else {{
+                        matchCategory = (sub === currentSub);
+                    }}
+
+                    let matchBuy = false;
+                    if (currentBuyStatus === 'all') {{
+                        matchBuy = true;
+                    }} else if (currentBuyStatus === 'open') {{
+                        matchBuy = !buyStatus.includes('暂停申购') && !buyStatus.includes('封闭');
+                    }} else if (currentBuyStatus === 'closed') {{
+                        matchBuy = buyStatus.includes('暂停申购') || buyStatus.includes('封闭');
+                    }}
+
+                    const matchSearch = keyword === '' || name.includes(keyword) || code.includes(keyword);
+
+                    // 份额类别：非基金品种（ETF/商品/指数/加密）的 data-share 为空串，
+                    // 选任何具体类别时自然落选，选「全部」时不参与过滤。
+                    let matchShare = true;
+                    if (currentShare !== 'all') {{
+                        matchShare = (row.getAttribute('data-share') || '') === currentShare;
+                    }}
+
+                    const baseMatch = matchCategory && matchSearch && matchBuy;
+                    if (baseMatch) {{
+                        baseCount++;
+                        const sc = row.getAttribute('data-share') || '';
+                        if (sc) shareCounts[sc] = (shareCounts[sc] || 0) + 1;
+                    }}
+
+                    const visible = baseMatch && matchShare;
+
+                    if (visible) {{
+                        row.style.display = '';
+                        hasVisible = true;
+                    }} else {{
+                        row.style.display = 'none';
+                    }}
+                }});
+
+                refreshShareCounts(baseCount, shareCounts);
+
+                if (emptyRow) {{
+                    emptyRow.style.display = hasVisible ? 'none' : '';
+                    if (!hasVisible) {{
+                        if (currentMacro === 'favorites') {{
+                            emptyRow.querySelector('td').textContent = '您尚未收藏任何基金，请点击表格首列 ☆ 进行添加';
+                        }} else if (keyword) {{
+                            emptyRow.querySelector('td').textContent = '未找到匹配基金';
+                        }} else if (currentShare !== 'all') {{
+                            emptyRow.querySelector('td').textContent = currentShare === 'none'
+                                ? '当前分类下没有未标注份额类别的基金'
+                                : '当前分类下没有 ' + currentShare + ' 类份额的基金';
+                        }} else {{
+                            emptyRow.querySelector('td').textContent = '当前分类与状态暂无数据';
+                        }}
+                    }}
+                }}
+
+                // 勾选是显式选择，不随筛选丢失；这里只更新浮条里的"被隐藏数量"
+                if (window.CmpManager) window.CmpManager.refreshBar();
+            }}
+
+            macroBtns.forEach(btn => {{
+                btn.addEventListener('click', function() {{
+                    macroBtns.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    currentMacro = this.dataset.macro;
+                    currentSub = this.dataset.sub;
+                    applyFilters();
+                }});
+            }});
+
+            buyBtns.forEach(btn => {{
+                btn.addEventListener('click', function() {{
+                    buyBtns.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    currentBuyStatus = this.dataset.buy;
+                    applyFilters();
+                }});
+            }});
+
+            shareBtns.forEach(btn => {{
+                btn.addEventListener('click', function() {{
+                    shareBtns.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    currentShare = this.dataset.share || 'all';
+                    applyFilters();
+                }});
+            }});
+
+            if (searchInput) {{
+                searchInput.addEventListener('input', function() {{
+                    searchKeyword = this.value;
+                    applyFilters();
+                }});
+            }}
+        }});
+
+        var chartInstances = {{}};
+        var holderChartInstances = {{}};
+        var countryChartInstances = {{}};
+
+        const pieLabelsPlugin = {{
+            id: 'pieLabels',
+            afterDraw(chart) {{
+                if (chart.config.type !== 'doughnut' && chart.config.type !== 'pie') return;
+                const ctx = chart.ctx;
+                chart.data.datasets.forEach((dataset, i) => {{
+                    const meta = chart.getDatasetMeta(i);
+                    meta.data.forEach((element, index) => {{
+                        const val = dataset.data[index];
+                        if (val <= 8) return;
+                        const {{ x, y }} = element.tooltipPosition();
+                        ctx.save();
+                        ctx.fillStyle = '#ffffff';
+                        ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+                        ctx.shadowBlur = 3;
+                        ctx.fillText(`${{val.toFixed(1)}}%`, x, y);
+                        ctx.restore();
+                    }});
+                }});
+            }}
+        }};
+
+        const fundCrosshairPlugin = {{
+            id: 'fundCrosshairPlugin',
+            afterDraw(chart) {{
+                if (!chart._crosshair) return;
+                const ctx = chart.ctx;
+                const {{ left, right, top, bottom }} = chart.chartArea;
+                const {{ x, y }} = chart._crosshair;
+                if (x < left || x > right || y < top || y > bottom) return;
+                ctx.save();
+                ctx.beginPath();
+                ctx.setLineDash([4, 4]);
+                ctx.lineWidth = 1;
+                if (!window._crosshairLineColor) {{
+                    window._crosshairLineColor = getComputedStyle(document.documentElement).getPropertyValue('--footer-text').trim() || '#70757a';
+                }}
+                ctx.strokeStyle = window._crosshairLineColor;
+                ctx.moveTo(x, top);
+                ctx.lineTo(x, bottom);
+                ctx.moveTo(left, y);
+                ctx.lineTo(right, y);
+                ctx.stroke();
+                ctx.restore();
+            }}
+        }};
+
+        // ★ 区间涨幅徽标：把当前选中周期（近一周/近三月/成立以来…）的累计涨幅直接画在图上，
+        //   省得为了看一个数字去逐个 hover。底色带圆角，压在折线上也读得清。
+        const PERIOD_LABEL_TEXT = {{
+            week: '近一周', month: '近一月', quarter: '近三月', half: '近半年',
+            ytd: '今年内', year: '近一年', '3y': '近三年', '5y': '近五年',
+            '10y': '近十年', all: '成立以来'
+        }};
+
+        function computePeriodGain(filtered, period) {{
+            const navs = (filtered && filtered.navs) || [];
+            const dates = (filtered && filtered.dates) || [];
+            const out = {{
+                label: PERIOD_LABEL_TEXT[period] || String(period || ''),
+                pct: null, from: '', to: ''
+            }};
+            if (navs.length < 2) return out;
+            const base = Number(navs[0]);
+            const last = Number(navs[navs.length - 1]);
+            if (!isFinite(base) || !isFinite(last) || base <= 0) return out;
+            out.pct = ((last - base) / base) * 100.0;
+            out.from = dates.length ? String(dates[0]) : '';
+            out.to = dates.length ? String(dates[dates.length - 1]) : '';
+            return out;
+        }}
+
+        const fundPeriodGainPlugin = {{
+            id: 'fundPeriodGain',
+            afterDraw(chart) {{
+                const cfg = chart.$periodGain;
+                if (!cfg || cfg.pct === null || cfg.pct === undefined || !isFinite(cfg.pct)) return;
+                const area = chart.chartArea;
+                if (!area) return;
+                const ctx = chart.ctx;
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                const up = cfg.pct >= 0;
+                // 中国习惯：涨红跌绿
+                const valueColor = up ? (isDark ? '#ff7b72' : '#d93025')
+                                      : (isDark ? '#4ec9a4' : '#188038');
+                const labelColor = isDark ? '#9aa4ae' : '#5f6368';
+                const dateColor  = isDark ? '#7d8690' : '#80868b';
+                const bgColor    = isDark ? 'rgba(40,40,40,0.88)' : 'rgba(255,255,255,0.90)';
+                const lineColor  = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
+
+                const valueText = `${{up ? '+' : ''}}${{cfg.pct.toFixed(2)}}%`;
+                const subText = (cfg.from && cfg.to) ? `${{cfg.from}} → ${{cfg.to}}` : '';
+
+                const FONT_MAIN = '600 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+                const FONT_VAL  = '700 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+                const FONT_SUB  = '9px system-ui, -apple-system, "Segoe UI", sans-serif';
+
+                ctx.save();
+                ctx.font = FONT_MAIN;
+                const labelW = ctx.measureText(cfg.label).width;
+                ctx.font = FONT_VAL;
+                const valueW = ctx.measureText(valueText).width;
+                ctx.font = FONT_SUB;
+                const subW = subText ? ctx.measureText(subText).width : 0;
+
+                const padX = 7, padY = 5, gap = 6;
+                const boxW = Math.ceil(Math.max(labelW + gap + valueW, subW) + padX * 2);
+                const boxH = subText ? 30 : 22;
+                const bx = area.left + 6;
+                const by = area.top + 5;
+                const r = 5;
+
+                ctx.beginPath();
+                ctx.moveTo(bx + r, by);
+                ctx.lineTo(bx + boxW - r, by);
+                ctx.quadraticCurveTo(bx + boxW, by, bx + boxW, by + r);
+                ctx.lineTo(bx + boxW, by + boxH - r);
+                ctx.quadraticCurveTo(bx + boxW, by + boxH, bx + boxW - r, by + boxH);
+                ctx.lineTo(bx + r, by + boxH);
+                ctx.quadraticCurveTo(bx, by + boxH, bx, by + boxH - r);
+                ctx.lineTo(bx, by + r);
+                ctx.quadraticCurveTo(bx, by, bx + r, by);
+                ctx.closePath();
+                ctx.fillStyle = bgColor;
+                ctx.fill();
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = lineColor;
+                ctx.stroke();
+
+                ctx.textBaseline = 'top';
+                ctx.font = FONT_MAIN;
+                ctx.fillStyle = labelColor;
+                ctx.fillText(cfg.label, bx + padX, by + padY);
+                ctx.font = FONT_VAL;
+                ctx.fillStyle = valueColor;
+                ctx.fillText(valueText, bx + padX + labelW + gap, by + padY);
+                if (subText) {{
+                    ctx.font = FONT_SUB;
+                    ctx.fillStyle = dateColor;
+                    ctx.fillText(subText, bx + padX, by + padY + 15);
+                }}
+                ctx.restore();
+            }}
+        }};
+
+        function registerFundChartPlugins() {{
+            if (window._fundChartPluginsRegistered || typeof Chart === 'undefined') return;
+            Chart.register(pieLabelsPlugin);
+            Chart.register(fundCrosshairPlugin);
+            Chart.register(fundPeriodGainPlugin);
+            window._fundChartPluginsRegistered = true;
+        }}
+
+        function filterNavData(data, period) {{
+            if (!data || !data.dates || data.dates.length === 0) return {{ dates: [], navs: [] }};
+            const dates = data.dates;
+            const navs = data.navs;
+            const latest = new Date(dates[dates.length - 1]);
+            // 成立以来：全历史点太多（老基金 4000+ 个交易日），抽稀到 ~1200 点再画，
+            // 目视趋势一致，但 Chart.js 不卡、点也不会糊成一条带。
+            if (period === 'all') {{
+                const MAX_POINTS = 1200;
+                if (dates.length <= MAX_POINTS) return {{ dates: dates, navs: navs }};
+                const step = Math.ceil(dates.length / MAX_POINTS);
+                const outDates = [], outNavs = [];
+                for (let i = 0; i < dates.length; i += step) {{
+                    outDates.push(dates[i]);
+                    outNavs.push(navs[i]);
+                }}
+                const lastIdx = dates.length - 1;
+                if (outDates[outDates.length - 1] !== dates[lastIdx]) {{
+                    outDates.push(dates[lastIdx]);
+                    outNavs.push(navs[lastIdx]);
+                }}
+                return {{ dates: outDates, navs: outNavs }};
+            }}
+            let startDate = new Date(latest);
+            if (period === 'week') startDate.setDate(latest.getDate() - 7);
+            else if (period === 'month') startDate.setMonth(latest.getMonth() - 1);
+            else if (period === 'quarter') startDate.setMonth(latest.getMonth() - 3);
+            else if (period === 'half') startDate.setMonth(latest.getMonth() - 6);
+            else if (period === 'year') startDate.setFullYear(latest.getFullYear() - 1);
+            else if (period === '3y') startDate.setFullYear(latest.getFullYear() - 3);
+            else if (period === '5y') startDate.setFullYear(latest.getFullYear() - 5);
+            else if (period === '10y') startDate.setFullYear(latest.getFullYear() - 10);
+            else if (period === 'ytd') {{
+                // ★ 与「年度收益率」热力图口径严格对齐：
+                //   基准取「上一年最后一个交易日」的净值，而不是当年第一个交易日。
+                //   否则同一个自然年会因为基准日差一天而出现两个不同的数字。
+                const yPrevEnd = `${{latest.getFullYear() - 1}}-12-31`;
+                let baseIdx = -1;
+                for (let i = 0; i < dates.length; i++) {{
+                    if (dates[i] <= yPrevEnd) baseIdx = i;
+                }}
+                if (baseIdx >= 0) {{
+                    return {{ dates: dates.slice(baseIdx), navs: navs.slice(baseIdx) }};
+                }}
+                // 数据未覆盖上年末（如基金成立当年），退回当年首个交易日
+                startDate = new Date(latest.getFullYear(), 0, 1);
+            }}
+
+            const indices = [];
+            for (let i = 0; i < dates.length; i++) {{
+                if (new Date(dates[i]) >= startDate) indices.push(i);
+            }}
+            if (indices.length === 0) return {{ dates: dates, navs: navs }};
+            return {{ dates: indices.map(i => dates[i]), navs: indices.map(i => navs[i]) }};
+        }}
+
+        // 同一只基金现在有 3 张持有人饼图（最近 3 期），按 data-idx 区分实例
+        function initHolderChart(code) {{
+            const canvases = document.querySelectorAll(`canvas.holder-pie-canvas[data-code="${{code}}"]`);
+            if (!canvases.length) return;
+            registerFundChartPlugins();
+            canvases.forEach(canvas => {{
+                renderHolderPie(code, canvas, `${{code}}-${{canvas.dataset.idx || 0}}`);
+            }});
+        }}
+
+        function renderHolderPie(code, canvas, key) {{
+            if (holderChartInstances[key]) {{
+                if (typeof holderChartInstances[key].destroy === 'function') {{
+                    holderChartInstances[key].destroy();
+                    delete holderChartInstances[key];
+                }} else return;
+            }}
+
+            let holders = [];
+            try {{
+                holders = JSON.parse(canvas.getAttribute('data-holders')) || [];
+            }} catch(e) {{ holders = []; }}
+            if (!holders.length) return;
+
+            const labels = holders.map(h => h.name);
+            const dataValues = holders.map(h => h.ratio);
+
+            const colorPalette = ['#1a73e8', '#ff9800'];
+
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            const sliceBorderColor = isDark ? '#2a2a2a' : '#f0f2f5';
+            const textColor = isDark ? '#e0e0e0' : '#3c4043';
+
+            const ctx = canvas.getContext('2d');
+            holderChartInstances[key] = new Chart(ctx, {{
+                type: 'doughnut',
+                data: {{
+                    labels: labels,
+                    datasets: [{{
+                        data: dataValues,
+                        backgroundColor: colorPalette.slice(0, labels.length),
+                        borderColor: sliceBorderColor,
+                        borderWidth: 1.5,
+                        borderRadius: 4,
+                        hoverOffset: 6
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '58%',
+                    animation: {{
+                        animateRotate: true,
+                        animateScale: true,
+                        duration: 900,
+                        easing: 'easeOutQuart'
+                    }},
+                    plugins: {{
+                        legend: {{
+                            display: true,
+                            position: 'bottom',
+                            labels: {{
+                                font: {{ size: 9, weight: '500' }},
+                                boxWidth: 7,
+                                boxHeight: 7,
+                                usePointStyle: true,
+                                padding: 5,
+                                color: textColor,
+                                generateLabels: function(chart) {{
+                                    const data = chart.data;
+                                    if (data.labels.length && data.datasets.length) {{
+                                        return data.labels.map((label, i) => {{
+                                            const val = data.datasets[0].data[i];
+                                            return {{
+                                                text: `${{label}}: ${{val.toFixed(1)}}%`,
+                                                fillStyle: data.datasets[0].backgroundColor[i],
+                                                strokeStyle: 'transparent',
+                                                pointStyle: 'circle',
+                                                index: i
+                                            }};
+                                        }});
+                                    }}
+                                    return [];
+                                }}
+                            }}
+                        }},
+                        tooltip: {{
+                            backgroundColor: 'rgba(30, 30, 30, 0.85)',
+                            padding: 8,
+                            cornerRadius: 6,
+                            callbacks: {{
+                                label: function(context) {{
+                                    return ` ${{context.label}}: ${{context.parsed}}%`;
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }});
+        }}
+
+        // 同一只基金现在有 3 张国家/地区饼图（最近 3 期），按 data-idx 区分实例
+        function initCountryChart(code) {{
+            const canvases = document.querySelectorAll(`canvas.country-pie-canvas[data-code="${{code}}"]`);
+            if (!canvases.length) return;
+            registerFundChartPlugins();
+            canvases.forEach(canvas => {{
+                renderCountryPie(code, canvas, `${{code}}-${{canvas.dataset.idx || 0}}`);
+            }});
+        }}
+
+        // 只初始化指定节点范围内的饼图（追加「更早季度」时用，
+        // 避免把已经建好的十几张图全部 destroy + 重建）
+        function initPiesIn(roots, code) {{
+            const list = Array.isArray(roots) ? roots : [roots];
+            const canvases = [];
+            list.forEach(root => {{
+                if (!root || !root.querySelectorAll) return;
+                root.querySelectorAll('canvas.holder-pie-canvas, canvas.country-pie-canvas')
+                    .forEach(c => canvases.push(c));
+            }});
+            if (!canvases.length) return;
+            registerFundChartPlugins();
+            canvases.forEach(canvas => {{
+                const key = `${{code}}-${{canvas.dataset.idx || 0}}`;
+                if (canvas.classList.contains('holder-pie-canvas')) {{
+                    renderHolderPie(code, canvas, key);
+                }} else {{
+                    renderCountryPie(code, canvas, key);
+                }}
+            }});
+        }}
+
+        function renderCountryPie(code, canvas, key) {{
+            if (countryChartInstances[key]) {{
+                if (typeof countryChartInstances[key].destroy === 'function') {{
+                    countryChartInstances[key].destroy();
+                    delete countryChartInstances[key];
+                }} else return;
+            }}
+            let countries = [];
+            try {{
+                countries = JSON.parse(canvas.getAttribute('data-countries')) || [];
+            }} catch(e) {{ countries = []; }}
+            if (!countries.length) return;
+
+            const labels = countries.map(c => c.country);
+            const dataValues = countries.map(c => c.ratio);
+
+            const colorPalette = [
+                '#1a73e8', '#34a853', '#ea4335', '#fbbc04',
+                '#9c27b0', '#00acc1', '#ff7043', '#5c6bc0',
+                '#26a69a', '#8d6e63', '#78909c'
+            ];
+
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            const sliceBorderColor = isDark ? '#2a2a2a' : '#f0f2f5';
+            const textColor = isDark ? '#e0e0e0' : '#3c4043';
+
+            const ctx = canvas.getContext('2d');
+            countryChartInstances[key] = new Chart(ctx, {{
+                type: 'doughnut',
+                data: {{
+                    labels: labels,
+                    datasets: [{{
+                        data: dataValues,
+                        backgroundColor: colorPalette.slice(0, labels.length),
+                        borderColor: sliceBorderColor,
+                        borderWidth: 1.5,
+                        borderRadius: 4,
+                        hoverOffset: 6
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '58%',
+                    animation: {{
+                        animateRotate: true,
+                        animateScale: true,
+                        duration: 900,
+                        easing: 'easeOutQuart'
+                    }},
+                    plugins: {{
+                        legend: {{
+                            display: true,
+                            position: 'bottom',
+                            labels: {{
+                                font: {{ size: 8, weight: '500' }},
+                                boxWidth: 6,
+                                boxHeight: 6,
+                                usePointStyle: true,
+                                padding: 2,
+                                color: textColor,
+                                generateLabels: function(chart) {{
+                                    const data = chart.data;
+                                    if (data.labels.length && data.datasets.length) {{
+                                        return data.labels.map((label, i) => {{
+                                            const val = data.datasets[0].data[i];
+                                            return {{
+                                                text: `${{label}}: ${{val.toFixed(1)}}%`,
+                                                fillStyle: data.datasets[0].backgroundColor[i],
+                                                strokeStyle: 'transparent',
+                                                pointStyle: 'circle',
+                                                index: i
+                                            }};
+                                        }});
+                                    }}
+                                    return [];
+                                }}
+                            }}
+                        }},
+                        tooltip: {{
+                            backgroundColor: 'rgba(30, 30, 30, 0.85)',
+                            padding: 8,
+                            cornerRadius: 6,
+                            callbacks: {{
+                                label: function(context) {{
+                                    return ` ${{context.label}}: ${{context.parsed}}%`;
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }});
+        }}
+
+        function initChart(code) {{
+            const canvas = document.getElementById(`chart-${{code}}`);
+            if (!canvas) return;
+            registerFundChartPlugins();
+            if (chartInstances[code]) {{
+                if (typeof chartInstances[code].destroy === 'function') {{
+                    chartInstances[code].destroy();
+                    delete chartInstances[code];
+                }}
+            }}
+            const data = fundNavData[code];
+            if (!data || !data.dates || data.dates.length === 0) return;
+
+            const container = document.getElementById(`chart-container-${{code}}`);
+            let currentPeriod = 'month';
+            if (container) {{
+                const activeBtn = container.querySelector('.period-btn.active');
+                if (activeBtn) currentPeriod = activeBtn.dataset.period;
+            }}
+
+            const filtered = filterNavData(data, currentPeriod);
+            const periodGain = computePeriodGain(filtered, currentPeriod);
+            const baseNav = filtered.navs.length > 0 ? filtered.navs[0] : 1.0;
+            const textColor = getComputedStyle(document.documentElement).getPropertyValue('--footer-text').trim() || '#70757a';
+            const borderColor = getComputedStyle(document.documentElement).getPropertyValue('--border').trim() || '#e0e0e0';
+
+            const ctx = canvas.getContext('2d');
+            const chart = new Chart(ctx, {{
+                type: 'line',
+                data: {{
+                    labels: filtered.dates,
+                    datasets: [{{
+                        label: '净值',
+                        data: filtered.navs,
+                        borderColor: '#1a73e8',
+                        backgroundColor: 'rgba(26,115,232,0.1)',
+                        pointRadius: 1.5,
+                        pointHoverRadius: 5,
+                        pointHoverBackgroundColor: '#1a73e8',
+                        fill: true,
+                        tension: 0.1,
+                        yAxisID: 'y'
+                    }}, {{
+                        label: '_right_pct_scale',
+                        data: filtered.navs,
+                        borderColor: 'transparent',
+                        backgroundColor: 'transparent',
+                        borderWidth: 0,
+                        pointRadius: 0,
+                        pointHoverRadius: 0,
+                        fill: false,
+                        tension: 0.1,
+                        yAxisID: 'y1'
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {{
+                        mode: 'index',
+                        intersect: false
+                    }},
+                    onHover: function(event, activeElements, chart) {{
+                        const rect = chart.canvas.getBoundingClientRect();
+                        const x = event.native ? event.native.offsetX : (event.x - rect.left);
+                        const y = event.native ? event.native.offsetY : (event.y - rect.top);
+                        if (x >= chart.chartArea.left && x <= chart.chartArea.right &&
+                            y >= chart.chartArea.top && y <= chart.chartArea.bottom) {{
+                            chart._crosshair = {{ x, y }};
+                        }} else {{
+                            chart._crosshair = null;
+                        }}
+                        if (!chart._rafPending) {{
+                            chart._rafPending = true;
+                            requestAnimationFrame(() => {{
+                                chart._rafPending = false;
+                                chart.draw();
+                            }});
+                        }}
+                    }},
+                    plugins: {{
+                        legend: {{ display: false }},
+                        tooltip: {{
+                            enabled: true,
+                            mode: 'index',
+                            intersect: false,
+                            displayColors: false,
+                            filter: item => item.datasetIndex === 0,
+                            callbacks: {{
+                                title: function(items) {{
+                                    return items.length ? `时间: ${{items[0].label}}` : '';
+                                }},
+                                label: function(context) {{
+                                    const nav = Number(context.parsed.y);
+                                    let gainText = '--';
+                                    if (baseNav && baseNav > 0) {{
+                                        const gain = ((nav - baseNav) / baseNav) * 100.0;
+                                        const sign = gain >= 0 ? '+' : '';
+                                        gainText = `${{sign}}${{gain.toFixed(2)}}%`;
+                                    }}
+                                    return [`净值: ${{nav.toFixed(4)}}`, `涨幅: ${{gainText}}`];
+                                }}
+                            }}
+                        }}
+                    }},
+                    scales: {{
+                        x: {{
+                            ticks: {{
+                                maxTicksLimit: 8,
+                                font: {{ size: 9 }},
+                                color: textColor
+                            }},
+                            grid: {{ display: false }}
+                        }},
+                        y: {{
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            ticks: {{
+                                font: {{ size: 9 }},
+                                color: textColor,
+                                callback: function(val) {{ return val.toFixed(4); }}
+                            }},
+                            grid: {{ color: borderColor }}
+                        }},
+                        y1: {{
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            ticks: {{
+                                font: {{ size: 9 }},
+                                color: textColor,
+                                callback: function(val) {{
+                                    if (!baseNav || baseNav <= 0) return '0.00%';
+                                    const pct = ((val - baseNav) / baseNav) * 100.0;
+                                    return `${{pct >= 0 ? '+' : ''}}${{pct.toFixed(2)}}%`;
+                                }}
+                            }},
+                            grid: {{ drawOnChartArea: false }}
+                        }}
+                    }}
+                }}
+            }});
+
+            canvas.addEventListener('mouseleave', function() {{
+                if (chart) {{
+                    chart._crosshair = null;
+                    chart.draw();
+                }}
+            }});
+
+            chartInstances[code] = chart;
+            // 绑到实例上而不是 options 里：插件没有 defaults，Chart.js 会丢掉自定义字段。
+            // 构造期间已经画过一帧，这里补一次重绘把徽标补上。
+            chart.$periodGain = periodGain;
+            chart.draw();
+
+            if (container && !container._eventsBound) {{
+                const btns = container.querySelectorAll('.period-btn');
+                btns.forEach(btn => {{
+                    btn.addEventListener('click', function(e) {{
+                        e.stopPropagation();
+                        btns.forEach(b => b.classList.remove('active'));
+                        this.classList.add('active');
+                        const period = this.dataset.period;
+                        const fData = filterNavData(data, period);
+                        if (chartInstances[code]) {{
+                            const curChart = chartInstances[code];
+                            curChart.data.labels = fData.dates;
+                            curChart.data.datasets[0].data = fData.navs;
+                            curChart.data.datasets[1].data = fData.navs;
+                            const newBaseNav = fData.navs.length > 0 ? fData.navs[0] : 1.0;
+                            curChart.$periodGain = computePeriodGain(fData, period);
+                            curChart.options.plugins.tooltip.callbacks.label = function(context) {{
+                                const nav = Number(context.parsed.y);
+                                let gainText = '--';
+                                if (newBaseNav && newBaseNav > 0) {{
+                                    const gain = ((nav - newBaseNav) / newBaseNav) * 100.0;
+                                    const sign = gain >= 0 ? '+' : '';
+                                    gainText = `${{sign}}${{gain.toFixed(2)}}%`;
+                                }}
+                                return [`净值: ${{nav.toFixed(4)}}`, `涨幅: ${{gainText}}`];
+                            }};
+                            curChart.options.scales.y1.ticks.callback = function(val) {{
+                                if (!newBaseNav || newBaseNav <= 0) return '0.00%';
+                                const pct = ((val - newBaseNav) / newBaseNav) * 100.0;
+                                return `${{pct >= 0 ? '+' : ''}}${{pct.toFixed(2)}}%`;
+                            }};
+                            curChart.update();
+                        }}
+                    }});
+                }});
+                container._eventsBound = true;
+            }}
+        }}
+
+        // ===== 基金详情浮窗：持仓 / 持有人结构 / 国家地区 / 年度收益 / 走势图 =====
+        var fundDetailCode = null;
+
+        function destroyFundDetailCharts(code) {{
+            if (!code) return;
+            const prefix = code + '-';
+            [holderChartInstances, countryChartInstances].forEach(store => {{
+                Object.keys(store).forEach(key => {{
+                    if (key.indexOf(prefix) !== 0) return;
+                    try {{ store[key].destroy(); }} catch (err) {{}}
+                    delete store[key];
+                }});
+            }});
+            if (chartInstances[code]) {{
+                try {{ chartInstances[code].destroy(); }} catch (err) {{}}
+                delete chartInstances[code];
+            }}
+        }}
+
+        // 首屏只内联最近 8 个季度，更早的季度在末尾放一个「加载更早季度」占位列，
+        // 点了才去拉 fund_dashboard_details_more.js（全站约 4.5MB，只在需要时下载）。
+        function setupMoreQuarters(container, code) {{
+            if (!container) return;
+            const moreCount = parseInt(container.dataset.more || '0', 10);
+            if (!moreCount || container.querySelector('.quarter-more-col')) return;
+
+            const btnCol = document.createElement('div');
+            btnCol.className = 'quarter-column quarter-more-col';
+            btnCol.innerHTML = '<button type="button" class="quarter-more-btn">'
+                + '加载更早<br>' + moreCount + ' 个季度</button>';
+            // 网格列数必须跟着子元素数量走，否则第 9 个子元素会掉到第二行
+            const headCount = container.children.length;
+            container.appendChild(btnCol);
+            container.style.setProperty('--qcols', String(headCount + 1));
+
+            const btn = btnCol.querySelector('.quarter-more-btn');
+            btn.addEventListener('click', function(e) {{
+                e.stopPropagation();
+                if (btn.disabled) return;
+                btn.disabled = true;
+                btn.textContent = '正在加载…';
+                loadDetailMore().then(() => {{
+                    const target = document.querySelector('#fundDetailBody .holdings-container');
+                    const html = detailMoreData[code] || '';
+                    if (!html || !target || !btnCol.isConnected) {{
+                        btn.disabled = false;
+                        btn.innerHTML = '加载失败<br>点此重试';
+                        return;
+                    }}
+                    // 先塞进临时容器，拿到新增节点后再挂上去，
+                    // 这样只初始化新加的饼图，不动已有的
+                    const tmp = document.createElement('div');
+                    tmp.innerHTML = html;
+                    const added = Array.prototype.slice.call(tmp.children);
+                    btnCol.remove();
+                    added.forEach(node => target.appendChild(node));
+                    const total = parseInt(target.dataset.total || '0', 10);
+                    if (total > 0) target.style.setProperty('--qcols', String(total));
+                    initPiesIn(added, code);
+                }});
+            }});
+        }}
+
+        function openFundDetail(code) {{
+            const modal = document.getElementById('fundDetailModal');
+            const body = document.getElementById('fundDetailBody');
+            const title = document.getElementById('fundDetailTitle');
+            if (!modal || !body || !code) return;
+
+            if (fundDetailCode && fundDetailCode !== code) {{
+                destroyFundDetailCharts(fundDetailCode);
+            }}
+            fundDetailCode = code;
+
+            const name = (typeof fundNames !== 'undefined' && fundNames[code]) ? fundNames[code] : '';
+            if (title) {{
+                title.textContent = name ? `📈 [${{code}}] ${{name}}` : `📈 [${{code}}]`;
+                title.setAttribute('title', title.textContent);
+            }}
+
+            body.innerHTML = '<div class="holding-detail-loading">正在加载持仓详情...</div>';
+            modal.classList.add('show');
+            body.scrollTop = 0;
+
+            const paint = () => {{
+                if (fundDetailCode !== code) return;
+                const html = holdingDetailHtml[code];
+                if (!html) {{
+                    body.innerHTML = '<div class="holding-detail-loading">暂无该基金的持仓明细数据</div>';
+                    return;
+                }}
+                body.innerHTML = html;
+                body.scrollTop = 0;
+                // 浮窗尺寸此时已确定，可直接建图，无需等待展开动画
+                window.requestAnimationFrame(() => {{
+                    if (fundDetailCode !== code) return;
+                    initCountryChart(code);
+                    initHolderChart(code);
+                    initChart(code);
+                    setupMoreQuarters(body.querySelector('.holdings-container'), code);
+                }});
+            }};
+
+            if (holdingDetailHtml[code]) {{
+                paint();
+            }} else {{
+                loadHoldingDetails().then(paint);
+            }}
+        }}
+
+        function closeFundDetail() {{
+            closeHoldingsDetail();
+            const modal = document.getElementById('fundDetailModal');
+            if (!modal) return;
+            modal.classList.remove('show');
+            destroyFundDetailCharts(fundDetailCode);
+            fundDetailCode = null;
+        }}
+
+        // ===== 全部持仓浮窗（二级） =====
+        let hdState = {{ code: null, quarter: null, sortKey: 'ratio', sortDir: 'desc', soldOpen: false }};
+
+        function _hdQuarters(code) {{
+            const all = fullHoldingsData[code];
+            if (!all) return [];
+            return Object.keys(all).sort().reverse();
+        }}
+
+        function _hdEsc(s) {{
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }}
+
+        // 环比增减的统一渲染（红涨绿跌，与页面其它地方口径一致）
+        function _hdDelta(d) {{
+            if (d == null || isNaN(d)) return '';
+            if (Math.abs(d) < 0.005) return ' <span style="color:var(--footer-text)">持平</span>';
+            if (d > 0) return ' <span class="change-up">▲' + d.toFixed(2) + '</span>';
+            return ' <span class="change-down">▼' + Math.abs(d).toFixed(2) + '</span>';
+        }}
+
+        // 上季度索引：股票代码优先、名称兜底（A 股改名时有发生）
+        function _hdPrevIndex(period) {{
+            const byCode = {{}}, byName = {{}};
+            ((period && period.list) || []).forEach(function(row) {{
+                if (row[1]) byCode[row[1]] = row[2];
+                if (row[0]) byName[row[0]] = row[2];
+            }});
+            return {{ byCode: byCode, byName: byName }};
+        }}
+
+        function _hdLookup(idx, row) {{
+            if (!idx) return null;
+            if (row[1] && Object.prototype.hasOwnProperty.call(idx.byCode, row[1])) return idx.byCode[row[1]];
+            if (row[0] && Object.prototype.hasOwnProperty.call(idx.byName, row[0])) return idx.byName[row[0]];
+            return null;
+        }}
+
+        function renderHoldingsDetail(code, quarter, opts) {{
+            opts = opts || {{}};
+            const body = document.getElementById('holdingsDetailBody');
+            const title = document.getElementById('holdingsDetailTitle');
+            if (!body || !title) return;
+
+            const all = fullHoldingsData[code] || {{}};
+            const quarters = _hdQuarters(code);
+            if (!quarters.length) {{
+                body.innerHTML = '<div class="hd-empty">该基金暂无持仓披露数据</div>';
+                return;
+            }}
+            if (!quarter || !all[quarter]) quarter = quarters[0];
+
+            const qIdx = quarters.indexOf(quarter);
+            const cur = all[quarter] || {{}};
+            const list = cur.list || [];
+            const prevQ = (qIdx >= 0 && qIdx + 1 < quarters.length) ? quarters[qIdx + 1] : null;
+            const prevIdx = prevQ ? _hdPrevIndex(all[prevQ]) : null;
+            const prevList = prevQ ? (all[prevQ].list || []) : [];
+            const prevTotal = prevQ
+                ? prevList.reduce(function(s, r) {{ return s + (r[2] || 0); }}, 0)
+                : null;
+
+            // 季报（Q1/Q3）只披露前十大，半年报（Q2）/年报（Q4）才是全量。
+            // 口径不同会直接毁掉对比的可信度，所以要处理三件事：
+            //   1) 「新进 / 退出」的措辞按本季口径区分，不能把「掉出前十」说成「清仓」；
+            //   2) 本季是季报时，退出名单只取「上季前十大」——拿上季全量去比会误报几十条清仓；
+            //   3) 两季口径不一致时合计占净值不可比，必须隐藏环比差值。
+            const partial = /Q[13]$/.test(quarter) || list.length <= 10;
+            const prevPartial = prevQ ? (/Q[13]$/.test(prevQ) || prevList.length <= 10) : false;
+            const comparable = !!prevQ && (partial === prevPartial);
+
+            // 手机屏宽放不下 7 列，隐去装饰性的「占比」条列，
+            // 优先保证「上季 / 本季 / 环比」三列同屏可见。
+            const showBar = !(window.matchMedia && window.matchMedia('(max-width: 520px)').matches);
+
+            const name = (typeof fundNames !== 'undefined' && fundNames[code]) ? fundNames[code] : '';
+            const maxRatio = list.reduce(function(m, r) {{ return Math.max(m, r[2] || 0); }}, 0) || 1;
+            const total = list.reduce(function(s, r) {{ return s + (r[2] || 0); }}, 0);
+
+            // 组装行数据（含上季占比与变化量），排序与渲染复用同一份
+            const rows = list.map(function(row, i) {{
+                const ratio = row[2] || 0;
+                const prev = _hdLookup(prevIdx, row);
+                return {{
+                    rank: i + 1,
+                    name: row[0] || '',
+                    code: row[1] || '',
+                    ratio: ratio,
+                    prev: prev,
+                    chg: (prev == null) ? null : (ratio - prev)
+                }};
+            }});
+
+            // 排序：占净值 / 环比变化量；新进（无上季数据）恒定排在末尾
+            const sortKey = (hdState.sortKey === 'chg') ? 'chg' : 'ratio';
+            const sortDir = (hdState.sortDir === 'asc') ? 1 : -1;
+            rows.sort(function(a, b) {{
+                if (sortKey === 'chg') {{
+                    const an = (a.chg == null), bn = (b.chg == null);
+                    if (an !== bn) return an ? 1 : -1;
+                    if (an || a.chg === b.chg) return a.rank - b.rank;
+                    return (a.chg - b.chg) * sortDir;
+                }}
+                if (a.ratio === b.ratio) return a.rank - b.rank;
+                return (a.ratio - b.ratio) * sortDir;
+            }});
+
+            // 增减仓统计
+            let cntNew = 0, cntUp = 0, cntDown = 0, cntFlat = 0;
+            rows.forEach(function(r) {{
+                if (r.chg == null) cntNew++;
+                else if (Math.abs(r.chg) < 0.005) cntFlat++;
+                else if (r.chg > 0) cntUp++;
+                else cntDown++;
+            }});
+
+            // 本季退出披露名单的持仓
+            const sold = [];
+            if (prevQ) {{
+                // 本季是季报时，只有「上季前十大」的变动是可比信息；
+                // 拿上季全量（半年报可能有上百条）去比，会把几十只未进前十的说成清仓。
+                const soldSrc = partial ? prevList.slice(0, 10) : prevList;
+                const curByCode = {{}}, curByName = {{}};
+                list.forEach(function(row) {{
+                    if (row[1]) curByCode[row[1]] = 1;
+                    if (row[0]) curByName[row[0]] = 1;
+                }});
+                soldSrc.forEach(function(row) {{
+                    const hit = (row[1] && curByCode[row[1]]) || (row[0] && curByName[row[0]]);
+                    if (!hit) sold.push({{ name: row[0] || '', code: row[1] || '', ratio: row[2] || 0 }});
+                }});
+                sold.sort(function(a, b) {{ return b.ratio - a.ratio; }});
+            }}
+
+            let rowsHtml = '';
+            rows.forEach(function(r) {{
+                let prevHtml = '<span style="color:var(--footer-text)">—</span>';
+                let chgHtml = '<span style="color:var(--footer-text)">—</span>';
+                if (prevQ) {{
+                    if (r.chg == null) {{
+                        // 上季若只披露前十大，缺席只能说明「没进前十」，不能说成新进
+                        prevHtml = prevPartial
+                            ? '<span style="color:var(--footer-text)" title="上季仅披露前十大，该股可能仍然持有">未进前十</span>'
+                            : '<span class="change-new">新进</span>';
+                        chgHtml = prevPartial
+                            ? '<span style="color:var(--footer-text)">—</span>'
+                            : '<span class="change-new">新增</span>';
+                    }} else {{
+                        prevHtml = r.prev.toFixed(2) + '%';
+                        if (Math.abs(r.chg) < 0.005) {{
+                            chgHtml = '<span style="color:var(--footer-text)">持平</span>';
+                        }} else if (r.chg > 0) {{
+                            chgHtml = '<span class="change-up">▲' + r.chg.toFixed(2) + '</span>';
+                        }} else {{
+                            chgHtml = '<span class="change-down">▼' + Math.abs(r.chg).toFixed(2) + '</span>';
+                        }}
+                    }}
+                }}
+                const barW = Math.max(1, Math.min(100, r.ratio / maxRatio * 100));
+                rowsHtml += '<tr>'
+                    + '<td class="hd-rank">' + r.rank + '</td>'
+                    + '<td title="' + _hdEsc(r.name) + '">' + _hdEsc(r.name) + '</td>'
+                    + '<td class="hd-code" title="' + _hdEsc(r.code) + '">' + _hdEsc(r.code || '--') + '</td>'
+                    + '<td class="hd-prev">' + prevHtml + '</td>'
+                    + '<td class="hd-ratio">' + r.ratio.toFixed(2) + '%</td>'
+                    + (showBar
+                        ? '<td class="hd-c-bar"><div class="hd-bar"><i style="width:' + barW.toFixed(1) + '%"></i></div></td>'
+                        : '')
+                    + '<td class="hd-chg">' + chgHtml + '</td>'
+                    + '</tr>';
+            }});
+
+            let chipsHtml = '';
+            quarters.forEach(function(q) {{
+                chipsHtml += '<button type="button" class="hd-quarter-chip'
+                    + (q === quarter ? ' active' : '')
+                    + '" data-quarter="' + _hdEsc(q) + '">' + _hdEsc(q) + '</button>';
+            }});
+
+            // 可排序表头：点击切换升/降序
+            function sortTh(key, label, cls, tip) {{
+                const on = (sortKey === key);
+                const mark = on ? (sortDir === 1 ? '▲' : '▼') : '';
+                return '<th class="' + cls + ' hd-sortable' + (on ? ' hd-sorted' : '') + '"'
+                    + ' data-sort="' + key + '" title="' + tip + '">'
+                    + label + (mark ? '<span class="hd-sort-mark">' + mark + '</span>' : '')
+                    + '</th>';
+            }}
+
+            title.innerHTML = '📦 [' + _hdEsc(code) + ']'
+                + (name ? ' <span class="hd-tname">' + _hdEsc(name) + '</span>' : '')
+                + ' · ' + _hdEsc(quarter) + ' 全部持仓';
+            title.setAttribute('title', title.textContent);
+
+            let soldHtml = '';
+            if (sold.length) {{
+                const soldTitle = partial ? '较上季掉出前十' : '本季清仓';
+                const hint = partial
+                    ? '本季为季报，仅披露前十大，无法区分「清仓」与「掉出前十」'
+                    : '本季为半年报/年报全量披露，未出现者视为清仓';
+                soldHtml = '<div class="hd-sold">'
+                    + '<div class="hd-sold-head" title="' + hint + '">'
+                    +   soldTitle + ' <b>' + sold.length + '</b> 只'
+                    +   '<span class="hd-sold-hint">' + hint + '</span>'
+                    +   '<span class="hd-sold-toggle">' + (hdState.soldOpen ? '收起 ▲' : '展开 ▼') + '</span>'
+                    + '</div>'
+                    + '<div class="hd-sold-list' + (hdState.soldOpen ? '' : ' collapsed') + '">'
+                    +   sold.map(function(s) {{
+                            return '<span class="hd-sold-item" title="' + _hdEsc(s.name + ' ' + s.code) + '">'
+                                + _hdEsc(s.name)
+                                + '<i>' + (s.code ? _hdEsc(s.code) + ' ' : '') + s.ratio.toFixed(2) + '%</i>'
+                                + '</span>';
+                        }}).join('')
+                    + '</div>'
+                    + '</div>';
+            }}
+
+            // 两季披露口径不一致（季报 vs 半年报/年报）时，合计占净值没有可比性
+            const caliberNote = (prevQ && !comparable)
+                ? '<span style="color:#e67e22" title="季报仅披露前十大，半年报/年报为全量，两季合计口径不同">'
+                  + '口径不同，合计不可比</span>'
+                : '';
+
+            body.innerHTML = ''
+                + '<div class="hd-quarter-bar">'
+                +   '<button type="button" class="hd-nav" data-nav="1" title="更早一个季度"'
+                +     (qIdx + 1 >= quarters.length ? ' disabled' : '') + '>‹</button>'
+                +   '<div class="hd-chips">' + chipsHtml + '</div>'
+                +   '<button type="button" class="hd-nav" data-nav="-1" title="更新一个季度"'
+                +     (qIdx <= 0 ? ' disabled' : '') + '>›</button>'
+                + '</div>'
+                + '<div class="hd-summary">'
+                +   '<span>报告期 <b>' + _hdEsc(cur.end || quarter) + '</b></span>'
+                +   '<span>持仓 <b>' + list.length + '</b> 只'
+                +     (partial ? '（季报前十）' : '（全量披露）') + '</span>'
+                +   '<span>合计占净值 <b>' + total.toFixed(2) + '%</b>'
+                +     (comparable ? _hdDelta(total - prevTotal) : '') + '</span>'
+                +   (prevQ ? '<span>对比基准 <b>' + _hdEsc(prevQ) + '</b></span>' : '')
+                +   caliberNote
+                + '</div>'
+                + (prevQ ? '<div class="hd-stats">'
+                +   '<span class="hd-stat s-new">' + (prevPartial ? '上季未进前十' : '新进')
+                +     ' <b>' + cntNew + '</b></span>'
+                +   '<span class="hd-stat s-up">加仓 <b>' + cntUp + '</b></span>'
+                +   '<span class="hd-stat s-down">减仓 <b>' + cntDown + '</b></span>'
+                +   '<span class="hd-stat s-flat">持平 <b>' + cntFlat + '</b></span>'
+                +   '<span class="hd-stat s-sold">' + (partial ? '掉出前十' : '清仓')
+                +     ' <b>' + sold.length + '</b></span>'
+                + '</div>' : '')
+                + '<div class="hd-table-wrap"><table class="hd-table">'
+                +   '<colgroup>'
+                +     '<col class="hd-col-rank">'
+                +     '<col>'
+                +     '<col class="hd-col-code">'
+                +     '<col class="hd-col-prev">'
+                +     '<col class="hd-col-ratio">'
+                +     (showBar ? '<col class="hd-col-bar">' : '')
+                +     '<col class="hd-col-chg">'
+                +   '</colgroup>'
+                +   '<thead><tr>'
+                +     '<th class="hd-c-rank">#</th>'
+                +     '<th>股票名称</th>'
+                +     '<th class="hd-c-code">代码</th>'
+                +     '<th class="hd-c-prev hd-num">上季</th>'
+                +     sortTh('ratio', '本季', 'hd-c-ratio hd-num', '按本季占净值比例排序')
+                +     (showBar ? '<th class="hd-c-bar">占比</th>' : '')
+                +     sortTh('chg', '环比', 'hd-c-chg hd-num', '按环比变化量排序（新进恒定排末尾）')
+                +   '</tr></thead>'
+                +   '<tbody>' + rowsHtml + '</tbody>'
+                +   '<tfoot><tr>'
+                +     '<td colspan="3">合计（' + list.length + ' 只）</td>'
+                +     '<td class="hd-prev">'
+                +       (prevTotal != null
+                            // 窄屏列窄，保留 1 位小数并省掉 * 号，否则会被省略号截断；
+                            // 「口径不同」的提示在 summary 里已有橙色文字，不会丢失信息。
+                            ? prevTotal.toFixed(showBar ? 2 : 1) + '%'
+                              + (comparable ? '' : (showBar ? '<span title="口径不同">*</span>' : ''))
+                            : '') + '</td>'
+                +     '<td class="hd-ratio">' + total.toFixed(2) + '%</td>'
+                +     (showBar ? '<td class="hd-c-bar"></td>' : '')
+                +     '<td class="hd-chg">' + (comparable ? _hdDelta(total - prevTotal) : '') + '</td>'
+                +   '</tr></tfoot>'
+                + '</table></div>'
+                + soldHtml;
+
+            // 点「详细」进来的可能是很旧的季度，把当前 chip 滚到可视区中间
+            if (!opts.keepScroll) {{
+                const activeChip = body.querySelector('.hd-quarter-chip.active');
+                if (activeChip && activeChip.parentNode) {{
+                    const bar = activeChip.parentNode;
+                    const br = bar.getBoundingClientRect();
+                    const cr = activeChip.getBoundingClientRect();
+                    bar.scrollLeft += (cr.left - br.left) - (br.width - cr.width) / 2;
+                }}
+                body.scrollTop = 0;
+            }}
+
+            hdState = {{
+                code: code,
+                quarter: quarter,
+                sortKey: sortKey,
+                sortDir: (sortDir === 1 ? 'asc' : 'desc'),
+                soldOpen: hdState.soldOpen
+            }};
+        }}
+
+        function openHoldingsDetail(code, quarter) {{
+            const modal = document.getElementById('holdingsDetailModal');
+            if (!modal) return;
+            // 每只基金重新打开都回到默认排序（本季降序）与收起的清仓列表
+            hdState = {{ code: code, quarter: quarter || null,
+                         sortKey: 'ratio', sortDir: 'desc', soldOpen: false }};
+            modal.classList.add('show');
+            if (Object.keys(fullHoldingsData).length) {{
+                renderHoldingsDetail(code, quarter);
+            }} else {{
+                const body = document.getElementById('holdingsDetailBody');
+                if (body) body.innerHTML = '<div class="hd-empty">正在加载全历史持仓数据...</div>';
+                loadFullHoldings().then(function() {{
+                    if (!modal.classList.contains('show')) return;
+                    renderHoldingsDetail(hdState.code, hdState.quarter);
+                }});
+            }}
+        }}
+
+        function closeHoldingsDetail() {{
+            const modal = document.getElementById('holdingsDetailModal');
+            if (modal) modal.classList.remove('show');
+            hdState = {{ code: null, quarter: null,
+                         sortKey: 'ratio', sortDir: 'desc', soldOpen: false }};
+        }}
+
+        window.openHoldingsDetail = openHoldingsDetail;
+        window.closeHoldingsDetail = closeHoldingsDetail;
+
+        window.openFundDetail = openFundDetail;
+        window.closeFundDetail = closeFundDetail;
+
+        document.addEventListener('DOMContentLoaded', function() {{
+            const modal = document.getElementById('fundDetailModal');
+            if (modal) {{
+                const closeBtn = document.getElementById('closeFundDetailModal');
+                if (closeBtn) closeBtn.addEventListener('click', closeFundDetail);
+                modal.addEventListener('click', function(e) {{
+                    if (e.target === modal) closeFundDetail();
+                }});
+            }}
+
+            // 二级浮窗：全部持仓
+            const hdModal = document.getElementById('holdingsDetailModal');
+            if (hdModal) {{
+                const hdClose = document.getElementById('closeHoldingsDetailModal');
+                if (hdClose) hdClose.addEventListener('click', closeHoldingsDetail);
+                hdModal.addEventListener('click', function(e) {{
+                    if (e.target === hdModal) closeHoldingsDetail();
+                }});
+                const hdBody = document.getElementById('holdingsDetailBody');
+                if (hdBody) {{
+                    hdBody.addEventListener('click', function(e) {{
+                        // 切换季度
+                        const chip = e.target.closest('.hd-quarter-chip');
+                        if (chip) {{
+                            e.stopPropagation();
+                            renderHoldingsDetail(hdState.code, chip.dataset.quarter);
+                            return;
+                        }}
+                        // 上一季 / 下一季快捷翻页
+                        const nav = e.target.closest('.hd-nav');
+                        if (nav && !nav.disabled) {{
+                            e.stopPropagation();
+                            const qs = _hdQuarters(hdState.code);
+                            const i = qs.indexOf(hdState.quarter);
+                            const j = i + parseInt(nav.dataset.nav, 10);
+                            if (i >= 0 && j >= 0 && j < qs.length) {{
+                                renderHoldingsDetail(hdState.code, qs[j]);
+                            }}
+                            return;
+                        }}
+                        // 表头点击排序（同一列再次点击反向）
+                        const th = e.target.closest('th.hd-sortable');
+                        if (th) {{
+                            e.stopPropagation();
+                            const k = th.dataset.sort;
+                            if (hdState.sortKey === k) {{
+                                hdState.sortDir = (hdState.sortDir === 'asc') ? 'desc' : 'asc';
+                            }} else {{
+                                hdState.sortKey = k;
+                                hdState.sortDir = 'desc';
+                            }}
+                            renderHoldingsDetail(hdState.code, hdState.quarter, {{ keepScroll: true }});
+                            return;
+                        }}
+                        // 清仓列表展开 / 收起
+                        const soldHead = e.target.closest('.hd-sold-head');
+                        if (soldHead) {{
+                            e.stopPropagation();
+                            hdState.soldOpen = !hdState.soldOpen;
+                            renderHoldingsDetail(hdState.code, hdState.quarter, {{ keepScroll: true }});
+                            return;
+                        }}
+                    }});
+                }}
+            }}
+
+            // 基金详情内的「详细」按钮（内容动态注入，需事件委托）
+            const detailBody = document.getElementById('fundDetailBody');
+            if (detailBody) {{
+                detailBody.addEventListener('click', function(e) {{
+                    const btn = e.target.closest('.quarter-detail-btn');
+                    if (!btn) return;
+                    e.stopPropagation();
+                    openHoldingsDetail(btn.dataset.code, btn.dataset.quarter);
+                }});
+            }}
+
+            document.addEventListener('keydown', function(e) {{
+                if (e.key !== 'Escape') return;
+                if (window.CmpManager && CmpManager.isOpen()) {{ CmpManager.close(); return; }}
+                if (hdState.code) {{ closeHoldingsDetail(); return; }}
+                if (fundDetailCode) closeFundDetail();
+            }});
+
+            const table = document.getElementById('fundTable');
+            if (!table) return;
+            table.addEventListener('click', function(e) {{
+                const dcaBtn = e.target.closest('.dca-btn');
+                if (dcaBtn) {{
+                    e.stopPropagation();
+                    window.openDcaModal(dcaBtn.dataset.code);
+                    return;
+                }}
+
+                const target = e.target.closest('tr.fund-row');
+                if (!target || e.target.tagName === 'A' || e.target.closest('.star-btn') || e.target.closest('.cmp-check')) return;
+                openFundDetail(target.dataset.code);
+            }});
+        }});
+
+        let currentSortCol = -1;
+        let isAscending = true;
+
+        function handleHeaderClick(colIndex) {{
+            if (window._isResizingColumn) return;
+            sortTable(colIndex);
+        }}
+
+        function sortTable(colIndex) {{
+            const table = document.getElementById("fundTable");
+            const tbody = table.querySelector("tbody");
+            const allRows = Array.from(tbody.querySelectorAll("tr"));
+            const dataRows = allRows.filter(row => row.id !== 'empty-row');
+
+            isAscending = (currentSortCol === colIndex) ? !isAscending : true;
+            currentSortCol = colIndex;
+
+            dataRows.sort((a, b) => {{
+                let valA = a.children[colIndex].getAttribute('data-val');
+                let valB = b.children[colIndex].getAttribute('data-val');
+                const numA = parseFloat(valA), numB = parseFloat(valB);
+                if (!isNaN(numA) && !isNaN(numB)) return isAscending ? numA - numB : numB - numA;
+                return isAscending ? valA.localeCompare(valB, 'zh-Hans-CN') : valB.localeCompare(valA, 'zh-Hans-CN');
+            }});
+
+            const fragment = document.createDocumentFragment();
+            dataRows.forEach(row => fragment.appendChild(row));
+            const empty = document.getElementById('empty-row');
+            if (empty) fragment.appendChild(empty);
+
+            tbody.innerHTML = '';
+            tbody.appendChild(fragment);
+
+            const headers = table.querySelectorAll("th");
+            headers.forEach((th, idx) => {{
+                const icon = th.querySelector(".sort-icon");
+                if (icon) {{
+                    if (idx === colIndex) {{
+                        icon.textContent = isAscending ? "▲" : "▼";
+                        th.style.color = "#1a73e8";
+                    }} else {{
+                        icon.textContent = "⇅";
+                        th.style.color = "";
+                    }}
+                }}
+            }});
+
+            // 排序只搬移同一批 <tr>，勾选状态不会丢；这里同步一次高亮，避免"高亮跟着位置走"
+            if (window.CmpManager) window.CmpManager.syncRowStates();
+        }}
+
+        document.addEventListener("DOMContentLoaded", function () {{
+            const table = document.getElementById("fundTable");
+            const headers = table.querySelectorAll("thead th");
+            window._isResizingColumn = false;
+
+            headers.forEach((th) => {{
+                const resizer = document.createElement("div");
+                resizer.classList.add("resizer");
+                th.appendChild(resizer);
+
+                let startX = 0;
+                let startW = 0;
+
+                resizer.addEventListener("mousedown", function (e) {{
+                    e.preventDefault();
+                    e.stopPropagation();
+                    window._isResizingColumn = true;
+                    startX = e.clientX;
+                    startW = th.getBoundingClientRect().width;
+                    th.classList.add("resizing");
+
+                    function onMouseMove(e) {{
+                        const diff = e.clientX - startX;
+                        const newWidth = Math.max(35, startW + diff);
+                        th.style.width = newWidth + "px";
+                    }}
+
+                    function onMouseUp() {{
+                        th.classList.remove("resizing");
+                        document.removeEventListener("mousemove", onMouseMove);
+                        document.removeEventListener("mouseup", onMouseUp);
+                        setTimeout(() => {{
+                            window._isResizingColumn = false;
+                        }}, 60);
+                    }}
+
+                    document.addEventListener("mousemove", onMouseMove);
+                    document.addEventListener("mouseup", onMouseUp);
+                }});
+            }});
+        }});
+
+        // ===== 移动端「市场大类」折叠控制 =====
+        (function() {{
+            function setupMobileFilterToggle() {{
+                const toggle = document.getElementById('mobileFilterToggle');
+                const subBar = document.getElementById('subFilterBar');
+                const currentLabel = document.getElementById('mobileFilterCurrent');
+                if (!toggle || !subBar) return;
+
+                const isMobile = () => window.innerWidth <= 992;
+
+                function expand() {{
+                    // 互斥：先关闭定投参数面板
+                    const dcaCardEl = document.getElementById('gDcaCard');
+                    const dcaBtnEl = document.getElementById('dcaToggleBtn');
+                    const dcaArrowEl = document.getElementById('dcaToggleArrow');
+                    if (dcaCardEl) dcaCardEl.classList.remove('mobile-expanded');
+                    if (dcaBtnEl) dcaBtnEl.classList.remove('active');
+                    if (dcaArrowEl) dcaArrowEl.textContent = '▼';
+
+                    subBar.classList.add('mobile-expanded');
+                    toggle.classList.add('expanded');
+                }}
+                function collapse() {{
+                    subBar.classList.remove('mobile-expanded');
+                    toggle.classList.remove('expanded');
+                }}
+                function updateCurrentLabel() {{
+                    const activeBtn = subBar.querySelector('.cat-btn.macro-filter.active');
+                    if (activeBtn && currentLabel) {{
+                        // 去掉前导 emoji/符号，只保留文字
+                        const txt = activeBtn.textContent.replace(/^[^\\w\\u4e00-\\u9fa5]+/, '').trim();
+                        currentLabel.textContent = txt || activeBtn.textContent.trim();
+                    }}
+                }}
+
+                // 点击开关按钮：展开 / 收起
+                toggle.addEventListener('click', function(e) {{
+                    e.stopPropagation();
+                    if (subBar.classList.contains('mobile-expanded')) collapse();
+                    else expand();
+                }});
+
+                // 点击任意大类按钮：更新标签 + 自动收起（排除视图模式按钮）
+                subBar.querySelectorAll('.cat-btn:not(.view-mode-btn)').forEach(btn => {{
+                    btn.addEventListener('click', function() {{
+                        updateCurrentLabel();
+                        if (isMobile()) {{
+                            setTimeout(collapse, 160);
+                        }}
+                    }});
+                }});
+
+                // 点击面板外部自动收起
+                document.addEventListener('click', function(e) {{
+                    if (!isMobile()) return;
+                    if (!subBar.classList.contains('mobile-expanded')) return;
+                    if (toggle.contains(e.target) || subBar.contains(e.target)) return;
+                    collapse();
+                }});
+
+                // 窗口尺寸变化到桌面端时清除展开状态
+                window.addEventListener('resize', function() {{
+                    if (!isMobile()) collapse();
+                }});
+
+                updateCurrentLabel();
+            }}
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', setupMobileFilterToggle);
+            }} else {{
+                setupMobileFilterToggle();
+            }}
+        }})();
+
+        // ===== 移动端「动态定投参数」折叠控制 =====
+        (function() {{
+            function setupDcaMobileToggle() {{
+                const btn = document.getElementById('dcaToggleBtn');
+                const dcaCard = document.getElementById('gDcaCard');
+                const arrow = document.getElementById('dcaToggleArrow');
+                if (!btn || !dcaCard) return;
+
+                const isMobile = () => window.innerWidth <= 992;
+
+                function expand() {{
+                    // 互斥：先关闭市场大类面板
+                    const subBarEl = document.getElementById('subFilterBar');
+                    const filterToggleEl = document.getElementById('mobileFilterToggle');
+                    if (subBarEl) subBarEl.classList.remove('mobile-expanded');
+                    if (filterToggleEl) filterToggleEl.classList.remove('expanded');
+
+                    dcaCard.classList.add('mobile-expanded');
+                    btn.classList.add('active');
+                    if (arrow) arrow.textContent = '▲';
+                }}
+                function collapse() {{
+                    dcaCard.classList.remove('mobile-expanded');
+                    btn.classList.remove('active');
+                    if (arrow) arrow.textContent = '▼';
+                }}
+
+                btn.addEventListener('click', function(e) {{
+                    e.stopPropagation();
+                    if (!isMobile()) return;   // 桌面端不响应
+                    if (dcaCard.classList.contains('mobile-expanded')) collapse();
+                    else expand();
+                }});
+
+                // 点击卡片/按钮外部时自动收起
+                document.addEventListener('click', function(e) {{
+                    if (!isMobile()) return;
+                    if (!dcaCard.classList.contains('mobile-expanded')) return;
+                    if (btn.contains(e.target) || dcaCard.contains(e.target)) return;
+                    collapse();
+                }});
+
+                // 切换到桌面端尺寸时清除展开态
+                window.addEventListener('resize', function() {{
+                    if (!isMobile()) collapse();
+                }});
+            }}
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', setupDcaMobileToggle);
+            }} else {{
+                setupDcaMobileToggle();
+            }}
+        }})();
+
+        // ===== 基金看板：默认 / 简洁 视图模式切换 =====
+        (function() {{
+            function initViewModeSwitch() {{
+                const fundView = document.getElementById('fundView');
+                const modeBtns = document.querySelectorAll('.view-mode-btn');
+                if (!fundView || !modeBtns.length) return;
+
+                // 展开行的 colspan 随模式动态调整（24 ↔ 11）
+                function applyColspan(mode) {{
+                    const span = (mode === 'simple') ? '11' : '24';
+                    document.querySelectorAll('#fundTable td[colspan]').forEach(td => {{
+                        td.setAttribute('colspan', span);
+                    }});
+                }}
+
+                function setViewMode(mode) {{
+                    if (mode === 'simple') {{
+                        fundView.classList.add('simple-mode');
+                    }} else {{
+                        fundView.classList.remove('simple-mode');
+                    }}
+
+                    modeBtns.forEach(b => {{
+                        b.classList.toggle('active', b.dataset.viewMode === mode);
+                    }});
+
+                    applyColspan(mode);
+                    localStorage.setItem('fundViewMode', mode);
+                }}
+
+                // 初始化：从 localStorage 恢复用户偏好
+                const saved = localStorage.getItem('fundViewMode_v2') || 'simple';
+                setViewMode(saved);
+
+                modeBtns.forEach(btn => {{
+                    btn.addEventListener('click', function(e) {{
+                        e.stopPropagation();
+                        setViewMode(this.dataset.viewMode);
+                    }});
+                }});
+            }}
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', initViewModeSwitch);
+            }} else {{
+                initViewModeSwitch();
+            }}
+        }})();
+
+        // ===== QDII 子标签页（现有监控 / 基金对比）+ 对比表排序 =====
+        (function() {{
+            function initQdiiSubtabs() {{
+                const tabs = document.querySelectorAll('.qdii-subtab');
+                const panes = document.querySelectorAll('.qdii-subpane');
+                if (tabs.length && panes.length) {{
+                    tabs.forEach(tab => {{
+                        tab.addEventListener('click', function() {{
+                            tabs.forEach(t => t.classList.toggle('active', t === tab));
+                            panes.forEach(p => {{
+                                p.classList.toggle('active', p.dataset.qpane === tab.dataset.qtab);
+                            }});
+                            window.dispatchEvent(new Event('resize'));
+                        }});
+                    }});
+                }}
+
+                // 季度列排序：点击列头在 降序 / 升序 之间切换
+                document.querySelectorAll('.cmp-table').forEach(table => {{
+                    const heads = Array.from(table.querySelectorAll('th.cmp-q-head'));
+                    const tbody = table.querySelector('tbody');
+                    if (!heads.length || !tbody) return;
+
+                    heads.forEach(th => {{
+                        th.dataset.dir = 'desc';
+                        th.addEventListener('click', function() {{
+                            const dir = th.dataset.dir === 'desc' ? 'asc' : 'desc';
+                            heads.forEach(h => {{ h.dataset.dir = 'desc'; }});
+                            th.dataset.dir = dir;
+
+                            const offset = th.cellIndex;
+                            const rows = Array.from(tbody.querySelectorAll('tr'));
+                            rows.sort((a, b) => {{
+                                const ca = a.cells[offset];
+                                const cb = b.cells[offset];
+                                const av = ca && ca.dataset.val !== undefined ? parseFloat(ca.dataset.val) : -1;
+                                const bv = cb && cb.dataset.val !== undefined ? parseFloat(cb.dataset.val) : -1;
+                                return dir === 'desc' ? bv - av : av - bv;
+                            }});
+                            rows.forEach(r => tbody.appendChild(r));
+                        }});
+                    }});
+                }});
+
+                // 跟踪标的筛选
+                const chips = Array.from(document.querySelectorAll('[data-cmp-group]'));
+                chips.forEach(chip => {{
+                    chip.addEventListener('click', function() {{
+                        chips.forEach(c => c.classList.toggle('active', c === chip));
+                        const group = chip.dataset.cmpGroup;
+                        document.querySelectorAll('.cmp-table tbody tr').forEach(tr => {{
+                            tr.style.display = (group === 'all' || tr.dataset.group === group) ? '' : 'none';
+                        }});
+                        // 跨子页同步：年化收益页跟着切到同一类
+                        window.QDII_TRACK = group;
+                        if (window.qdiiAnnualSetType) window.qdiiAnnualSetType(group);
+                    }});
+                }});
+            }}
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', initQdiiSubtabs);
+            }} else {{
+                initQdiiSubtabs();
+            }}
+        }})();
+
+        {qdii_annual_js}
+
+        // ===== QDII 监控筛选 =====
+        (function() {{
+            function initQdiiFilters() {{
+                const table = document.getElementById('qdiiTable');
+                if (!table) return;
+                const rows = Array.from(table.querySelectorAll('tbody tr.qdii-row'));
+                const emptyRow = document.getElementById('qdiiEmptyRow');
+                // 只取本页的两组筛选标签，别把别的子页里同样用 .qdii-chip 的按钮绑进来
+                const trackChips = Array.from(document.querySelectorAll('.qdii-chip[data-filter="track"]'));
+                const buyChips = Array.from(document.querySelectorAll('.qdii-chip[data-filter="buy"]'));
+                let currentTrack = 'all';
+                let currentBuy = 'all';
+                let keyword = '';
+
+                function chipLabel(chip) {{
+                    return chip.dataset.label || chip.textContent.replace(/\\s*\\d+\\s*$/, '').trim();
+                }}
+                function setChipCount(chip, n) {{
+                    chip.textContent = chipLabel(chip) + ' ' + n;
+                }}
+
+                // 两组标签的数量互相联动：
+                // 选了「纳指」后，状态标签上的数字变成纳指下的分布；反之亦然。
+                function refreshChipCounts() {{
+                    let trackTotal = 0, buyTotal = 0;
+                    const byGroup = {{}}, byBuy = {{}};
+                    rows.forEach(row => {{
+                        const grp = row.getAttribute('data-group');
+                        const buy = row.getAttribute('data-buy');
+                        const code = (row.getAttribute('data-code') || '').toLowerCase();
+                        const name = (row.getAttribute('data-name') || '').toLowerCase();
+                        if (keyword && !code.includes(keyword) && !name.includes(keyword)) return;
+                        if (currentBuy === 'all' || buy === currentBuy) {{
+                            trackTotal++;
+                            byGroup[grp] = (byGroup[grp] || 0) + 1;
+                        }}
+                        if (currentTrack === 'all' || grp === currentTrack) {{
+                            buyTotal++;
+                            byBuy[buy] = (byBuy[buy] || 0) + 1;
+                        }}
+                    }});
+                    trackChips.forEach(chip => {{
+                        const v = chip.dataset.value;
+                        setChipCount(chip, v === 'all' ? trackTotal : (byGroup[v] || 0));
+                    }});
+                    buyChips.forEach(chip => {{
+                        const v = chip.dataset.value;
+                        setChipCount(chip, v === 'all' ? buyTotal : (byBuy[v] || 0));
+                    }});
+                }}
+
+                function applyFilters() {{
+                    let visible = 0;
+                    rows.forEach(row => {{
+                        const grp = row.getAttribute('data-group');
+                        const buy = row.getAttribute('data-buy');
+                        const code = (row.getAttribute('data-code') || '').toLowerCase();
+                        const name = (row.getAttribute('data-name') || '').toLowerCase();
+
+                        const matchTrack = (currentTrack === 'all') || (grp === currentTrack);
+                        const matchBuy   = (currentBuy === 'all') || (buy === currentBuy);
+                        const matchKw    = !keyword || code.includes(keyword) || name.includes(keyword);
+
+                        if (matchTrack && matchBuy && matchKw) {{
+                            row.style.display = '';
+                            visible++;
+                        }} else {{
+                            row.style.display = 'none';
+                        }}
+                    }});
+                    if (emptyRow) emptyRow.style.display = visible ? 'none' : '';
+                    refreshChipCounts();
+                }}
+
+                trackChips.concat(buyChips).forEach(chip => {{
+                    chip.addEventListener('click', function() {{
+                        const type = this.dataset.filter;
+                        const group = (type === 'track') ? trackChips : buyChips;
+                        group.forEach(c => c.classList.remove('active'));
+                        this.classList.add('active');
+                        if (type === 'track') {{
+                            currentTrack = this.dataset.value;
+                            // 跨子页同步：年化收益页直接跟着切到同一类，不用再点一次
+                            window.QDII_TRACK = currentTrack;
+                            if (window.qdiiAnnualSetType) window.qdiiAnnualSetType(currentTrack);
+                        }} else {{
+                            currentBuy = this.dataset.value;
+                        }}
+                        applyFilters();
+                    }});
+                }});
+
+                const searchInput = document.getElementById('qdiiSearchInput');
+                if (searchInput) {{
+                    searchInput.addEventListener('input', function() {{
+                        keyword = this.value.trim().toLowerCase();
+                        applyFilters();
+                    }});
+                }}
+
+                applyFilters();
+            }}
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', initQdiiFilters);
+            }} else {{
+                initQdiiFilters();
+            }}
+        }})();
+
+        // ===== QDII 监控表：表头列宽可手动拖拽（双击分隔条恢复默认）=====
+        (function() {{
+            function initQdiiColResize() {{
+                const table = document.getElementById('qdiiTable');
+                if (!table || table._colResizeBound) return;
+                table._colResizeBound = true;
+                const heads = Array.from(table.querySelectorAll('thead th'));
+                window._qdiiResizing = false;
+
+                // 第一次拖动前把列宽固化成 px，否则 table-layout:fixed 会在拖动时
+                // 把「加宽这一列」的差额摊到其它列上，看起来像没变宽
+                function freezeWidths() {{
+                    if (table._widthsFrozen) return;
+                    heads.forEach(h => {{
+                        h.dataset.prevWidth = h.style.width || '';
+                        h.style.width = Math.round(h.getBoundingClientRect().width) + 'px';
+                    }});
+                    table.dataset.prevWidth = table.style.width || '';
+                    table.style.width = Math.round(table.getBoundingClientRect().width) + 'px';
+                    table._widthsFrozen = true;
+                }}
+                function resetWidths() {{
+                    heads.forEach(h => {{ h.style.width = h.dataset.prevWidth || ''; }});
+                    table.style.width = table.dataset.prevWidth || '';
+                    table._widthsFrozen = false;
+                }}
+
+                heads.forEach(th => {{
+                    if (th.querySelector('.resizer')) return;
+                    const resizer = document.createElement('div');
+                    resizer.className = 'resizer';
+                    th.appendChild(resizer);
+
+                    let startX = 0, startW = 0, startTableW = 0;
+
+                    resizer.addEventListener('mousedown', function(e) {{
+                        e.preventDefault();
+                        e.stopPropagation();
+                        freezeWidths();
+                        window._qdiiResizing = true;
+                        startX = e.clientX;
+                        startW = th.getBoundingClientRect().width;
+                        startTableW = table.getBoundingClientRect().width;
+                        th.classList.add('resizing');
+
+                        function onMove(ev) {{
+                            const w = Math.max(40, startW + (ev.clientX - startX));
+                            th.style.width = Math.round(w) + 'px';
+                            table.style.width = Math.round(startTableW + (w - startW)) + 'px';
+                        }}
+                        function onUp() {{
+                            th.classList.remove('resizing');
+                            document.removeEventListener('mousemove', onMove);
+                            document.removeEventListener('mouseup', onUp);
+                            setTimeout(() => {{ window._qdiiResizing = false; }}, 60);
+                        }}
+                        document.addEventListener('mousemove', onMove);
+                        document.addEventListener('mouseup', onUp);
+                    }});
+
+                    // 双击恢复默认列宽
+                    resizer.addEventListener('dblclick', function(e) {{
+                        e.preventDefault();
+                        e.stopPropagation();
+                        resetWidths();
+                    }});
+                    // 拖拽条不参与表头排序的点击
+                    resizer.addEventListener('click', function(e) {{ e.stopPropagation(); }});
+                }});
+            }}
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', initQdiiColResize);
+            }} else {{
+                initQdiiColResize();
+            }}
+        }})();
+
+        // ===== QDII 列排序 =====
+        (function() {{
+            let qdiiSortCol = -1;
+            let qdiiSortAsc = true;
+
+            window.sortQdiiTable = function(colIndex) {{
+                const table = document.getElementById('qdiiTable');
+                if (!table) return;
+                const tbody = table.querySelector('tbody');
+                const rows = Array.from(tbody.querySelectorAll('tr.qdii-row'));
+                const emptyRow = document.getElementById('qdiiEmptyRow');
+
+                // 切换排序方向
+                if (qdiiSortCol === colIndex) {{
+                    qdiiSortAsc = !qdiiSortAsc;
+                }} else {{
+                    qdiiSortCol = colIndex;
+                    qdiiSortAsc = true;
+                }}
+
+                const th = table.querySelector(`thead th:nth-child(${{colIndex + 1}})`);
+                const isNumeric = th && th.getAttribute('data-sort') === 'num';
+
+                rows.sort((a, b) => {{
+                    const cellA = a.children[colIndex];
+                    const cellB = b.children[colIndex];
+                    let va = cellA ? (cellA.getAttribute('data-val') || cellA.textContent.trim()) : '';
+                    let vb = cellB ? (cellB.getAttribute('data-val') || cellB.textContent.trim()) : '';
+
+                    if (isNumeric) {{
+                        const na = parseFloat(va);
+                        const nb = parseFloat(vb);
+                        const fa = isNaN(na) ? -1e15 : na;
+                        const fb = isNaN(nb) ? -1e15 : nb;
+                        return qdiiSortAsc ? fa - fb : fb - fa;
+                    }} else {{
+                        va = String(va);
+                        vb = String(vb);
+                        return qdiiSortAsc
+                            ? va.localeCompare(vb, 'zh-Hans-CN')
+                            : vb.localeCompare(va, 'zh-Hans-CN');
+                    }}
+                }});
+
+                const frag = document.createDocumentFragment();
+                rows.forEach(r => frag.appendChild(r));
+                if (emptyRow) frag.appendChild(emptyRow);
+                tbody.innerHTML = '';
+                tbody.appendChild(frag);
+
+                // 更新表头箭头
+                table.querySelectorAll('thead th').forEach((thEl, idx) => {{
+                    const icon = thEl.querySelector('.sort-icon');
+                    if (!icon) return;
+                    if (idx === colIndex) {{
+                        icon.textContent = qdiiSortAsc ? '▲' : '▼';
+                        thEl.classList.add('sorted');
+                    }} else {{
+                        icon.textContent = '⇅';
+                        thEl.classList.remove('sorted');
+                    }}
+                }});
+            }};
+        }})();
+
+        // ===== QDII 表格列排序 =====
+        (function() {{
+            let qdiiSortCol = -1;
+            let qdiiSortAsc = true;
+
+            function getCellValue(row, colIndex, isNumeric) {{
+                const cell = row.children[colIndex];
+                if (!cell) return isNumeric ? -1e15 : '';
+                let raw = cell.getAttribute('data-val');
+                if (raw === null || raw === undefined) {{
+                    raw = cell.textContent.trim();
+                }}
+                if (isNumeric) {{
+                    const n = parseFloat(raw);
+                    return isNaN(n) ? -1e15 : n;
+                }}
+                return String(raw);
+            }}
+
+            function sortQdiiTable(colIndex) {{
+                const table = document.getElementById('qdiiTable');
+                if (!table) return;
+                const tbody = table.querySelector('tbody');
+                const rows = Array.from(tbody.querySelectorAll('tr.qdii-row'));
+                if (rows.length < 2) return;
+
+                // 切换或重置排序方向
+                if (qdiiSortCol === colIndex) {{
+                    qdiiSortAsc = !qdiiSortAsc;
+                }} else {{
+                    qdiiSortCol = colIndex;
+                    qdiiSortAsc = true;
+                }}
+
+                const th = table.querySelector(`thead th[data-col="${{colIndex}}"]`);
+                const isNumeric = th && th.getAttribute('data-sort') === 'num';
+
+                rows.sort((a, b) => {{
+                    const va = getCellValue(a, colIndex, isNumeric);
+                    const vb = getCellValue(b, colIndex, isNumeric);
+                    if (isNumeric) {{
+                        return qdiiSortAsc ? va - vb : vb - va;
+                    }}
+                    return qdiiSortAsc
+                        ? va.localeCompare(vb, 'zh-Hans-CN')
+                        : vb.localeCompare(va, 'zh-Hans-CN');
+                }});
+
+                // 重新插入排序后的行（保留原有 display 状态，兼容筛选）
+                const frag = document.createDocumentFragment();
+                rows.forEach(r => frag.appendChild(r));
+                const emptyRow = document.getElementById('qdiiEmptyRow');
+                tbody.innerHTML = '';
+                tbody.appendChild(frag);
+                if (emptyRow) tbody.appendChild(emptyRow);
+
+                // 更新表头排序指示
+                table.querySelectorAll('thead th').forEach(thEl => {{
+                    const icon = thEl.querySelector('.sort-icon');
+                    if (!icon) return;
+                    const col = parseInt(thEl.getAttribute('data-col'), 10);
+                    if (col === colIndex) {{
+                        icon.textContent = qdiiSortAsc ? '▲' : '▼';
+                        thEl.classList.add('sorted');
+                    }} else {{
+                        icon.textContent = '⇅';
+                        thEl.classList.remove('sorted');
+                    }}
+                }});
+            }}
+
+            // 事件委托：绑定到表格，一次性生效
+            function bindQdiiSort() {{
+                const table = document.getElementById('qdiiTable');
+                if (!table) return;
+                if (table._sortBound) return;
+                table._sortBound = true;
+
+                table.addEventListener('click', function(e) {{
+                    if (window._qdiiResizing) return;   // 拖完列宽不要顺手触发排序
+                    const th = e.target.closest('thead th[data-sort]');
+                    if (!th) return;
+                    const colIndex = parseInt(th.getAttribute('data-col'), 10);
+                    if (isNaN(colIndex)) return;
+                    sortQdiiTable(colIndex);
+                }});
+            }}
+
+            // 挂到 window，兼容旧调用
+            window.sortQdiiTable = sortQdiiTable;
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', bindQdiiSort);
+            }} else {{
+                bindQdiiSort();
+            }}
+        }})();
+
+        // ===================== 基金对比（勾选 → 归一化曲线 + 指标横向对比） =====================
+        // 设计约束：
+        //   1) 不新增表格列（22 列是硬编码的），勾选框塞进首列与 ☆ 竖排；
+        //   2) 不重新抓数据：曲线复用 window.__FUND_NAV_DATA__，夏普等走行上的 data-*；
+        //   3) 类名统一 fcmp- 前缀，避免与 QDII 对比页的 .cmp-* 串味。
+        const CmpManager = (function () {{
+            const STORAGE_KEY = 'fundCmpSelection_v1';
+            const MAX_SEL = 6;
+            const MAX_CHART_POINTS = 1200;
+            const COL = {{
+                SCALE: 3, FEE: 4, FEE_PUR: 5, MAXDD: 10, REBOUND: 11, RECOVERY: 12,
+                RECOVERY_DAYS: 13, TODAY: 14, WEEK: 15, MONTH: 16, QUARTER: 17,
+                HALF: 18, YTD: 19, YEAR: 20, YEAR3: 21, YEAR5: 22, YEAR10: 23
+            }};
+            const PERIOD_MONTHS = {{
+                month: 1, quarter: 3, half: 6, year: 12,
+                '3y': 36, '5y': 60, '10y': 120, all: 0
+            }};
+            const PERIOD_LABEL = {{
+                month: '近1月', quarter: '近3月', half: '近6月', ytd: '今年内',
+                year: '近1年', '3y': '近3年', '5y': '近5年', '10y': '近10年', all: '全区间'
+            }};
+            const PALETTE = {{
+                light: ['#1a73e8', '#e8710a', '#188038', '#9334e6', '#d93025', '#12b5cb'],
+                dark:  ['#6ea8fe', '#f6ae2d', '#5bb974', '#c58af9', '#f28b82', '#4dd0c4']
+            }};
+
+            let selected = [];
+            let period = 'quarter';
+            let chart = null;
+            let isOpen = false;
+            let cmpMode = false;   // 对比选择模式：由工具栏「⚖ 基金对比」开关，默认关闭
+            let hintTimer = null;
+
+            // ---------- 小工具 ----------
+            function esc(s) {{
+                return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {{
+                    if (c === '&') return '&amp;';
+                    if (c === '<') return '&lt;';
+                    if (c === '>') return '&gt;';
+                    if (c === '"') return '&quot;';
+                    return '&#39;';
+                }});
+            }}
+            function isDark() {{
+                return document.documentElement.getAttribute('data-theme') === 'dark';
+            }}
+            function palette() {{
+                return isDark() ? PALETTE.dark : PALETTE.light;
+            }}
+            function chartTheme() {{
+                if (typeof themeColors === 'function') {{
+                    try {{ return themeColors(); }} catch (e) {{ /* 回退到常量 */ }}
+                }}
+                return {{
+                    text: isDark() ? '#b9c0c8' : '#5f6368',
+                    grid: isDark() ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'
+                }};
+            }}
+            function fmtPct(v, digits) {{
+                if (v == null || !isFinite(v)) return '--';
+                return v.toFixed(digits == null ? 2 : digits) + '%';
+            }}
+            function fmtNum(v, digits) {{
+                if (v == null || !isFinite(v)) return '--';
+                return v.toFixed(digits == null ? 2 : digits);
+            }}
+
+            // ---------- 选择状态 ----------
+            function rowMap() {{
+                const map = {{}};
+                document.querySelectorAll('#fundTable tbody tr.fund-row').forEach(function (row) {{
+                    map[row.dataset.code] = row;
+                }});
+                return map;
+            }}
+            function readSel() {{
+                try {{
+                    const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+                    return Array.isArray(raw) ? raw : [];
+                }} catch (e) {{
+                    return [];
+                }}
+            }}
+            function writeSel() {{
+                try {{
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(selected));
+                }} catch (e) {{ /* 隐私模式下写入会失败，忽略 */ }}
+            }}
+            function sanitize(list) {{
+                const map = rowMap();
+                const out = [];
+                list.forEach(function (code) {{
+                    const key = String(code);
+                    if (map[key] && out.indexOf(key) < 0) out.push(key);
+                }});
+                return out.slice(0, MAX_SEL);
+            }}
+            function isSel(code) {{
+                return selected.indexOf(code) >= 0;
+            }}
+            function flashHint(msg) {{
+                const hint = document.getElementById('cmpBarHint');
+                if (!hint) return;
+                hint.textContent = msg;
+                hint.hidden = false;
+                if (hintTimer) clearTimeout(hintTimer);
+                hintTimer = setTimeout(function () {{ hint.hidden = true; }}, 2400);
+            }}
+            function toggle(code, checked) {{
+                const key = String(code);
+                if (checked) {{
+                    if (isSel(key)) return true;
+                    if (selected.length >= MAX_SEL) {{
+                        flashHint('最多同时对比 ' + MAX_SEL + ' 只基金，请先取消一只');
+                        return false;
+                    }}
+                    selected.push(key);
+                }} else {{
+                    selected = selected.filter(function (c) {{ return c !== key; }});
+                }}
+                writeSel();
+                syncRowStates();
+                refreshBar();
+                if (isOpen) {{
+                    if (selected.length < 2) closeModal();
+                    else render();
+                }}
+                return true;
+            }}
+
+            // ---------- 行状态 / 浮条 ----------
+            function syncRowStates() {{
+                const map = rowMap();
+                Object.keys(map).forEach(function (code) {{
+                    const row = map[code];
+                    const on = isSel(code);
+                    // 行高亮只在对比模式里显示，否则首列没勾选框、行却被染色会让人摸不着头脑
+                    row.classList.toggle('cmp-selected', on && cmpMode);
+                    const cb = row.querySelector('.cmp-check');
+                    if (cb && cb.checked !== on) cb.checked = on;
+                }});
+                const view = document.getElementById('fundView');
+                if (view) view.classList.toggle('cmp-bar-on', cmpMode && selected.length > 0);
+            }}
+            function refreshBar() {{
+                const bar = document.getElementById('cmpBar');
+                if (!bar) return;
+                const map = rowMap();
+                let hiddenCount = 0;
+                selected.forEach(function (code) {{
+                    const row = map[code];
+                    if (row && row.style.display === 'none') hiddenCount++;
+                }});
+                bar.hidden = !cmpMode || selected.length === 0;
+
+                const countEl = document.getElementById('cmpBarCount');
+                if (countEl) {{
+                    countEl.textContent = hiddenCount
+                        ? '已选 ' + selected.length + ' 只（' + hiddenCount + ' 只被筛选隐藏）'
+                        : '已选 ' + selected.length + ' 只';
+                }}
+                const chips = document.getElementById('cmpBarChips');
+                if (chips) {{
+                    chips.innerHTML = selected.map(function (code) {{
+                        const name = (typeof fundNames !== 'undefined' && fundNames[code]) || code;
+                        const short = name.length > 10 ? name.slice(0, 10) + '…' : name;
+                        return '<span class="fcmp-chip" title="' + esc(name) + '">' + esc(short)
+                            + '<button type="button" class="fcmp-chip-x" data-code="' + esc(code) + '" aria-label="移除">×</button></span>';
+                    }}).join('');
+                }}
+                const startBtn = document.getElementById('cmpStartBtn');
+                if (startBtn) startBtn.disabled = selected.length < 2;
+
+                const view = document.getElementById('fundView');
+                if (view) view.classList.toggle('cmp-bar-on', cmpMode && selected.length > 0);
+            }}
+
+            // ---------- 对比模式开关 ----------
+            function setMode(on) {{
+                cmpMode = !!on;
+                const view = document.getElementById('fundView');
+                if (view) view.classList.toggle('cmp-mode', cmpMode);
+                const btn = document.getElementById('cmpToggleBtn');
+                if (btn) {{
+                    btn.classList.toggle('active', cmpMode);
+                    btn.setAttribute('aria-pressed', cmpMode ? 'true' : 'false');
+                    btn.textContent = cmpMode ? '✕ 退出对比' : '⚖ 基金对比';
+                }}
+                syncRowStates();
+                refreshBar();
+            }}
+
+            // ---------- 日期与序列 ----------
+            // 不用 setMonth 直接减：3-31 减 1 月会溢出成 3-03，这里先落到 1 号再 clamp。
+            function shiftMonths(dateStr, months) {{
+                const parts = String(dateStr).split('-');
+                const y = parseInt(parts[0], 10);
+                const m = parseInt(parts[1], 10) - 1;
+                const d = parseInt(parts[2], 10);
+                const target = new Date(y, m - months, 1);
+                const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+                const day = Math.min(d, lastDay);
+                const pad = function (n) {{ return n < 10 ? '0' + n : String(n); }};
+                return target.getFullYear() + '-' + pad(target.getMonth() + 1) + '-' + pad(day);
+            }}
+            // 区间末端取「所选基金里最晚的净值日」：早收市的用前向填充补到这一天
+            function commonAnchor(codes) {{
+                let anchor = '';
+                codes.forEach(function (code) {{
+                    const data = fundNavData[code];
+                    if (data && data.dates && data.dates.length) {{
+                        const last = data.dates[data.dates.length - 1];
+                        if (last > anchor) anchor = last;
+                    }}
+                }});
+                return anchor;
+            }}
+            // 区间起点：今年内取「基准日所在年的 1 月 1 日」（自然年口径），
+            // 其余按月份回溯；空串 = 不设下限（全区间）。
+            function periodStart(anchor, key) {{
+                if (!anchor) return '';
+                if (key === 'ytd') return anchor.slice(0, 4) + '-01-01';
+                const months = PERIOD_MONTHS[key];
+                if (!months) return '';
+                return shiftMonths(anchor, months);
+            }}
+            function sliceOne(code, anchor, start) {{
+                const raw = fundNavData[code];
+                const name = (typeof fundNames !== 'undefined' && fundNames[code]) || code;
+                if (!raw || !Array.isArray(raw.dates) || !raw.dates.length) {{
+                    return {{ code: code, name: name, dates: [], navs: [], status: 'nodata' }};
+                }}
+                let dates = raw.dates;
+                let navs = raw.navs || [];
+                if (dates[0] > dates[dates.length - 1]) {{
+                    dates = dates.slice().reverse();
+                    navs = navs.slice().reverse();
+                }}
+                let i0 = 0;
+                if (start) {{
+                    while (i0 < dates.length && dates[i0] < start) i0++;
+                }}
+                const d2 = [];
+                const n2 = [];
+                for (let i = i0; i < dates.length; i++) {{
+                    const v = Number(navs[i]);
+                    if (isFinite(v) && v > 0 && (anchor === '' || dates[i] <= anchor)) {{
+                        d2.push(dates[i]);
+                        n2.push(v);
+                    }}
+                }}
+                const status = d2.length === 0 ? 'outside' : (d2.length < 2 ? 'thin' : 'ok');
+                return {{ code: code, name: name, dates: d2, navs: n2, status: status }};
+            }}
+            function alignAndNormalize(slices) {{
+                const dateSet = new Set();
+                slices.forEach(function (s) {{
+                    s.dates.forEach(function (d) {{ dateSet.add(d); }});
+                }});
+                const labels = Array.from(dateSet).sort();
+
+                const rows = slices.map(function (s) {{
+                    const byDate = new Map();
+                    s.dates.forEach(function (d, i) {{ byDate.set(d, s.navs[i]); }});
+
+                    let lastVal = null;
+                    let started = false;
+                    const filled = labels.map(function (d) {{
+                        if (byDate.has(d)) {{
+                            lastVal = byDate.get(d);
+                            started = true;
+                            return lastVal;
+                        }}
+                        return started ? lastVal : null;   // 起点之前不外推
+                    }});
+
+                    let base = null;
+                    for (let i = 0; i < filled.length; i++) {{
+                        if (filled[i] != null) {{ base = filled[i]; break; }}
+                    }}
+                    const norm = filled.map(function (v) {{
+                        if (v == null || !base) return null;
+                        return Math.round((v / base * 100) * 10000) / 10000;
+                    }});
+
+                    let peak = null, mdd = 0, first = null, lastV = null, prev = null, count = 0, startIdx = -1;
+                    const logRets = [];
+                    norm.forEach(function (v, i) {{
+                        if (v == null) return;
+                        count++;
+                        if (startIdx < 0) startIdx = i;
+                        if (first == null) first = v;
+                        peak = (peak == null || v > peak) ? v : peak;
+                        const dd = (v / peak - 1) * 100;
+                        if (dd < mdd) mdd = dd;
+                        if (prev != null && prev > 0) logRets.push(Math.log(v / prev));
+                        prev = v;
+                        lastV = v;
+                    }});
+
+                    let vol = null;
+                    if (logRets.length >= 20) {{
+                        let sum = 0;
+                        logRets.forEach(function (r) {{ sum += r; }});
+                        const mean = sum / logRets.length;
+                        let acc = 0;
+                        logRets.forEach(function (r) {{ acc += (r - mean) * (r - mean); }});
+                        vol = Math.sqrt(acc / (logRets.length - 1)) * Math.sqrt(252) * 100;
+                    }}
+
+                    return {{
+                        code: s.code,
+                        name: s.name,
+                        status: s.status,
+                        norm: norm,
+                        ret: (lastV != null && first != null) ? (lastV - 100) : null,
+                        mdd: count ? mdd : null,
+                        vol: vol,
+                        points: count,
+                        startDate: startIdx >= 0 ? labels[startIdx] : '',
+                        lateStart: startIdx > 0
+                    }};
+                }});
+
+                return {{
+                    labels: labels,
+                    rows: rows,
+                    anchor: labels.length ? labels[labels.length - 1] : ''
+                }};
+            }}
+            // 只抽稀展示用序列，指标始终用完整序列算
+            function thinForChart(payload, maxPoints) {{
+                const labels = payload.labels;
+                if (labels.length <= maxPoints) return payload;
+                const step = Math.ceil(labels.length / maxPoints);
+                const keepSet = new Set();
+                for (let i = 0; i < labels.length; i += step) keepSet.add(i);
+                keepSet.add(labels.length - 1);
+                payload.rows.forEach(function (r) {{
+                    for (let i = 0; i < r.norm.length; i++) {{
+                        if (r.norm[i] != null) {{ keepSet.add(i); break; }}
+                    }}
+                    for (let i = r.norm.length - 1; i >= 0; i--) {{
+                        if (r.norm[i] != null) {{ keepSet.add(i); break; }}
+                    }}
+                }});
+                const keep = Array.from(keepSet).sort(function (a, b) {{ return a - b; }});
+                return {{
+                    labels: keep.map(function (i) {{ return labels[i]; }}),
+                    rows: payload.rows.map(function (r) {{
+                        return Object.assign({{}}, r, {{
+                            norm: keep.map(function (i) {{ return r.norm[i]; }})
+                        }});
+                    }}),
+                    anchor: payload.anchor
+                }};
+            }}
+
+            // ---------- 主表指标（直接读行内 data-val，避免重复计算） ----------
+            function readDomMetrics(code) {{
+                const row = rowMap()[code];
+                if (!row) return null;
+                const num = function (idx) {{
+                    const td = row.children[idx];
+                    if (!td) return null;
+                    const v = parseFloat(td.getAttribute('data-val'));
+                    return (isNaN(v) || v === -9999) ? null : v;
+                }};
+                const attrNum = function (name) {{
+                    const raw = row.getAttribute(name);
+                    if (raw == null || raw === '') return null;
+                    const v = parseFloat(raw);
+                    return isFinite(v) ? v : null;
+                }};
+                const scaleTd = row.children[COL.SCALE];
+                const nameTd = row.children[2];
+                return {{
+                    code: code,
+                    name: (typeof fundNames !== 'undefined' && fundNames[code])
+                        || (nameTd ? nameTd.getAttribute('data-val') : code),
+                    navdate: row.getAttribute('data-navdate') || '',
+                    latestNav: num(9),
+                    scale: scaleTd ? scaleTd.textContent.trim() : '--',
+                    fee: num(COL.FEE),
+                    feePur: num(COL.FEE_PUR),
+                    maxdd: num(COL.MAXDD),
+                    rebound: num(COL.REBOUND),
+                    recovery: num(COL.RECOVERY),
+                    recoveryDays: num(COL.RECOVERY_DAYS),
+                    today: num(COL.TODAY),
+                    week: num(COL.WEEK),
+                    month: num(COL.MONTH),
+                    quarter: num(COL.QUARTER),
+                    half: num(COL.HALF),
+                    year: num(COL.YEAR),
+                    year3: num(COL.YEAR3),
+                    year5: num(COL.YEAR5),
+                    year10: num(COL.YEAR10),
+                    ytd: num(COL.YTD),
+                    sharp1y: attrNum('data-sharp1y'),
+                    sharp3y: attrNum('data-sharp3y'),
+                    trackErr: attrNum('data-te'),
+                    peerAvg: attrNum('data-peer')
+                }};
+            }}
+
+            // ---------- 深度资料（资产配置 / 集中度 / 重仓 / 持有人 / 申购）----------
+{CMP_META_JS}
+            // ---------- 渲染 ----------
+            function pctCell(v) {{
+                if (v == null || !isFinite(v)) return '<td class="fcmp-val">--</td>';
+                const cls = v > 0 ? 'gain-positive' : (v < 0 ? 'gain-negative' : '');
+                const sign = v > 0 ? '+' : '';
+                return '<td class="fcmp-val ' + cls + '">' + sign + v.toFixed(2) + '%</td>';
+            }}
+            function plainCell(text) {{
+                return '<td class="fcmp-val">' + text + '</td>';
+            }}
+
+            function renderTable(payload, domRows) {{
+                const wrap = document.getElementById('cmpTableWrap');
+                if (!wrap) return;
+                const pal = palette();
+                const cols = payload.rows.map(function (r, i) {{
+                    return {{
+                        series: r,
+                        dom: domRows[r.code] || null,
+                        color: pal[i % pal.length]
+                    }};
+                }});
+                const colspan = cols.length + 1;
+
+                let html = '<table class="fcmp-table"><thead><tr><th>指标</th>';
+                cols.forEach(function (c) {{
+                    const name = c.series.name || (c.dom && c.dom.name) || c.series.code;
+                    html += '<th><div>'
+                        + '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'
+                        + c.color + ';margin-right:4px;"></span>'
+                        + '<span class="fcmp-col-code">' + esc(c.series.code) + '</span>'
+                        + '<button type="button" class="fcmp-col-x" data-code="' + esc(c.series.code)
+                        + '" title="从对比中移除">×</button></div>'
+                        + '<div class="fcmp-col-head" title="' + esc(name) + '">' + esc(name) + '</div></th>';
+                }});
+                html += '</tr></thead><tbody>';
+
+                const rowOf = function (label, cellFn) {{
+                    let cells = '';
+                    cols.forEach(function (c) {{ cells += cellFn(c); }});
+                    return '<tr><td class="fcmp-label">' + label + '</td>' + cells + '</tr>';
+                }};
+
+                // A. 曲线口径
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">📈 区间表现（起点 = 100 · '
+                    + PERIOD_LABEL[period] + '）</td></tr>';
+                html += rowOf('区间收益', function (c) {{ return pctCell(c.series.ret); }});
+                html += rowOf('区间最大回撤', function (c) {{
+                    if (c.series.mdd == null) return plainCell('--');
+                    return '<td class="fcmp-val" style="color:#d93025;">'
+                        + Math.abs(c.series.mdd).toFixed(2) + '%</td>';
+                }});
+                html += rowOf('区间年化波动', function (c) {{ return plainCell(fmtPct(c.series.vol)); }});
+                html += rowOf('数据起点 / 点数', function (c) {{
+                    if (!c.series.points) {{
+                        return '<td class="fcmp-val fcmp-sub">'
+                            + (c.series.status === 'nodata' ? '无净值序列' : '区间内无净值') + '</td>';
+                    }}
+                    const tag = c.series.lateStart ? '（较晚）' : '';
+                    return '<td class="fcmp-val"><span class="fcmp-sub">' + esc(c.series.startDate)
+                        + tag + ' · ' + c.series.points + ' 点</span></td>';
+                }});
+
+                // B. 主表口径
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">📋 主表口径（后端按各自最新净值日计算）</td></tr>';
+                const domRow = function (label, key, kind) {{
+                    return rowOf(label, function (c) {{
+                        const d = c.dom;
+                        if (!d) return plainCell('--');
+                        const v = d[key];
+                        if (kind === 'int') return plainCell(v == null ? '--' : (v + ' 天'));
+                        if (kind === 'text') return plainCell(v == null || v === '' ? '--' : esc(String(v)));
+                        if (kind === 'num2') return plainCell(fmtNum(v, 2));
+                        return pctCell(v);
+                    }});
+                }};
+                html += domRow('近一周', 'week', 'pct');
+                html += domRow('近一月', 'month', 'pct');
+                html += domRow('近三月', 'quarter', 'pct');
+                html += domRow('近半年', 'half', 'pct');
+                html += domRow('今年内', 'ytd', 'pct');
+                html += domRow('近一年', 'year', 'pct');
+                html += domRow('近三年', 'year3', 'pct');
+                html += domRow('近五年', 'year5', 'pct');
+                html += domRow('近十年', 'year10', 'pct');
+                html += domRow('今日涨跌', 'today', 'pct');
+                html += rowOf('最大回撤（当前窗口）', function (c) {{
+                    if (!c.dom || c.dom.maxdd == null) return plainCell('--');
+                    return '<td class="fcmp-val" style="color:#d93025;">' + c.dom.maxdd.toFixed(2) + '%</td>';
+                }});
+                html += domRow('自低点反弹', 'rebound', 'pct');
+                html += domRow('修复程度', 'recovery', 'pct');
+                html += domRow('修复时间', 'recoveryDays', 'int');
+                html += rowOf('最新净值', function (c) {{
+                    if (!c.dom || c.dom.latestNav == null) return plainCell('--');
+                    return '<td class="fcmp-val">' + c.dom.latestNav.toFixed(4)
+                        + (c.dom.navdate ? '<div class="fcmp-sub">' + esc(c.dom.navdate) + '</div>' : '')
+                        + '</td>';
+                }});
+                html += domRow('最新规模', 'scale', 'text');
+                html += rowOf('运作费（管+托+销）', function (c) {{
+                    if (!c.dom || c.dom.fee == null) return plainCell('--');
+                    return plainCell(c.dom.fee.toFixed(2) + '%');
+                }});
+                html += rowOf('申购费率', function (c) {{
+                    if (!c.dom || c.dom.feePur == null || c.dom.feePur >= 999) return plainCell('--');
+                    return plainCell(c.dom.feePur.toFixed(2) + '%');
+                }});
+
+                // C. 补充指标
+                html += '<tr class="fcmp-group"><td colspan="' + colspan + '">🧮 补充指标（来源：天天基金 tsdata）</td></tr>';
+                html += domRow('夏普（近1年）', 'sharp1y', 'num2');
+                html += domRow('夏普（近3年）', 'sharp3y', 'num2');
+                html += domRow('年化跟踪误差', 'trackErr', 'pct');
+                html += domRow('同类平均', 'peerAvg', 'pct');
+
+                // D. 深度资料（资产配置 / 集中度 / 十大重仓 / 持有人 / 申购）
+                html += renderCmpMetaSections(cols, rowOf, colspan);
+
+                html += '</tbody></table>';
+                wrap.innerHTML = html;
+                markBest(wrap);
+            }}
+
+            function renderFoot(payload) {{
+                const el = document.getElementById('cmpFoot');
+                if (!el) return;
+                const noNav = payload.rows.filter(function (r) {{ return r.status === 'nodata'; }}).length;
+                const outside = payload.rows.filter(function (r) {{ return r.status === 'outside'; }}).length;
+                let msg = '① <strong>区间收益 / 区间最大回撤 / 区间年化波动</strong>由归一化曲线计算（首日 = 100），'
+                    + '基准日取所选基金里最晚的净值日；主表「近一月 / 近三月…」由后端按各基金自身最新净值日回溯自然月，'
+                    + '两者口径不同，相差 0.01~0.3 个百分点属正常。'
+                    + '② 「最大回撤 / 自低点反弹 / 修复程度」沿用主表当前统计窗口。'
+                    + '③ 交易日不同的品种（A股 / QDII / 加密 7×24）按日期并集 + 前向填充对齐，曲线的平段表示当日无净值。'
+                    + '<br>④ 琥珀色底色标的是该行更优值（收益/夏普/规模取大，回撤/波动/费用/跟踪误差取小），'
+                    + '仓位与集中度属于风格差异，不做优劣判断。'
+                    + '<br>⑤ 资产配置取最近报告期（季报，占基金净值比，四项可能因杠杆/衍生品合计超 100%）；'
+                    + '十大重仓与集中度取最新一期披露，季报只有前十大、中报年报为全量；'
+                    + '持有人结构为半年报 / 年报节点，申购限额来自天天基金当日状态，可能随公告变动。';
+                if (noNav) msg += '<br>⑥ 有 ' + noNav + ' 只没有净值序列，只参与指标表，不出曲线。';
+                if (outside) msg += '<br>⑦ 有 ' + outside + ' 只在所选区间内没有净值（新成立或数据缺失），曲线从略。';
+                el.innerHTML = msg;
+            }}
+
+            function renderChart(payload) {{
+                const canvas = document.getElementById('cmpChartCanvas');
+                const emptyEl = document.getElementById('cmpChartEmpty');
+                if (!canvas) return;
+                if (chart && typeof chart.destroy === 'function') {{
+                    chart.destroy();
+                    chart = null;
+                }}
+                const setEmpty = function (msg) {{
+                    if (emptyEl) {{
+                        emptyEl.textContent = msg;
+                        emptyEl.hidden = false;
+                    }}
+                    canvas.style.visibility = 'hidden';
+                }};
+                const clearEmpty = function () {{
+                    if (emptyEl) emptyEl.hidden = true;
+                    canvas.style.visibility = 'visible';
+                }};
+
+                if (typeof Chart === 'undefined') {{
+                    setEmpty('图表库尚未加载完成，稍后会自动重绘（下方指标表不受影响）。');
+                    return;
+                }}
+                const drawable = payload.rows.filter(function (r) {{ return r.points > 0; }});
+                if (!drawable.length) {{
+                    setEmpty('所选基金在该区间内都没有可用净值，换一个区间试试。');
+                    return;
+                }}
+                clearEmpty();
+
+                const thin = thinForChart(payload, MAX_CHART_POINTS);
+                const pal = palette();
+                const theme = chartTheme();
+
+                chart = new Chart(canvas.getContext('2d'), {{
+                    type: 'line',
+                    data: {{
+                        labels: thin.labels,
+                        datasets: thin.rows.map(function (r, i) {{
+                            return {{
+                                label: r.code + ' ' + (r.name || ''),
+                                data: r.norm,
+                                borderColor: pal[i % pal.length],
+                                backgroundColor: pal[i % pal.length],
+                                borderWidth: 1.6,
+                                pointRadius: 0,
+                                pointHoverRadius: 4,
+                                tension: 0.12,
+                                spanGaps: false,
+                                fill: false
+                            }};
+                        }})
+                    }},
+                    options: {{
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        interaction: {{ mode: 'index', intersect: false }},
+                        plugins: {{
+                            legend: {{
+                                position: 'bottom',
+                                labels: {{ boxWidth: 10, boxHeight: 10, font: {{ size: 10 }}, color: theme.text }}
+                            }},
+                            tooltip: {{
+                                mode: 'index',
+                                intersect: false,
+                                // ★ 逐条按当前横坐标的值从高到低排列，与折线在图上「从上到下」的
+                                //   上下关系严格一致（默认按数据集顺序排，读起来和图对不上）。
+                                //   归一化后 y 就是累计涨幅，降序 = 图上从高到低；缺值的排到最后。
+                                itemSort: function (a, b) {{
+                                    const av = (a.parsed && a.parsed.y != null) ? a.parsed.y : null;
+                                    const bv = (b.parsed && b.parsed.y != null) ? b.parsed.y : null;
+                                    if (av === null && bv === null) return 0;
+                                    if (av === null) return 1;
+                                    if (bv === null) return -1;
+                                    return bv - av;
+                                }},
+                                callbacks: {{
+                                    label: function (ctx) {{
+                                        const v = ctx.parsed.y;
+                                        if (v == null) return ctx.dataset.label + '：--';
+                                        const diff = v - 100;
+                                        const sign = diff >= 0 ? '+' : '';
+                                        return ctx.dataset.label + '：' + v.toFixed(2) + '（' + sign + diff.toFixed(2) + '%）';
+                                    }}
+                                }}
+                            }}
+                        }},
+                        scales: {{
+                            x: {{
+                                ticks: {{ maxTicksLimit: 8, maxRotation: 0, font: {{ size: 9 }}, color: theme.text }},
+                                grid: {{ display: false }}
+                            }},
+                            y: {{
+                                ticks: {{ font: {{ size: 9 }}, color: theme.text }},
+                                grid: {{ color: theme.grid }},
+                                title: {{ display: true, text: '区间起点 = 100', color: theme.text, font: {{ size: 10 }} }}
+                            }}
+                        }}
+                    }}
+                }});
+            }}
+
+            function render() {{
+                if (!selected.length) return;
+                const codes = selected.slice();
+                const anchor = commonAnchor(codes);
+                const start = periodStart(anchor, period);
+                const slices = codes.map(function (code) {{ return sliceOne(code, anchor, start); }});
+                const payload = alignAndNormalize(slices);
+
+                const domRows = {{}};
+                codes.forEach(function (code) {{ domRows[code] = readDomMetrics(code); }});
+
+                const titleEl = document.getElementById('cmpTitle');
+                if (titleEl) {{
+                    titleEl.textContent = '⚖ 基金对比 · ' + selected.length + ' 只 · ' + PERIOD_LABEL[period];
+                }}
+                const anchorNote = document.getElementById('cmpAnchorNote');
+                if (anchorNote) {{
+                    anchorNote.textContent = payload.anchor
+                        ? ('基准日 ' + payload.anchor + '（取所选基金最晚净值日）')
+                        : '所选基金均无净值序列';
+                }}
+                renderChart(payload);
+                renderTable(payload, domRows);
+                renderFoot(payload);
+            }}
+
+            // ---------- 开关 ----------
+            function openModal() {{
+                if (selected.length < 2) {{
+                    flashHint('至少选择 2 只基金才能对比');
+                    return;
+                }}
+                const modal = document.getElementById('cmpModal');
+                if (!modal) return;
+                modal.classList.add('show');
+                isOpen = true;
+                document.querySelectorAll('.fcmp-period-btn').forEach(function (btn) {{
+                    btn.classList.toggle('active', btn.dataset.period === period);
+                }});
+                render();
+            }}
+            function closeModal() {{
+                const modal = document.getElementById('cmpModal');
+                if (modal) modal.classList.remove('show');
+                isOpen = false;
+                if (chart && typeof chart.destroy === 'function') {{
+                    chart.destroy();
+                    chart = null;
+                }}
+            }}
+
+            // ---------- 初始化 ----------
+            function init() {{
+                selected = sanitize(readSel());
+                writeSel();
+
+                const table = document.getElementById('fundTable');
+                if (table) {{
+                    table.addEventListener('change', function (e) {{
+                        const cb = e.target.closest('.cmp-check');
+                        if (!cb) return;
+                        if (!toggle(cb.dataset.code, cb.checked)) cb.checked = false;
+                    }});
+                }}
+
+                const chips = document.getElementById('cmpBarChips');
+                if (chips) {{
+                    chips.addEventListener('click', function (e) {{
+                        const btn = e.target.closest('.fcmp-chip-x');
+                        if (btn) toggle(btn.dataset.code, false);
+                    }});
+                }}
+                const startBtn = document.getElementById('cmpStartBtn');
+                if (startBtn) startBtn.addEventListener('click', openModal);
+                const modeBtn = document.getElementById('cmpToggleBtn');
+                if (modeBtn) {{
+                    modeBtn.addEventListener('click', function () {{ setMode(!cmpMode); }});
+                }}
+                const clearBtn = document.getElementById('cmpClearBtn');
+                if (clearBtn) {{
+                    clearBtn.addEventListener('click', function () {{
+                        selected = [];
+                        writeSel();
+                        syncRowStates();
+                        refreshBar();
+                        if (isOpen) closeModal();
+                    }});
+                }}
+                const closeBtn = document.getElementById('cmpCloseBtn');
+                if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+                const modal = document.getElementById('cmpModal');
+                if (modal) {{
+                    modal.addEventListener('click', function (e) {{
+                        if (e.target === modal) closeModal();
+                    }});
+                }}
+
+                const periods = document.getElementById('cmpPeriods');
+                if (periods) {{
+                    periods.addEventListener('click', function (e) {{
+                        const btn = e.target.closest('.fcmp-period-btn');
+                        if (!btn) return;
+                        period = btn.dataset.period;
+                        document.querySelectorAll('.fcmp-period-btn').forEach(function (b) {{
+                            b.classList.toggle('active', b === btn);
+                        }});
+                        render();
+                    }});
+                }}
+
+                const tableWrap = document.getElementById('cmpTableWrap');
+                if (tableWrap) {{
+                    tableWrap.addEventListener('click', function (e) {{
+                        const btn = e.target.closest('.fcmp-col-x');
+                        if (!btn) return;
+                        toggle(btn.dataset.code, false);
+                    }});
+                }}
+
+                // 主题切换后重绘（监听注册在既有 themeToggle 之后，能读到新主题）
+                const themeBtn = document.getElementById('themeToggle');
+                if (themeBtn) {{
+                    themeBtn.addEventListener('click', function () {{
+                        if (isOpen) setTimeout(render, 0);
+                    }});
+                }}
+                // 资源（Chart / 净值脚本）就绪后补画一次
+                window.addEventListener('load', function () {{
+                    if (isOpen) render();
+                }});
+
+                syncRowStates();
+                refreshBar();
+            }}
+
+            if (document.readyState === 'loading') {{
+                document.addEventListener('DOMContentLoaded', init);
+            }} else {{
+                init();
+            }}
+
+            return {{
+                open: openModal,
+                close: closeModal,
+                isOpen: function () {{ return isOpen; }},
+                toggle: toggle,
+                setMode: setMode,
+                isMode: function () {{ return cmpMode; }},
+                syncRowStates: syncRowStates,
+                refreshBar: refreshBar
+            }};
+        }})();
+        window.CmpManager = CmpManager;
+
+    </script>
+    {macro_history_script}
+    {live_quotes_script}
+</body>
+</html>
+"""
+    output_path = os.path.abspath(filename)
+    output_dir = os.path.dirname(output_path)
+    os.makedirs(output_dir, exist_ok=True)
+    _atomic_write(nav_data_output, nav_data_script)
+    _atomic_write(holding_detail_output, holding_detail_script)
+    _atomic_write(full_holdings_output, full_holdings_script)
+    _atomic_write(detail_more_output, detail_more_script)
+    _atomic_write(output_path, html_content)
+    return output_path
+
+def fetch_crypto_data(symbol, start_date, end_date):
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get('start_date', '') <= start_date and cache.get('end_date', '') >= end_date:
+                return cache.get('data', [])
+        except Exception: pass
+
+    pair = f"{symbol}USDT"
+    data = []
+    try:
+        start_ts = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp() * 1000)
+        end_ts = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp() * 1000)
+        url = f"https://data-api.binance.vision/api/v3/klines?symbol={pair}&interval=1d&startTime={start_ts}&endTime={end_ts}&limit=1000"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            klines = json.loads(resp.read().decode('utf-8'))
+            for item in klines:
+                d_str = datetime.fromtimestamp(item[0] / 1000).strftime('%Y-%m-%d')
+                nav = float(item[4])
+                if nav > 0: data.append({"date": d_str, "nav": nav})
+    except Exception: pass
+
+    if data:
+        data = sorted(data, key=lambda x: x['date'])
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({'start_date': start_date, 'end_date': end_date, 'data': data}, f, ensure_ascii=False, indent=2)
+        except Exception: pass
+        return data
+    return None
+
+def fetch_precious_metals_data(symbol, start_date, end_date):
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get('start_date', '') <= start_date and cache.get('end_date', '') >= end_date:
+                return cache.get('data', [])
+        except Exception: pass
+
+    df = None
+    data = []
+    try:
+        if symbol == "AUM": df = ak.futures_main_sina(symbol="AU0")
+        elif symbol == "XAU":
+            for sym in ["GC", "XAU"]:
+                try:
+                    df = ak.futures_foreign_hist(symbol=sym)
+                    if df is not None and not df.empty: break
+                except Exception: continue
+        elif symbol == "XAG":
+            for sym in ["SI", "XAG"]:
+                try:
+                    df = ak.futures_foreign_hist(symbol=sym)
+                    if df is not None and not df.empty: break
+                except Exception: continue
+
+        if df is not None and not df.empty:
+            d_col = '日期' if '日期' in df.columns else ('date' if 'date' in df.columns else df.columns[0])
+            c_col = '收盘价' if '收盘价' in df.columns else ('close' if 'close' in df.columns else df.columns[4])
+            df[d_col] = pd.to_datetime(df[d_col]).dt.strftime('%Y-%m-%d')
+            df = df[(df[d_col] >= start_date) & (df[d_col] <= end_date)].sort_values(d_col)
+            for _, row in df.iterrows():
+                try:
+                    nav = float(row[c_col])
+                    if nav > 0: data.append({"date": str(row[d_col]), "nav": nav})
+                except Exception: continue
+
+        if data:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({'start_date': start_date, 'end_date': end_date, 'data': data}, f, ensure_ascii=False, indent=2)
+            return data
+    except Exception: pass
+    return None
+
+# ==============================================================================
+# 【新增】大宗商品（布伦特原油 / COMEX 铜）与货币汇率（USD/CNY、USD/JPY、DXY）抓取
+# ==============================================================================
+def fetch_yahoo_history(symbol, start_date, end_date):
+    """从 Yahoo Finance 抓取日线历史收盘价（通用函数，供指数/大宗商品/货币使用）。
+
+    修复点：
+    1. 先访问 finance.yahoo.com 获取 consent cookie，避免长历史请求被返回空数组。
+    2. query1 / query2 双端点回退。
+    3. 正确处理 result=None 或 error 字段，不再静默吞掉异常。
+    4. 打印诊断日志，便于排查符号错误。
+    """
+    data = []
+    try:
+        start_ts = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp())
+        end_ts = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp()) + 86400
+    except Exception as e:
+        print(f"    [Yahoo] {symbol} 日期解析失败: {e}")
+        return None
+
+    encoded_symbol = urllib.parse.quote(symbol, safe='')
+
+    # 带 cookie 的 opener
+    cj = CookieJar()
+    proxy_handler = urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(
+        proxy_handler, urllib.request.HTTPCookieProcessor(cj)
+    )
+
+    # 预热：获取 consent / session cookie（关键修复）
+    try:
+        warm_req = urllib.request.Request(
+            "https://finance.yahoo.com/",
+            headers={"User-Agent": DEFAULT_HEADERS["User-Agent"]}
+        )
+        opener.open(warm_req, timeout=8)
+    except Exception:
+        pass
+
+    hosts = [
+        "query1.finance.yahoo.com",
+        "query2.finance.yahoo.com",
+    ]
+
+    from datetime import timezone as _tz
+
+    for host in hosts:
+        try:
+            url = (
+                f"https://{host}/v8/finance/chart/{encoded_symbol}"
+                f"?period1={start_ts}&period2={end_ts}&interval=1d&events=div%2Csplit"
+            )
+            req = urllib.request.Request(url, headers={
+                **DEFAULT_HEADERS,
+                "Accept": "application/json,text/plain,*/*",
+                "Referer": "https://finance.yahoo.com/",
+            })
+            with opener.open(req, timeout=15) as resp:
+                raw_text = resp.read().decode('utf-8', errors='ignore')
+            res = json.loads(raw_text)
+
+            chart = res.get("chart") or {}
+            err = chart.get("error")
+            if err:
+                desc = err.get("description") if isinstance(err, dict) else str(err)
+                print(f"    [Yahoo] {symbol}@{host} 接口错误: {desc}")
+                continue
+
+            results = chart.get("result")
+            if not results:
+                continue
+
+            result = results[0] or {}
+            timestamps = result.get("timestamp") or []
+            indicators = result.get("indicators") or {}
+            quote_list = indicators.get("quote") or []
+            if not quote_list:
+                continue
+            closes = quote_list[0].get("close") or []
+
+            for ts, c in zip(timestamps, closes):
+                if c is None:
+                    continue
+                try:
+                    v = float(c)
+                except (TypeError, ValueError):
+                    continue
+                if v <= 0:
+                    continue
+                d = datetime.fromtimestamp(ts, tz=_tz.utc).strftime('%Y-%m-%d')
+                data.append({"date": d, "nav": round(v, 4)})
+
+            if data:
+                break
+        except Exception as e:
+            print(f"    [Yahoo] {symbol}@{host} 请求异常: {e}")
+            continue
+
+    if data:
+        return sorted(data, key=lambda x: x['date'])
+
+    print(f"    [Yahoo] {symbol} 未获取到任何数据")
+    return None
+
+
+def fetch_commodity_data(symbol, start_date, end_date):
+    """抓取大宗商品历史行情（BRENT / CAD），带本地缓存。优先 AkShare 外盘期货，兜底 Yahoo Finance。"""
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get('start_date', '') <= start_date and cache.get('end_date', '') >= end_date:
+                return cache.get('data', [])
+        except Exception: pass
+
+    df = None
+    data = []
+    try:
+        candidate_syms = []
+        if symbol == "BRENT":
+            candidate_syms = ["OIL", "BRENT"]
+        elif symbol == "CAD":
+            candidate_syms = ["CAD", "HG"]
+        for sym in candidate_syms:
+            try:
+                df = ak.futures_foreign_hist(symbol=sym)
+                if df is not None and not df.empty: break
+            except Exception:
+                continue
+
+        if df is not None and not df.empty:
+            d_col = '日期' if '日期' in df.columns else ('date' if 'date' in df.columns else df.columns[0])
+            c_col = '收盘价' if '收盘价' in df.columns else ('close' if 'close' in df.columns else df.columns[4])
+            df = df.copy()
+            df[d_col] = pd.to_datetime(df[d_col], errors='coerce').dt.strftime('%Y-%m-%d')
+            df = df.dropna(subset=[d_col])
+            df = df[(df[d_col] >= start_date) & (df[d_col] <= end_date)].sort_values(d_col)
+            for _, row in df.iterrows():
+                try:
+                    nav = float(row[c_col])
+                    if nav > 0: data.append({"date": str(row[d_col]), "nav": round(nav, 4)})
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    if not data:
+        yahoo_sym = "BZ=F" if symbol == "BRENT" else "HG=F"
+        ydata = fetch_yahoo_history(yahoo_sym, start_date, end_date)
+        if ydata:
+            data = ydata
+
+    if data:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({'start_date': start_date, 'end_date': end_date, 'data': data}, f, ensure_ascii=False, indent=2)
+        except Exception: pass
+        return data
+    return None
+
+
+def fetch_currency_data(symbol, start_date, end_date):
+    """抓取货币汇率历史数据（USDCNY / USDJPY / DXY），带本地缓存。"""
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get('start_date', '') <= start_date and cache.get('end_date', '') >= end_date:
+                return cache.get('data', [])
+        except Exception: pass
+
+    investing_urls = {
+        "USDCNY": "https://cn.investing.com/currencies/usd-cny",
+        "USDJPY": "https://cn.investing.com/currencies/usd-jpy",
+        "DXY":    "https://cn.investing.com/indices/usdollar",
+    }
+    data = None
+    url = investing_urls.get(symbol)
+    if url:
+        try:
+            req = urllib.request.Request(url, headers={
+                **DEFAULT_HEADERS,
+                "Referer": "https://cn.investing.com/",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                html_text = resp.read().decode('utf-8', errors='ignore')
+            candidates = []
+            for m in re.finditer(r'"(?:date|Date)"\s*:\s*"([^"]+)"[^}]*?"(?:close|Close|last|last_close|price)"\s*:\s*([\d.]+)', html_text):
+                d_str = m.group(1).strip()
+                v_str = m.group(2).strip()
+                try:
+                    v = float(v_str)
+                except ValueError:
+                    continue
+                if v <= 0:
+                    continue
+                d_norm = None
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+                    try:
+                        d_norm = datetime.strptime(d_str, fmt).strftime("%Y-%m-%d")
+                        break
+                    except ValueError:
+                        continue
+                if d_norm:
+                    candidates.append({"date": d_norm, "nav": round(v, 4)})
+            if candidates:
+                uniq = {}
+                for it in candidates:
+                    uniq[it["date"]] = it
+                data = sorted(uniq.values(), key=lambda x: x['date'])
+        except Exception:
+            data = None
+
+    if not data:
+        symbol_map = {
+            "USDCNY": "USDCNY=X",
+            "USDJPY": "USDJPY=X",
+            "DXY": "DX-Y.NYB"
+        }
+        yahoo_symbol = symbol_map.get(symbol)
+        if yahoo_symbol:
+            data = fetch_yahoo_history(yahoo_symbol, start_date, end_date)
+
+    if data:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump({'start_date': start_date, 'end_date': end_date, 'data': data}, f, ensure_ascii=False, indent=2)
+        except Exception: pass
+        return data
+    return None
+
+
+def _process_hist_df(df, start_date, end_date):
+    """通用：从含日期/收盘列的 DataFrame 中提取 [{'date','nav'}, ...]"""
+    if df is None or df.empty:
+        return None
+    try:
+        date_col = '日期' if '日期' in df.columns else ('date' if 'date' in df.columns else df.columns[0])
+        close_col = '收盘' if '收盘' in df.columns else ('close' if 'close' in df.columns else df.columns[4])
+
+        df = df.copy()
+        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        df = df.dropna(subset=[date_col])
+        df['date_str'] = df[date_col].dt.strftime('%Y-%m-%d')
+        mask = (df['date_str'] >= start_date) & (df['date_str'] <= end_date)
+        df = df.loc[mask].sort_values('date_str')
+
+        data = []
+        for _, row in df.iterrows():
+            try:
+                nav = float(row[close_col])
+                if nav > 0:
+                    data.append({"date": row['date_str'], "nav": nav})
+            except Exception:
+                continue
+        return data if data else None
+    except Exception:
+        return None
+
+# ==============================================================================
+# 【合并自 get_meiguzhishu.py】美股指数历史数据获取（Yahoo v8 chart 接口）
+# 仅用于补充 import_re.py 中主流指数（NDX/SPX/SOX/COMP）的完整历史与年度收益率
+# 不影响其他任何模块
+# ==============================================================================
+YAHOO_INDEX_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://finance.yahoo.com/",
+    "Connection": "keep-alive",
+}
+
+# Yahoo 指数代码映射（和 get_meiguzhishu.py 保持一致）
+YAHOO_INDEX_CODE_MAP = {
+    "NDX":  "^NDX",
+    "SPX":  "^GSPC",
+    "SOX":  "^SOX",
+    "COMP": "^IXIC",
+}
+
+
+def _build_yahoo_index_opener():
+    """构造 Yahoo 专用 opener。
+
+    说明：import_re.py 顶部清空了 HTTP(S)_PROXY 环境变量，但 urllib 默认 opener
+    不会走系统代理了。这里手动从系统配置读一次代理（Windows 下 getproxies()
+    会读注册表），从而让 Yahoo 请求依然能翻墙；否则就直连（海外服务器 / TUN 模式）。
+    """
+    proxy_url = None
+    try:
+        sys_proxies = urllib.request.getproxies()
+        for key in ("https", "http"):
+            if sys_proxies.get(key):
+                proxy_url = sys_proxies[key]
+                break
+    except Exception:
+        proxy_url = None
+
+    if proxy_url:
+        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+        return urllib.request.build_opener(handler)
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def fetch_yahoo_index_kline(symbol_code, start_year=2000):
+    """通过 Yahoo Finance v8 接口拉取美股指数历史日线数据。
+    完全对照 get_meiguzhishu.py 的 fetch_yahoo_kline 实现。
+
+    返回：列表，每项含 date / open / high / low / close / volume / nav（nav == close）
+    """
+    period1 = int(time.mktime(time.strptime(f"{start_year}-01-01", "%Y-%m-%d")))
+    period2 = int(time.time())
+
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/"
+        f"{urllib.parse.quote(symbol_code)}"
+        f"?period1={period1}&period2={period2}&interval=1d&events=history"
+    )
+
+    req = urllib.request.Request(url, headers=YAHOO_INDEX_HEADERS)
+    records = []
+
+    opener = _build_yahoo_index_opener()
+    try:
+        with opener.open(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        print(f"    [Yahoo] {symbol_code} 请求异常: {type(e).__name__}: {e}")
+        return records
+
+    result = data.get("chart", {}).get("result", [])
+    if not result:
+        print(f"    [Yahoo] {symbol_code} result 为空")
+        return records
+
+    chart_data = result[0]
+    timestamps = chart_data.get("timestamp", [])
+    quote = chart_data.get("indicators", {}).get("quote", [{}])[0]
+
+    opens   = quote.get("open")   or []
+    highs   = quote.get("high")   or []
+    lows    = quote.get("low")    or []
+    closes  = quote.get("close")  or []
+    volumes = quote.get("volume") or []
+
+    for i in range(len(timestamps)):
+        if i >= len(opens)  or opens[i]  is None: continue
+        if i >= len(closes) or closes[i] is None: continue
+        d_str = time.strftime("%Y-%m-%d", time.gmtime(timestamps[i]))
+        c = float(closes[i])
+        records.append({
+            "date":   d_str,
+            "open":   float(opens[i]),
+            "high":   float(highs[i] if i < len(highs) and highs[i] is not None else opens[i]),
+            "low":    float(lows[i]  if i < len(lows)  and lows[i]  is not None else opens[i]),
+            "close":  c,
+            "volume": int(volumes[i] if i < len(volumes) and volumes[i] is not None else 0),
+            "nav":    c,
+        })
+
+    records.sort(key=lambda x: x["date"])
+    if records:
+        print(f"    [Yahoo] {symbol_code} 获取 {len(records)} 条 "
+              f"({records[0]['date']} ~ {records[-1]['date']})")
+    return records
+
+
+def compute_annual_returns_from_kline(records, start_year=2000):
+    """按 get_meiguzhishu.py 的 compute_annual_returns 方式计算年度收益率：
+       - 首个年份：用该年第一个交易日的开盘价
+       - 其余年份：用上一年最后一个交易日的收盘价
+    返回 {"2000": -36.84, "2001": -32.65, ...}
+    """
+    if not records:
+        return {}
+
+    from collections import defaultdict as _dd
+    year_data = _dd(list)
+    for r in records:
+        try:
+            year = int(str(r["date"])[:4])
+        except (ValueError, TypeError):
+            continue
+        if year >= start_year - 1:
+            year_data[year].append(r)
+
+    for year in year_data:
+        year_data[year].sort(key=lambda x: x["date"])
+
+    sorted_years = sorted(year_data.keys())
+    annual_returns = {}
+    prev_year_close = None
+
+    for year in sorted_years:
+        year_records = year_data[year]
+        if not year_records:
+            continue
+        first_rec = year_records[0]
+        last_rec  = year_records[-1]
+
+        if prev_year_close is None:
+            base_price = first_rec.get("open") or first_rec.get("close")
+        else:
+            base_price = prev_year_close
+        end_price = last_rec.get("close")
+
+        if year >= start_year and base_price and base_price > 0 and end_price:
+            ret = (end_price / base_price - 1) * 100.0
+            annual_returns[str(year)] = round(ret, 2)
+
+        prev_year_close = end_price
+
+    return annual_returns
+
+# 模块级常量：指数年度收益率的完整历史起点
+INDEX_FULL_START = "2000-01-01"
+# 数据源给的是「2000 年第一个交易日」（如 2000-01-03），缓存命中判断留出年初余量，
+# 否则永远判不中、每天都要重新拉一遍全历史。
+INDEX_FULL_START_TOLERANCE = "2000-02-01"
+# 新浪美股指数接口只回吐最近 12 年左右（NDX 2014-02 起），腾讯按年滚动拼接能回到 2000 年；
+# 腾讯只有 usNDX/us.INX 这类代码可选，费城半导体、纳斯达克综合都没有长历史
+# （综合指数新浪给到 2004 起、半导体 2014 起，属数据源上限）。
+TENCENT_US_INDEX_CODE = {"NDX": "usNDX"}
+
+
+def fetch_index_data(symbol, start_date, end_date):
+    """抓取主流指数历史行情，带本地缓存。
+
+    ★ 关键修复：
+       - 无论调用方传入的 start_date 是什么，都从 2000-01-01 拉取完整历史，
+         这样 compute_annual_returns_from_nav 才能算出 2000 年至今的年度收益率。
+       - start_date 参数仅用于缓存命中的宽松判断。
+       - 新浪接口（get_meiguzhishu.py 实测稳定版）为主源，Yahoo 兜底。
+    """
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+
+    # ---- 缓存读取：只要缓存覆盖了 [2000-01-01, end_date] 就可以复用 ----
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            c_start = cache.get('start_date', '')
+            c_end   = cache.get('end_date', '')
+            c_data  = cache.get('data', [])
+            if (c_start and c_end and c_data
+                    and c_start <= INDEX_FULL_START_TOLERANCE
+                    and c_end >= end_date):
+                return c_data
+        except Exception:
+            pass
+
+    data = None
+
+    # ---- 数据源 1：新浪美股接口（全量历史）----
+    sina_code = SINA_US_INDEX_MAP.get(symbol)
+    if sina_code:
+        try:
+            raw = fetch_sina_us_kline(sina_code, INDEX_FULL_START)
+            if raw:
+                data = [r for r in raw if r["date"] <= end_date]
+                if not data:
+                    data = None
+        except Exception:
+            data = None
+
+    # ---- 数据源 1.5：腾讯按年拼接补齐 2000 年起的缺口 ----
+    # 新浪 US_MinKService 只给最近 12 年（NDX 从 2014-02 起），会让表格里纳指100 的
+    # 「成立以来 / 年度收益」被截断；腾讯 usNDX 逐年后拼可以回到 2000-01-03。
+    tx_symbol = TENCENT_US_INDEX_CODE.get(symbol)
+    if tx_symbol:
+        try:
+            extra = _fetch_tencent_index_daily("tx_us", tx_symbol, 2000)
+        except Exception:
+            extra = []
+        if extra:
+            if not data:
+                data = [{"date": d, "nav": v} for d, v in extra]
+            elif str(extra[0][0]) < data[0]["date"]:
+                merged = {r["date"]: r["nav"] for r in data}
+                for d, v in extra:
+                    merged.setdefault(str(d), v)
+                data = [{"date": d, "nav": merged[d]} for d in sorted(merged)]
+
+    # ---- 数据源 2：Yahoo Finance 兜底（同样全量）----
+    if not data:
+        yahoo_syms = {
+            "NDX":  "^NDX",
+            "SPX":  "^GSPC",
+            "SOX":  "^SOX",
+            "COMP": "^IXIC",
+        }
+        ysym = yahoo_syms.get(symbol)
+        if ysym:
+            try:
+                data = fetch_yahoo_history(ysym, INDEX_FULL_START, end_date)
+            except Exception:
+                data = None
+
+    if data:
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(
+                    {
+                        'start_date': data[0]["date"],   # 实际最早日期
+                        'end_date':   end_date,
+                        'data':       data,
+                    },
+                    f, ensure_ascii=False, indent=2
+                )
+        except Exception:
+            pass
+        return data
+    return None
+
+def remove_nav_split_jumps(records):
+    """Normalize discrete stock-split gaps in unadjusted daily NAV records."""
+    if not records:
+        return []
+
+    split_factors = (2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 15.0)
+    adjusted = []
+    adjustment_factor = 1.0
+
+    for item in sorted(records, key=lambda row: row["date"]):
+        try:
+            nav = float(item["nav"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if nav <= 0:
+            continue
+
+        adjusted_nav = nav * adjustment_factor
+        if adjusted:
+            prev_nav = adjusted[-1]["nav"]
+            ratio = prev_nav / adjusted_nav
+            split = next(
+                (
+                    factor
+                    for factor in split_factors
+                    if abs(ratio / factor - 1.0) <= 0.06
+                ),
+                None,
+            )
+            if split is not None:
+                adjustment_factor *= split
+                adjusted_nav = nav * adjustment_factor
+
+        adjusted.append({"date": item["date"], "nav": adjusted_nav})
+    return adjusted
+
+# ==============================================================================
+# 美股 ETF 持仓抓取
+# 数据源：stockanalysis.com（聚合各发行商每日披露的持仓，各 ETF 格式统一）
+# 与国内/QDII 基金不同，美股 ETF 没有「季度报告」披露口径，发行商按日更新
+# 持仓快照，因此这里只保留一份「最新持仓」，date 用抓取日期
+# （_period_label 会把它归到当前季度，页面上显示为 2026Q4 + 截止至日期）。
+# ==============================================================================
+US_ETF_HOLDINGS_CACHE_DIR = os.path.join(CACHE_DIR, "us_etf_holdings")
+os.makedirs(US_ETF_HOLDINGS_CACHE_DIR, exist_ok=True)
+_US_ETF_HOLDINGS_TTL = 3 * 86400        # 持仓变化慢，3 天足够
+_US_ETF_HOLDINGS_MAX_PERIODS = 8        # 最多保留最近 8 个季度
+
+_US_STOCK_NAME_MAP = None
+
+
+def _load_us_stock_names():
+    """加载「美股代码 -> 中文简称」映射（data/us_stock_names.json）。
+
+    数据来源：从各基金/ QDII 持仓缓存里提取天天基金已翻译好的中文名，
+    再叠加一小份人工补充（Meta/台积电/伯克希尔这类只给了英文名的）。
+    """
+    global _US_STOCK_NAME_MAP
+    if _US_STOCK_NAME_MAP is not None:
+        return _US_STOCK_NAME_MAP
+    mapping = {}
+    try:
+        with open(os.path.join("data", "us_stock_names.json"), 'r', encoding='utf-8') as f:
+            mapping = json.load(f).get('names') or {}
+    except Exception:
+        mapping = {}
+    _US_STOCK_NAME_MAP = mapping
+    return mapping
+
+
+def _quarter_key_of(date_str):
+    """2026-11-06 -> 2026Q4；解析失败返回 None。"""
+    m = re.match(r'(\d{4})-(\d{2})', str(date_str or ''))
+    if not m:
+        return None
+    return f"{m.group(1)}Q{(int(m.group(2)) - 1) // 3 + 1}"
+
+
+def fetch_us_etf_holdings(symbol):
+    """抓美股 ETF 前 25 大持仓，返回与 fetch_holdings 同构的 periods 列表。
+
+    返回：[{"date": "2026-11-06", "holdings": [{"name","name_en","code","ratio"}, ...]}]
+
+    ★ 历史季度的处理：
+      stockanalysis.com 只提供「当前」持仓，发行商官网也只放最新一版，
+      SEC N-PORT 与 Wayback 在当前网络下都取不到，因此这里用**季度快照累积**：
+      每次抓取按季度归档，同季度覆盖、跨季度追加，最多保留 8 个季度。
+      也就是说从首次运行起，每过一个季度页面就多一列可对比的历史持仓。
+
+    失败返回 []，不影响行情主流程。
+    """
+    cache_file = os.path.join(US_ETF_HOLDINGS_CACHE_DIR, f"{symbol}.json")
+
+    # 旧缓存（含历史季度）
+    old_periods = []
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cached = json.load(f)
+            old_periods = cached.get('periods') or []
+            if time.time() - os.path.getmtime(cache_file) < _US_ETF_HOLDINGS_TTL and old_periods:
+                return old_periods
+        except Exception:
+            old_periods = []
+
+    url = f"https://stockanalysis.com/etf/{symbol.lower()}/holdings/"
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": DEFAULT_HEADERS["User-Agent"],
+            "Accept": "text/html,application/xhtml+xml,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        with get_thread_opener().open(req, timeout=25) as resp:
+            html_text = resp.read().decode('utf-8', errors='ignore')
+    except Exception:
+        return old_periods
+
+    try:
+        from bs4 import BeautifulSoup
+    except Exception:
+        return old_periods
+
+    name_map = _load_us_stock_names()
+    holdings = []
+    try:
+        soup = BeautifulSoup(html_text, 'html.parser')
+        table = soup.find('table', id='main-table')
+        body = table.find('tbody') if table else None
+        for tr in (body.find_all('tr') if body else []):
+            tds = tr.find_all('td')
+            if len(tds) < 4:
+                continue
+            code = tds[1].get_text(strip=True)
+            name = tds[2].get_text(strip=True)
+            raw_ratio = tds[3].get_text(strip=True).replace('%', '').replace(',', '')
+            try:
+                ratio = float(raw_ratio)
+            except (TypeError, ValueError):
+                continue
+            if not name or ratio <= 0:
+                continue
+            # 杠杆 ETF 的掉期合约没有股票代码，stockanalysis 给的是 n/a
+            code = "" if code.lower() in ("n/a", "-", "—") else code
+            cn = name_map.get(code.upper()) if code else None
+            holdings.append({
+                "name": cn or name,
+                "name_en": name if cn else "",
+                "code": code,
+                "ratio": round(ratio, 2),
+            })
+    except Exception:
+        return old_periods
+
+    if not holdings:
+        return old_periods
+
+    # ★ 季度快照累积：同季度覆盖，跨季度追加
+    today = now_beijing().strftime('%Y-%m-%d')
+    today_q = _quarter_key_of(today)
+    merged, replaced = [], False
+    for p in old_periods:
+        if _quarter_key_of(p.get('date')) == today_q:
+            merged.append({"date": today, "holdings": holdings})
+            replaced = True
+        else:
+            merged.append(p)
+    if not replaced:
+        merged.append({"date": today, "holdings": holdings})
+    merged.sort(key=lambda p: str(p.get('date') or ''), reverse=True)
+    merged = merged[:_US_ETF_HOLDINGS_MAX_PERIODS]
+
+    try:
+        with open(cache_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                "_v": 2,
+                "symbol": symbol,
+                "fetched_at": now_beijing().strftime('%Y-%m-%d %H:%M:%S'),
+                "source": url,
+                "periods": merged,
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return merged
+
+
+def fetch_us_etf_data(symbol, start_date, end_date):
+    """抓取美股 ETF 历史行情（合并自 fetch_us_etfs_data.py）。
+
+    ★ 关键修复：拉取【全量】历史（起始日固定为 1990-01-01），用于计算完整年度收益率。
+       原实现把 start_date（默认 2025-01-01）透传给新浪，导致只返回近期数据，
+       年度收益只能算出 1 个年份。
+
+    缓存策略：
+      - cache/nav/{symbol}.json 的 start_date 字段记录为【数据实际最早日期】，
+        后续请求只要落在缓存覆盖区间内即可命中。
+    """
+    cache_file = os.path.join(NAV_CACHE_DIR, f"{symbol}.json")
+
+    def _with_adjusted_splits(records):
+        """Return raw quote records with detected split gaps normalized."""
+        return remove_nav_split_jumps(records)
+
+    # ---- 缓存读取：只要最早日期 <= 请求起点 且 最晚日期 >= 请求终点 即可复用 ----
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            c_start = cache.get('start_date', '')
+            c_end = cache.get('end_date', '')
+            c_data = cache.get('data', [])
+            if c_start and c_end and c_start <= start_date and c_end >= end_date and c_data:
+                return _with_adjusted_splits(c_data)
+        except Exception:
+            pass
+
+    data = None
+
+    # ---- 数据源 1：新浪美股接口（拉全量历史）----
+    sina_code = SINA_US_ETF_MAP.get(symbol)
+    if sina_code:
+        try:
+            raw = fetch_sina_us_kline(sina_code, "1990-01-01")   # ★ 全量起点
+            if raw:
+                data = [r for r in raw if r["date"] <= end_date]
+                if not data:
+                    data = None
+        except Exception:
+            data = None
+
+    # ---- 数据源 2：Yahoo Finance 兜底（同样拉全量）----
+    if not data:
+        yahoo_syms = {
+            "QQQ":  "QQQ",
+            "SPY":  "SPY",
+            "IVV":  "IVV",
+            "IVW":  "IVW",
+            "VOO":  "VOO",
+            "SMH":  "SMH",
+            "VGT":  "VGT",
+            "ARKW": "ARKW",
+            "DIA":  "DIA",
+            "XLK":  "XLK",
+            "SOXL": "SOXL",
+        }
+        ysym = yahoo_syms.get(symbol)
+        if ysym:
+            try:
+                data = fetch_yahoo_history(ysym, "1990-01-01", end_date)   # ★ 全量起点
+            except Exception:
+                data = None
+
+    if data:
+        data = _with_adjusted_splits(data)
+        try:
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                # ★ 缓存的 start_date 记录为数据实际最早日期，便于后续命中判断
+                json.dump(
+                    {
+                        'start_date': data[0]["date"],   # 实际最早日期
+                        'end_date':   end_date,
+                        'data':       data,
+                    },
+                    f, ensure_ascii=False, indent=2
+                )
+        except Exception:
+            pass
+        return data
+    return None
+
+def compute_annual_returns_from_nav(nav_data):
+    """从 [{'date': 'YYYY-MM-DD', 'nav': float}, ...] 计算每个自然年的收益率。
+
+    规则（与 fetch_fund_annual_returns 保持一致）：
+      - 首个年份：用该年第一个交易日的 nav 作为基准
+      - 其余年份：用上一年最后一个交易日的 nav 作为基准
+      - 行情源未复权的拆股断点，先折算到同一价格口径
+    返回：{"2021": 27.35, "2022": -18.62, ...}，失败返回 {}
+    """
+    if not nav_data:
+        return {}
+
+    from collections import defaultdict as _dd
+
+    year_map = _dd(list)
+    for r in nav_data:
+        try:
+            yr = str(r["date"]).split("-")[0]
+            nav = float(r["nav"])
+            if nav > 0:
+                year_map[yr].append({"date": r["date"], "nav": nav})
+        except Exception:
+            continue
+
+    all_records = remove_nav_split_jumps([
+        item for year in year_map.values() for item in year
+    ])
+    year_map = _dd(list)
+    for item in all_records:
+        year_map[item["date"].split("-")[0]].append(item)
+
+    sorted_years = sorted(year_map.keys())
+    returns = {}
+    for i, yr in enumerate(sorted_years):
+        records = sorted(year_map[yr], key=lambda x: x["date"])
+        end_nav = records[-1]["nav"]
+        if i == 0:
+            start_nav = records[0]["nav"]        # 首年：该年第一个交易日
+        else:
+            prev_records = sorted(year_map[sorted_years[i - 1]], key=lambda x: x["date"])
+            start_nav = prev_records[-1]["nav"]  # 其余年份：上年最后一个交易日
+        if start_nav and start_nav > 0:
+            ret = (end_nav / start_nav - 1) * 100
+            returns[str(yr)] = round(ret, 2)
+    return returns
+
+def _test_macro_metrics():
+    import time
+    o = get_direct_opener()
+    t0 = time.time()
+    m = fetch_home_market_metrics(o)
+    print(f"\n===== 总耗时: {time.time() - t0:.2f}s =====\n")
+    for k, v in m.items():
+        val = v.get("val", v.get("score"))
+        src = v.get("source", "")
+        print(f"{k:15s} {str(val):>12s}  [{src}]")
+
+def main():
+    global REFRESH_HISTORY
+    today_str = now_beijing().strftime("%Y-%m-%d")
+    # ★ 统计区间默认从 2000 年起：净值本身已是全历史快照，起点只影响区间裁剪，
+    #   不再触发额外的网络请求（成立晚于 2000 的标的自动从成立日开始）。
+    default_start = HISTORY_START
+    cutoff_date = "2026-04-01"
+
+    parser = argparse.ArgumentParser(description="场外基金量化与资产配置看板生成引擎")
+    parser.add_argument("--mode", type=str, choices=["debug", "prod"], default=None,
+                        help="运行模式配置：debug(快速测试少量标的) / prod(生产发布全量标的)")
+    parser.add_argument("--start", type=str, default=default_start)
+    parser.add_argument("--end", type=str, default=today_str)
+    parser.add_argument("--out", type=str, default="fund_drawdown_dashboard.html")
+    parser.add_argument("--refresh-history", action="store_true",
+                        help="强制重抓全历史快照（data/fund_nav、data/index_annual.json）；"
+                             "默认只在快照缺失或落后时补增量")
+
+    args = parser.parse_args()
+    REFRESH_HISTORY = bool(args.refresh_history)
+
+    if args.mode: is_debug = (args.mode == "debug")
+    else: is_debug = IS_DEBUG
+
+    if is_debug:
+        target_funds = TEST_FUNDS
+        target_commodities = ["XAU", "BRENT"]
+        target_cryptos = ["BTC"]
+        target_indices = ["NDX"]
+        target_us_etfs = ["QQQ"]                    # ★ 新增
+        print("\n=======================================================")
+        print("🛠️ 当前处于【测试调试阶段 (DEBUG MODE)】")
+        print(f"👉 仅抓取 {len(target_funds)} 只核心测试基金 + 极简大类资产样本")
+        print("=======================================================\n")
+    else:
+        target_funds = PROD_FUNDS
+        target_commodities = ["XAU", "AUM", "XAG", "BRENT", "CAD"]
+        target_cryptos = ["BTC", "ETH", "SOL", "BNB"]
+        target_indices = ["NDX", "SPX", "SOX", "COMP"]
+        target_us_etfs = [
+            "QQQ", "SPY", "IVV", "IVW", "VOO", "SMH",
+            "VGT", "ARKW", "DIA", "XLK", "SOXL", "SOXQ"
+        ]
+        print("\n=======================================================")
+        print("🚀 当前处于【正式发布阶段 (PROD MODE)】")
+        print(f"👉 正在抓取全量 {len(target_funds)} 只基金与全品类宏观大类资产...")
+        print("=======================================================\n")
+
+    print(f"统计区间: {args.start} 至 {args.end}")
+    print("⏳ 正在并行抓取：核心宏观指标 / 指数估值 / 指数年度数据 / 年内回撤 / 美联储利率观测器...")
+
+    # 每个并行任务用自己独立的 opener（RequestsOpener.session 非线程安全）
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        fut_metrics    = ex.submit(lambda: fetch_home_market_metrics(get_direct_opener()))
+        fut_valuations = ex.submit(lambda: fetch_index_valuations(get_direct_opener()))
+        fut_annual     = ex.submit(fetch_index_annual_data, REFRESH_HISTORY)
+        fut_annual_dd  = ex.submit(fetch_index_annual_drawdown)
+        fut_fed        = ex.submit(lambda: fetch_fed_rate_monitor(get_direct_opener()))
+        fut_macro_history = ex.submit(fetch_macro_history)
+
+        # 各自的默认值，用于优雅降级
+        DEFAULT_METRICS = {
+            "fng": {"score": 0.0, "rating": "暂无数据", "time": "", "source": "获取失败", "url": "#"},
+            "vix": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "usdcny": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "vxn": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "vxsmh": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "skew": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "brent": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "gold_london": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "gold_shfe": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "silver_london": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "copper_lme": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+            "btc": {"val": 0.0, "status": "数据暂缺", "time": "", "source": "获取失败", "url": "#", "desc": ""},
+        }
+
+        try:
+            home_metrics = fut_metrics.result(timeout=120)
+        except Exception as e:
+            print(f"⚠️ 宏观指标抓取失败: {e}")
+            home_metrics = DEFAULT_METRICS
+
+        try:
+            index_valuations = fut_valuations.result(timeout=60)
+        except Exception as e:
+            print(f"⚠️ 指数估值抓取失败: {e}")
+            index_valuations = [
+                {"name": n, "ticker": "", "pe": "--", "pct": "--", "pct_raw": 0,
+                 "status": "⚪ 暂无数据", "color": "#70757a"}
+                for n in TARGET_INDICES
+            ]
+
+        try:
+            index_annual_data = fut_annual.result(timeout=120)
+        except Exception as e:
+            print(f"⚠️ 指数年度数据抓取失败: {e}")
+            index_annual_data = {}
+
+        try:
+            index_annual_drawdown = fut_annual_dd.result(timeout=180)
+        except Exception as e:
+            print(f"⚠️ 年内最大回撤抓取失败: {e}")
+            index_annual_drawdown = {}
+
+        try:
+            fed_monitor = fut_fed.result(timeout=60)
+        except Exception as e:
+            print(f"⚠️ 美联储利率观测器抓取失败: {e}")
+            fed_monitor = {
+                "source_url": "https://www.cmegroup.com/cn-s/markets/interest-rates/cme-fedwatch-tool.html",
+                "meeting_text": "--", "meeting_iso": "", "countdown_text": "暂无倒计时",
+                "futures_price": "--", "probabilities": [], "table_rows": [],
+                "update_text": "--", "source_name": "CME FedWatch",
+            }
+
+        try:
+            macro_history = fut_macro_history.result(timeout=180)
+        except Exception as e:
+            print(f"⚠️ 宏观历史序列抓取失败，本轮沿用本地缓存: {_brief_error(e)}")
+            macro_history = _read_macro_history_cache()
+
+    # ★ CNN 实时值单独抓一次（get_cnn_fear_greed），它一旦被限流/断连，卡片就会显示
+    #   「0.0 · 暂无数据 · 获取失败」，而展开图里其实有完整曲线 —— 两者自相矛盾。
+    #   这里用历史序列的最后一个观测点兜底，并标注该点日期。
+    _fng = home_metrics.get('fng') or {}
+    try:
+        _fng_score_now = float(_fng.get('score') or 0)
+    except (TypeError, ValueError):
+        _fng_score_now = 0.0
+    if _fng_score_now <= 0:
+        _cnn_points = (macro_history.get('cnn') or {}).get('points') or []
+        if _cnn_points:
+            try:
+                _last_date = str(_cnn_points[-1][0])
+                _last_score = round(float(_cnn_points[-1][1]), 1)
+            except (IndexError, TypeError, ValueError):
+                _last_date, _last_score = "", None
+            if _last_score is not None and 0 <= _last_score <= 100:
+                home_metrics['fng'] = {
+                    **_fng,
+                    'score': _last_score,
+                    'rating': _fng_rating_from_score(_last_score),
+                    'source': f"CNN 官方（{_last_date} 收盘）",
+                }
+                print(f"    [warn] CNN 实时值获取失败，卡片沿用历史最后一点: {_last_date} {_last_score}")
+
+    # 同一类问题：BTC 实时价（多源并发）全挂时卡片也是「0.0 · 数据暂缺」，
+    # 但宏观历史里明明有 Binance 的日线，同样用最后一点兜底并标日期。
+    _btc_now = home_metrics.get('btc') or {}
+    try:
+        _btc_val_now = float(_btc_now.get('val') or 0)
+    except (TypeError, ValueError):
+        _btc_val_now = 0.0
+    if _btc_val_now <= 0:
+        _btc_points = (macro_history.get('btc') or {}).get('points') or []
+        if _btc_points:
+            try:
+                _btc_date = str(_btc_points[-1][0])
+                _btc_last = round(float(_btc_points[-1][1]), 2)
+            except (IndexError, TypeError, ValueError):
+                _btc_date, _btc_last = "", None
+            if _btc_last and _btc_last > 0:
+                _btc_status = ("极度高企" if _btc_last >= 100000 else
+                               ("高位震荡" if _btc_last >= 70000 else
+                                ("温和中性" if _btc_last >= 40000 else "低位盘整")))
+                home_metrics['btc'] = {
+                    **_btc_now,
+                    'val': _btc_last,
+                    'status': _btc_status,
+                    'source': f"Binance（{_btc_date} 收盘）",
+                }
+                print(f"    [warn] BTC 实时价获取失败，卡片沿用历史最后一点: {_btc_date} {_btc_last}")
+    _fng_disp = home_metrics['fng']['score'] if home_metrics['fng']['score'] > 0 else "暂无"
+    print(f"📊 核心宏观指标获取成功: 恐慌贪婪 {_fng_disp} | VIX {home_metrics['vix']['val']} | VXSMH {home_metrics.get('vxsmh', {}).get('val', 0.0)} | USD/CNY {home_metrics['usdcny']['val']} | VXN {home_metrics['vxn']['val']} | SKEW {home_metrics['skew']['val']}")
+    print(f"🛢️ 大宗商品指标获取成功: 布伦特原油 {home_metrics['brent']['val']} | 伦敦金 {home_metrics['gold_london']['val']} | 沪金主连 {home_metrics['gold_shfe']['val']} | 伦敦银 {home_metrics['silver_london']['val']} | COMEX铜 {home_metrics['copper_lme']['val']} | BTC {home_metrics.get('btc', {}).get('val', 0.0)}")
+    macro_history_point_counts = " | ".join(
+        f"{key.upper()} {len(macro_history.get(key, {}).get('points', []))}"
+        for key in (
+            "vix", "vxn", "vxsmh", "cnn", "usdcny", "skew",
+            "gold_london", "gold_shfe", "silver_london",
+            "copper_lme", "brent", "btc",
+            "pe_ndx", "pe_sp500", "pe_hs300", "pe_kc50", "pe_hstech",
+        )
+    )
+    print(f"📈 宏观与估值历史序列: {macro_history_point_counts}")
+
+    # 宽基指数点位：按 PE 观测日对齐后单独缓存，供估值历史图右侧坐标轴使用
+    pe_dates_by_key = {
+        pe_key: [
+            row[0] for row in ((macro_history.get(pe_key) or {}).get("points") or [])
+            if row
+        ]
+        for pe_key in INDEX_PE_OVERLAY
+    }
+    index_point_history = fetch_index_point_history(pe_dates_by_key)
+
+    fed_prob_count = len(fed_monitor.get('probabilities', []))
+    fed_status = "✅" if fed_monitor.get('meeting_text') != "--" and fed_prob_count > 0 else "⚠️"
+    print(f"🏛️ 美联储利率观测器 {fed_status}: 下一次会议 {fed_monitor.get('meeting_text', '--')} | 期货价格 {fed_monitor.get('futures_price', '--')} | 当前概率 {fed_prob_count} 档 | 更新时间 {fed_monitor.get('update_text', '--')}")
+
+    results = []
+
+    def process_single_fund(code):
+        t_opener = get_thread_opener()
+        meta = fetch_fund_detail_meta(t_opener, code)
+        raw_data = fetch_from_eastmoney(t_opener, code, args.start, args.end)
+        if not raw_data:
+            return code, meta["name"], None
+        raw_data_sorted = sorted(raw_data, key=lambda x: x['date'])
+        is_qdii = code in US_ACTIVE_CODES or code in NDX_PASSIVE_CODES or code in SPX_PASSIVE_CODES
+        res = analyze_fund_metrics(raw_data_sorted, args.end, cutoff_date, is_qdii=is_qdii)
+        if res:
+            # ★ 年度收益率：直接从全历史净值快照算，不再额外请求 pingzhongdata。
+            #   历史年份与当年同源同口径（累计净值 + 拆股断点修正），
+            #   也就不会出现「热力图当年收益」与「折线图今年内」错位的老问题。
+            annual_returns = {}
+            try:
+                annual_returns = compute_annual_returns_from_nav(raw_data_sorted)
+            except Exception as e:
+                print(f"    ⚠️ {code} 年度收益计算异常: {e}")
+            if not annual_returns:
+                try:
+                    annual_returns = fetch_fund_annual_returns(code)
+                except Exception as e:
+                    print(f"    ⚠️ {code} 年度收益兜底抓取异常: {e}")
+
+            # ★ 新增：抓取年化跟踪误差 & 同类平均
+            te_data = {}
+            try:
+                te_data = fetch_fund_tracking_error(code)
+            except Exception as e:
+                print(f"    ⚠️ {code} 年化跟踪误差抓取异常: {e}")
+
+            res.update({
+                "code": code,
+                "name": meta["name"],
+                "scale": meta["scale"],
+                "scale_val": meta["scale_val"],
+                "fee_manage": meta["fee_manage"],
+                "fee_custody": meta["fee_custody"],
+                "fee_sales": meta["fee_sales"],
+                "fee_source": meta["fee_source"],
+                "fee_total": meta["fee_total"],
+                "fee_val": meta["fee_val"],
+                "fee_purchase": meta["fee_purchase"],
+                "fee_redemption": meta["fee_redemption"],
+                "buy_status": meta.get("buy_status", "--"),
+                "buy_limit": meta.get("buy_limit", "无限额"),
+                "buy_limit_val": meta.get("buy_limit_val", -1),
+                "holdings": meta.get("holdings", []),
+                "holder_struct": meta.get("holder_struct", None),
+                "asset_alloc": meta.get("asset_alloc", None),
+                "countries_info": meta.get("countries_info", {"date": "--", "countries": []}),
+                "profile": meta.get("profile", {"inception_date": "", "fund_type": "", "objective": "", "managers": []}),
+                "source": "天天基金",
+                "nav_data": raw_data_sorted,
+                "annual_returns": annual_returns,    # ★ 新增
+                "te_data": te_data,                  # ★ 新增
+            })
+            results.append(res)
+            return code, meta["name"], res
+        return code, meta["name"], None
+
+    max_workers = 8 if is_debug else 12
+    print(f"⚙️ 启用多线程并发抓取 (并发数: {max_workers}) ...", flush=True)
+    # ★ 这里刻意不再用 `with ThreadPoolExecutor(...)`：
+    #   with 退出时是 shutdown(wait=True)，会 join 所有工作线程；
+    #   配合下面「as_completed 无超时」的写法，只要有一个基金卡在无 timeout 的
+    #   网络请求上，循环就永远等不到下一只，预算检查也执行不到，最后挂到
+    #   GitHub 的 360 分钟作业上限（2026-11-21、11-22 两次事故都是这个形态：
+    #   进度停在 119/162 和 124/162 后彻底静默）。
+    #   现在 as_completed 自带截止时间，退出时不等待线程。
+    budget = 600 if is_debug else 3000   # 全局预算：默认 50 分钟
+    deadline = time.time() + budget
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    done_count = 0
+    try:
+        futures = [executor.submit(process_single_fund, code) for code in target_funds]
+        completed_iter = as_completed(futures, timeout=max(0.1, deadline - time.time()))
+        while True:
+            try:
+                fut = next(completed_iter)
+            except StopIteration:
+                break
+            except FuturesTimeoutError:
+                print("⏰ 达到总时间预算，跳过剩余基金任务（缓存已写入，下次可复用）", flush=True)
+                break
+            done_count += 1
+            try:
+                code, name, res = fut.result(timeout=1)
+            except Exception as exc:
+                print(f"[{done_count}/{len(target_funds)}] 处理异常: {exc}", flush=True)
+                continue
+            if res:
+                c_date = res["countries_info"].get("date", "--")
+                print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ✅ 完成 (国家披露期: {c_date})", flush=True)
+            else:
+                print(f"[{done_count}/{len(target_funds)}] {code} - {name} ... ❌ 历史净值抓取失败", flush=True)
+    finally:
+        # wait=False：剩余结果已经用不上（缓存已落盘，下次接着跑），
+        # 不能为了个别慢请求把整轮构建拖住。
+        executor.shutdown(wait=False, cancel_futures=True)
+    if done_count < len(target_funds):
+        print(f"⚠️ 本轮完成 {done_count}/{len(target_funds)} 只，其余跳过（未完成的缓存为空，下轮自动重抓）", flush=True)
+
+    if _F10_ERR["n"] > 3:
+        print(f"    [F10] 费率页累计 {_F10_ERR['n']} 次请求异常（已由蛋卷费率兜底，不影响出图）")
+
+    def _process_commodity(symbol):
+        try:
+            if symbol in ["XAU", "AUM", "XAG"]:
+                data = fetch_precious_metals_data(symbol, args.start, args.end)
+            else:
+                data = fetch_commodity_data(symbol, args.start, args.end)
+            if not data:
+                return None, None
+            meta_name = COMMODITY_NAMES.get(symbol, symbol)
+            res = analyze_fund_metrics(data, args.end, cutoff_date, is_qdii=False)
+            if not res:
+                return None, None
+            res.update({
+                "code": symbol, "name": meta_name, "scale": "--", "scale_val": -1.0,
+                "fee_manage": "--", "fee_custody": "--", "fee_sales": "--", "fee_source": "--",
+                "fee_purchase": "--", "fee_redemption": "--", "buy_status": "--", "buy_limit": "--",
+                "buy_limit_val": -1, "fee_total": "--", "fee_val": -1.0, "holdings": [],
+                "holder_struct": None, "countries_info": {"date": "--", "countries": []},
+                "source": "大宗商品行情", "nav_data": data,
+                "annual_returns": {},
+                "te_data": {},
+            })
+            return res, f"大宗商品 {symbol} ({meta_name})"
+        except Exception as e:
+            print(f"  ✗ 大宗商品 {symbol} 异常: {e}")
+            return None, None
+
+    def _process_crypto(symbol):
+        try:
+            data = fetch_crypto_data(symbol, args.start, args.end)
+            if not data:
+                return None, None
+            meta_name = CRYPTO_NAMES.get(symbol, symbol)
+            res = analyze_fund_metrics(data, args.end, cutoff_date, is_qdii=False)
+            if not res:
+                return None, None
+            res.update({
+                "code": symbol, "name": meta_name, "scale": "--", "scale_val": -1.0,
+                "fee_manage": "--", "fee_custody": "--", "fee_sales": "--", "fee_source": "--",
+                "fee_purchase": "--", "fee_redemption": "--", "buy_status": "--", "buy_limit": "--",
+                "buy_limit_val": -1, "fee_total": "--", "fee_val": -1.0, "holdings": [],
+                "holder_struct": None, "countries_info": {"date": "--", "countries": []},
+                "source": "现货行情", "nav_data": data,
+                "te_data": {},
+            })
+            return res, f"加密货币 {symbol} ({meta_name})"
+        except Exception as e:
+            print(f"  ✗ 加密货币 {symbol} 异常: {e}")
+            return None, None
+
+    def _process_index(symbol):
+        try:
+            data = None
+            annual_returns = {}
+
+            # ★ 优先尝试 Yahoo v8 接口（对齐 get_meiguzhishu.py 的口径）
+            yahoo_sym = YAHOO_INDEX_CODE_MAP.get(symbol)
+            if yahoo_sym:
+                kline_records = fetch_yahoo_index_kline(yahoo_sym, start_year=2000)
+                if kline_records:
+                    data = [
+                        {"date": r["date"], "nav": r["nav"]}
+                        for r in kline_records
+                        if r["date"] <= args.end
+                    ]
+                    annual_returns = compute_annual_returns_from_kline(
+                        kline_records, start_year=2000
+                    )
+
+            # 兜底：Yahoo 拿不到时退回原有新浪逻辑
+            if not data:
+                data = fetch_index_data(symbol, args.start, args.end)
+                if data:
+                    try:
+                        annual_returns = compute_annual_returns_from_nav(data)
+                    except Exception as e:
+                        print(f"    ⚠️ 主流指数 {symbol} 年度收益计算异常: {e}")
+
+            if not data:
+                return None, None
+
+            res = analyze_fund_metrics(data, args.end, cutoff_date, is_qdii=False)
+            if not res:
+                return None, None
+
+            res.update({
+                "code": symbol, "name": INDEX_NAMES.get(symbol, symbol),
+                "scale": "--", "scale_val": -1.0,
+                "fee_manage": "--", "fee_custody": "--", "fee_sales": "--", "fee_source": "--",
+                "fee_purchase": "--", "fee_redemption": "--", "buy_status": "--", "buy_limit": "--",
+                "buy_limit_val": -1, "fee_total": "--", "fee_val": -1.0, "holdings": [],
+                "holder_struct": None, "countries_info": {"date": "--", "countries": []},
+                "source": "指数行情(Yahoo v8)", "nav_data": data,
+                "annual_returns": annual_returns,
+                "te_data": {},
+            })
+            return res, f"主流指数 {symbol}"
+        except Exception as e:
+            print(f"    ✗ 主流指数 {symbol} 异常: {e}")
+            return None, None
+
+    def _process_us_etf(symbol):
+        try:
+            data = fetch_us_etf_data(symbol, args.start, args.end)
+            if not data:
+                return None, None
+            res = analyze_fund_metrics(data, args.end, cutoff_date, is_qdii=False)
+            if not res:
+                return None, None
+
+            # ★ 从全量 nav_data 本地计算年度收益率
+            #    （与 fetch_us_etfs_data.py 的 aggregate_yearly_metrics 口径一致：
+            #      首年用第一个交易日净值作基准；其余年份用上一年最后交易日净值作基准）
+            annual_returns = {}
+            try:
+                annual_returns = compute_annual_returns_from_nav(data)
+            except Exception as e:
+                print(f"    ⚠️ 美股ETF {symbol} 年度收益计算异常: {e}")
+
+            # ★ 美股 ETF 持仓来自 stockanalysis.com（各发行商每日披露的聚合）
+            us_etf_holdings = []
+            try:
+                us_etf_holdings = fetch_us_etf_holdings(symbol)
+            except Exception as e:
+                print(f"    ⚠️ 美股ETF {symbol} 持仓抓取异常: {e}")
+
+            res.update({
+                "code": symbol, "name": US_ETF_NAMES.get(symbol, symbol),
+                "scale": "--", "scale_val": -1.0,
+                "fee_manage": "--", "fee_custody": "--", "fee_sales": "--", "fee_source": "--",
+                "fee_purchase": "--", "fee_redemption": "--", "buy_status": "--", "buy_limit": "--",
+                "buy_limit_val": -1, "fee_total": "--", "fee_val": -1.0,
+                "holdings": us_etf_holdings,
+                "holder_struct": None, "countries_info": {"date": "--", "countries": []},
+                "source": "美股ETF行情", "nav_data": data,
+                "annual_returns": annual_returns,      # ★ 本地计算
+                "te_data": {},
+            })
+            return res, f"美股ETF {symbol} ({US_ETF_NAMES.get(symbol, symbol)})"
+        except Exception as e:
+            print(f"  ✗ 美股ETF {symbol} 异常: {e}")
+            return None, None
+
+    # 一次性并行执行三类资产
+    mixed_tasks = []
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        for sym in target_commodities:
+            mixed_tasks.append(executor.submit(_process_commodity, sym))
+        for sym in target_cryptos:
+            mixed_tasks.append(executor.submit(_process_crypto, sym))
+        for sym in target_indices:
+            mixed_tasks.append(executor.submit(_process_index, sym))
+        for sym in target_us_etfs:                     # ★ 新增
+            mixed_tasks.append(executor.submit(_process_us_etf, sym))
+
+        for fut in as_completed(mixed_tasks):
+            try:
+                res, label = fut.result(timeout=180)
+            except Exception as e:
+                print(f"  ✗ 大类资产并行任务异常: {e}")
+                continue
+            if res:
+                results.append(res)
+                print(f"  ✓ {label} 抓取成功, 数据量 {len(res.get('nav_data', []))}")
+    # =====================================================================
+
+    # ★ 结果去重：同一代码只保留第一条（防止 PROD_FUNDS 字面重复或抓取重入）
+    _seen_res = set()
+    _deduped = []
+    for r in results:
+        c = r.get('code')
+        if c in _seen_res:
+            print(f"⚠️ 检测到重复代码 {c}，已忽略第二条")
+            continue
+        _seen_res.add(c)
+        _deduped.append(r)
+    results = _deduped
+
+    write_macro_history_cache(macro_history)
+
+    if results:
+        abs_path = generate_html_report(
+            results, args.start, args.end, today_str,
+            home_metrics, index_valuations,
+            fed_monitor=fed_monitor,
+            is_debug_mode=is_debug,
+            filename=args.out,
+            index_annual_data=index_annual_data,
+            macro_history=macro_history,
+            index_point_history=index_point_history,
+            index_annual_drawdown=index_annual_drawdown
+        )
+        print(f"\n🎉 升级版网页构建成功！文件路径: {abs_path}")
+        # ★ CI 下「构建成功」后必须硬退出（2026-11-22，#77 事故）：
+        #   进程正常返回时会执行 concurrent.futures.thread 注册的 atexit 钩子
+        #   `_python_exit`，它会把**所有**线程池的工作线程 join 一遍。只要有一个
+        #   线程还卡在网络调用里（DNS 的 getaddrinfo、akshare 内部的 sleep 重试，
+        #   都不受 socket 超时约束），进程就会停在上面这行日志之后一动不动：
+        #   #77 在这里静默了 21 分 49 秒，最后撞上 75 分钟作业超时被杀，
+        #   后面的 Commit / Snapshot / Publish 一步都没跑，线上页面没更新。
+        #   产物此时已落盘，跳过所有清理直接退，把退出码 0 交给后续步骤。
+        if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
+        try:
+            webbrowser.open(f"file://{abs_path}")
+        except Exception: pass
+
+if __name__ == "__main__":
+    main()

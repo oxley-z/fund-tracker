@@ -1,0 +1,146 @@
+name: Daily Fund Dashboard Update
+
+on:
+  schedule:
+    # 每天北京时间 22:30 (UTC 14:30) 执行
+    - cron: '30 14 * * *'
+  workflow_dispatch: # 支持手动点击立即执行
+
+permissions:
+  contents: write  # 需要提交 dual 断点与 ETF 看板，保证每天走增量更新
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  daily-build-and-deploy:
+    runs-on: ubuntu-latest
+    # ★ 显式作业超时。默认 360 分钟太长：主程序一旦卡在某个网络请求上，
+    #   会白占 6 小时，还会一直占着 "pages" 并发组，把后面的部署全挡住
+    #   （2026-11-21 11:23 与 11-22 04:36 两次全量构建就是这样挂掉的）。
+    #   main.py 内部预算 50 分钟，这里留到 75 分钟。
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ★ 每次都基于 report/ 里的最新报告重新生成 CFTC 面板：
+      #   仓库里的 web/cftc_dashboard.html 可能滞后于 report/（历史 bug），
+      #   若直接沿用，会把线上面板的日历日期回退成旧日期。
+      # ★ 不再用 `|| echo` 吞掉退出码：失败时需在 Actions 里显示为失败并打 annotation，
+      #   否则「CFTC 面板没更新」永远只能靠人肉猜（脚本正常耗时约 3s：导入 2.3s + 解析 96 期 0.9s）。
+      - name: Rebuild CFTC Dashboard
+        id: cftc
+        continue-on-error: true
+        run: python -u cftc_generate_dashboard.py
+
+      - name: Warn if CFTC Rebuild Failed
+        if: steps.cftc.outcome == 'failure'
+        run: |
+          echo "::warning::CFTC 面板重建失败，本次沿用仓库中的版本（web/cftc_dashboard.html）"
+          echo "::warning::请滚动到上面的 Rebuild CFTC Dashboard 步骤查看 traceback。"
+
+      # ★ 沪深宽基 ETF 份额看板：基于 data/ 里的断点做增量，生成 web/dual_final_dashboard.html
+      - name: Rebuild Dual ETF Dashboard
+        id: dual
+        continue-on-error: true
+        env:
+          BROWSER: "true"   # CI 无需真的打开浏览器
+        run: python dual_etf_dashboard.py
+
+      - name: Warn if Dual ETF Update Failed
+        if: steps.dual.outcome == 'failure'
+        run: |
+          echo "::warning::ETF 份额看板更新失败，本次沿用仓库中的版本"
+          echo "::warning::请检查上面的上交所、深交所和新浪快照诊断日志。"
+
+      # ★ 提交断点与看板，让下一次仍能从最新日期继续增量
+      # ★ continue-on-error：main 可能被周更工作流或人工提交推进，push 需要 rebase 重试；
+      #   即使最终没推上去，也不该把后面的部署一起拖死（部署用的是本次运行的产物）。
+      - name: Commit Dual ETF Data
+        if: steps.dual.outcome == 'success'
+        continue-on-error: true
+        run: |
+          bash .github/scripts/commit_and_push.sh \
+            "chore(dual): auto-update ETF dashboard" \
+            data/ web/dual_final_dashboard.html
+
+      # 运行基金主程序，生成 index.html
+      - name: Generate Main Fund Dashboard
+        run: |
+          # -u：不缓冲输出。以前不带 -u，进度是整块落盘的，
+          # 日志里看到「119 行同一毫秒」且卡死后一行都没有，很难判断停在哪。
+          python -u main.py --out index.html
+
+      # ★ data/holdings 是季报持仓缓存：必须提交，否则每天 CI 都是空缓存、全量重抓，
+      #   且「只在季报披露窗口内刷新」的策略会失效。
+      # ★ 直接提交整个 data/：main.py 会改写 data/index_point_history.json 这类缓存，
+      #   漏掉它工作区就一直是脏的，push 被拒时 `git pull --rebase` 会直接报
+      #   `cannot pull with rebase: You have unstaged changes`（2026-11-16 就是这样挂的）。
+      - name: Commit Macro History & Holdings Cache
+        continue-on-error: true
+        run: |
+          bash .github/scripts/commit_and_push.sh \
+            "chore(data): update macro history & holdings cache" \
+            data/
+
+      # ★ 盘中行情快照：gh-pages 是「全量覆盖」的站点快照，
+      #   如果工作区里没有 live_quotes.json，下面的 --delete 同步会把它一起删掉，
+      #   白天前端就再也读不到盘中数据了。这里先产一份兜底（失败不影响部署）。
+      - name: Snapshot Live Quotes
+        continue-on-error: true
+        run: python live_quotes.py --no-proxy
+
+      # 部署至 GitHub Pages：改成推 gh-pages 分支，而不是上传 artifact。
+      # 原因：盘中工作流每 15 分钟要把新的 live_quotes.json 送到线上，
+      # 而 artifact 部署是「整站原子替换」，不可能每 15 分钟重建整站；
+      # 推分支则可以让盘中任务只 checkout 快照、改一个 JSON、再 push。
+      # 每次 force push 只保留最新一次提交，避免分支体积每天膨胀 ~20 MB。
+      - name: Publish to gh-pages
+        run: |
+          set -e
+          SITE=/tmp/site
+          rm -rf "$SITE" && mkdir -p "$SITE"
+          # data/ 只带 live_quotes.json：其余是抓取缓存，页面用不到，
+          # 全带上会让每晚 push 从 ~21 MB 涨到 ~130 MB。
+          rsync -a --delete \
+            --exclude='.git' \
+            --exclude='cache' \
+            --exclude='__pycache__' \
+            --exclude='*.tmp' \
+            --exclude='_cmp_build' \
+            --exclude='patches' \
+            --include='data/' \
+            --include='data/live_quotes.json' \
+            --exclude='data/**' \
+            ./ "$SITE/"
+          # ★ 必须删掉 .gitignore：它忽略了 index.html 和 4 个 fund_dashboard_*.js，
+          #   而这里正是要把这些构建产物发布出去，留着会让 git add -A 静默跳过它们，
+          #   推上去的站点就是没有主页的空壳。
+          rm -f "$SITE/.gitignore"
+          # ★ 关掉 Jekyll：分支部署默认会跑 Jekyll 构建，纯静态产物没必要。
+          #   留着的话每次部署多几十秒，且 `_` 开头的文件会被静默丢弃。
+          touch "$SITE/.nojekyll"
+          cd "$SITE"
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b gh-pages
+          git add -A
+          git commit -q -m "deploy: nightly snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
+          echo "✅ 已发布到 gh-pages（$(du -sh "$SITE" | cut -f1)）"
